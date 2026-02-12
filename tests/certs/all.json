@@ -1,0 +1,36 @@
+{
+  "schema_version": 2,
+  "suite": "all",
+  "basis_hash": "482ccf75809769bd",
+  "depends_mode": "all_tracked_at_head_except_default_and_certignore_exclusions",
+  "command": [
+    "cargo",
+    "test"
+  ],
+  "steps": [
+    [
+      "cargo",
+      "fmt",
+      "--check"
+    ],
+    [
+      "cargo",
+      "clippy",
+      "--all-targets",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    [
+      "cargo",
+      "test"
+    ]
+  ],
+  "clean_requirements": [
+    "repo_clean_except_tests_certs"
+  ],
+  "result": "pass",
+  "timestamp_unix_utc": 1770918846,
+  "toolchain": "rustc 1.93.0 (254b59607 2026-01-19)",
+  "runner_version": "0.1.0"
+}

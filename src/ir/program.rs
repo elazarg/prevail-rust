@@ -1,0 +1,738 @@
+// Copyright (c) Prevail Verifier contributors.
+// SPDX-License-Identifier: MIT
+
+//! Program representation and CFG construction from instruction sequences.
+//!
+//! Ports `src/ir/program.hpp` and `src/ir/cfg_builder.cpp`.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
+use std::rc::Rc;
+
+use crate::cfg::graph::Cfg;
+use crate::cfg::label::Label;
+use crate::cfg::wto::Wto;
+use crate::ir::assertions::get_assertions;
+use crate::ir::syntax::{
+    ArgSingleKind, Assertion, Assume, BinOp, Condition, ConditionOp, IncrementLoopCounter,
+    Instruction, InstructionSeq, Undefined,
+};
+use crate::spec::config::EbpfVerifierOptions;
+use crate::spec::ebpf_base::MAX_CALL_STACK_FRAMES;
+use crate::spec::type_descriptors::ProgramInfo;
+
+/// Delimiter used between stack frame components in labels.
+const STACK_FRAME_DELIMITER: char = '/';
+
+// ---------------------------------------------------------------------------
+// Error type
+// ---------------------------------------------------------------------------
+
+/// Error indicating invalid control flow in an instruction sequence.
+#[derive(Debug)]
+pub struct InvalidControlFlow {
+    pub message: String,
+}
+
+impl fmt::Display for InvalidControlFlow {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl std::error::Error for InvalidControlFlow {}
+
+// ---------------------------------------------------------------------------
+// Program
+// ---------------------------------------------------------------------------
+
+/// A verified-ready eBPF program: instructions indexed by label, with a CFG
+/// and pre-computed assertions.
+pub struct Program {
+    /// Map from label to the instruction at that label.
+    instructions: BTreeMap<Label, Instruction>,
+    /// Cached assertions for each label.
+    assertions: BTreeMap<Label, Vec<Assertion>>,
+    /// Control-flow graph over labels.
+    cfg: Cfg,
+}
+
+impl crate::fwd_analyzer::Program for Program {
+    fn cfg(&self) -> &Cfg {
+        &self.cfg
+    }
+    fn instruction_at(&self, label: &Label) -> &Instruction {
+        self.instruction_at(label)
+    }
+    fn assertions_at(&self, label: &Label) -> &[Assertion] {
+        self.assertions_at(label)
+    }
+}
+
+impl Program {
+    /// Returns a reference to the control-flow graph.
+    pub fn cfg(&self) -> &Cfg {
+        &self.cfg
+    }
+
+    /// Returns a reference to the instruction map.
+    pub fn instructions(&self) -> &BTreeMap<Label, Instruction> {
+        &self.instructions
+    }
+
+    /// Returns an iterator over all labels in the CFG (including entry and exit).
+    pub fn labels(&self) -> impl Iterator<Item = &Label> {
+        self.cfg.labels()
+    }
+
+    /// Returns a reference to the instruction at the given label.
+    ///
+    /// Panics if the label is not found in the CFG.
+    pub fn instruction_at(&self, label: &Label) -> &Instruction {
+        self.instructions
+            .get(label)
+            .unwrap_or_else(|| panic!("Label {} not found in the CFG", label))
+    }
+
+    /// Returns a mutable reference to the instruction at the given label.
+    ///
+    /// Panics if the label is not found in the CFG.
+    pub fn instruction_at_mut(&mut self, label: &Label) -> &mut Instruction {
+        self.instructions
+            .get_mut(label)
+            .unwrap_or_else(|| panic!("Label {} not found in the CFG", label))
+    }
+
+    /// Returns the assertions at the given label.
+    ///
+    /// Panics if the label is not found in the CFG.
+    pub fn assertions_at(&self, label: &Label) -> &[Assertion] {
+        self.assertions
+            .get(label)
+            .unwrap_or_else(|| panic!("Label {} not found in the CFG", label))
+    }
+
+    /// Build a `Program` from an instruction sequence.
+    ///
+    /// This converts the linear sequence into a deterministic CFG, optionally
+    /// inserts loop counters (if `check_for_termination` is set), and annotates
+    /// each label with its assertions.
+    pub fn from_sequence(
+        inst_seq: &InstructionSeq,
+        info: &ProgramInfo,
+        options: &EbpfVerifierOptions,
+    ) -> Result<Program, InvalidControlFlow> {
+        // Convert the instruction sequence to a deterministic control-flow graph.
+        let mut builder = instruction_seq_to_cfg(inst_seq, options.cfg_opts.must_have_exit)?;
+
+        // Detect loops using Weak Topological Ordering (WTO) and insert counters
+        // at loop entry points. WTO provides a hierarchical decomposition of the
+        // CFG that identifies all strongly connected components (cycles) and their
+        // entry points. These entry points serve as natural locations for loop
+        // counters that help verify program termination.
+        if options.cfg_opts.check_for_termination {
+            let wto = Wto::new(&builder.prog.cfg);
+            let mut loop_heads = Vec::new();
+            wto.for_each_loop_head(&mut |label| loop_heads.push(label.clone()));
+            for label in loop_heads {
+                let counter_label = Label::make_increment_counter(&label);
+                let ins = Instruction::IncrementLoopCounter(IncrementLoopCounter {
+                    name: label.clone(),
+                });
+                builder.insert_after(&label, counter_label, ins);
+            }
+        }
+
+        // Annotate the CFG by explicitly adding assertions before every instruction.
+        let labels: Vec<Label> = builder.prog.cfg.labels().cloned().collect();
+        for label in &labels {
+            let ins = builder.prog.instruction_at(label);
+            let assertions = get_assertions(ins, info, &Some(label.clone()));
+            builder.set_assertions(label, assertions);
+        }
+
+        Ok(builder.prog)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CfgBuilder — private construction helper
+// ---------------------------------------------------------------------------
+
+/// Builder for constructing a `Program` from an instruction sequence.
+///
+/// Wraps a `Program` under construction and provides mutation methods
+/// that keep the CFG, instruction map, and assertion map in sync.
+struct CfgBuilder {
+    prog: Program,
+}
+
+impl CfgBuilder {
+    /// Create a new builder with an empty program (entry + exit only).
+    fn new() -> Self {
+        let mut instructions = BTreeMap::new();
+        instructions.insert(
+            Label::entry(),
+            Instruction::Undefined(Undefined { opcode: 0 }),
+        );
+        instructions.insert(
+            Label::exit(),
+            Instruction::Undefined(Undefined { opcode: 0 }),
+        );
+
+        let mut assertions = BTreeMap::new();
+        assertions.insert(Label::entry(), Vec::new());
+        assertions.insert(Label::exit(), Vec::new());
+
+        CfgBuilder {
+            prog: Program {
+                instructions,
+                assertions,
+                cfg: Cfg::new(),
+            },
+        }
+    }
+
+    /// Insert a new label with its instruction. Panics if the label already exists.
+    fn insert(&mut self, label: Label, ins: Instruction) {
+        if self.prog.cfg.contains(&label) {
+            panic!("Label {} already exists", label);
+        }
+        self.prog.cfg.insert(label.clone());
+        self.prog.instructions.insert(label, ins);
+    }
+
+    /// Insert a new label after `prev_label`, splicing it into all of prev's
+    /// outgoing edges: prev -> new_label -> (all former children of prev).
+    fn insert_after(&mut self, prev_label: &Label, new_label: Label, ins: Instruction) {
+        assert_ne!(
+            *prev_label, new_label,
+            "Cannot insert after the same label {}",
+            new_label
+        );
+        self.prog.instructions.insert(new_label.clone(), ins);
+        self.prog.cfg.insert_after(prev_label, new_label);
+    }
+
+    /// Insert a jump label on the edge from `from` to `to`, with the given
+    /// instruction (typically an `Assume`). Returns the new jump label.
+    fn insert_jump(&mut self, from: &Label, to: &Label, ins: Instruction) -> Label {
+        let jump_label = Label::make_jump(from, to);
+        if self.prog.cfg.contains(&jump_label) {
+            panic!("Jump label {} already exists", jump_label);
+        }
+        self.insert(jump_label.clone(), ins);
+        self.add_child(from, &jump_label);
+        self.add_child(&jump_label, to);
+        jump_label
+    }
+
+    /// Add a directed edge from `a` to `b`.
+    fn add_child(&mut self, a: &Label, b: &Label) {
+        self.prog.cfg.add_child(a, b);
+    }
+
+    /// Remove a directed edge from `a` to `b`.
+    ///
+    /// NOTE: This requires `Cfg::remove_child` to be available. If it is not
+    /// yet implemented on `Cfg`, this will need to be added there.
+    fn remove_child(&mut self, a: &Label, b: &Label) {
+        self.prog.cfg.remove_child(a, b);
+    }
+
+    /// Set the assertions for a given label. Panics if the label is not in the CFG.
+    fn set_assertions(&mut self, label: &Label, assertions: Vec<Assertion>) {
+        if !self.prog.cfg.contains(label) {
+            panic!("Label {} not found in the CFG", label);
+        }
+        self.prog.assertions.insert(label.clone(), assertions);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Free functions: condition reversal, fall-through detection
+// ---------------------------------------------------------------------------
+
+/// Get the inverse of a comparison operator.
+pub fn reverse_op(op: ConditionOp) -> ConditionOp {
+    match op {
+        ConditionOp::EQ => ConditionOp::NE,
+        ConditionOp::NE => ConditionOp::EQ,
+
+        ConditionOp::GE => ConditionOp::LT,
+        ConditionOp::LT => ConditionOp::GE,
+
+        ConditionOp::SGE => ConditionOp::SLT,
+        ConditionOp::SLT => ConditionOp::SGE,
+
+        ConditionOp::LE => ConditionOp::GT,
+        ConditionOp::GT => ConditionOp::LE,
+
+        ConditionOp::SLE => ConditionOp::SGT,
+        ConditionOp::SGT => ConditionOp::SLE,
+
+        ConditionOp::SET => ConditionOp::NSET,
+        ConditionOp::NSET => ConditionOp::SET,
+    }
+}
+
+/// Get the inverse of a full condition (flips the operator, keeps operands).
+pub fn reverse_condition(cond: &Condition) -> Condition {
+    Condition {
+        op: reverse_op(cond.op),
+        left: cond.left,
+        right: cond.right,
+        is64: cond.is64,
+    }
+}
+
+/// Returns true if the instruction falls through to the next instruction
+/// (i.e., it is not a terminator like `Exit` or an unconditional `Jmp`).
+pub fn has_fall(ins: &Instruction) -> bool {
+    match ins {
+        Instruction::Exit(_) => false,
+        Instruction::Jmp(jmp) => {
+            // Unconditional jump does not fall through; conditional jump does.
+            jmp.cond.is_some()
+        }
+        _ => true,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// instruction_seq_to_cfg
+// ---------------------------------------------------------------------------
+
+/// Convert an instruction sequence to a control-flow graph (CFG).
+///
+/// This builds the CFG in two passes:
+/// 1. Add all instructions as nodes and wire up edges (jumps, fall-throughs).
+/// 2. Inline function macros (`CallLocal` instructions).
+fn instruction_seq_to_cfg(
+    insts: &InstructionSeq,
+    must_have_exit: bool,
+) -> Result<CfgBuilder, InvalidControlFlow> {
+    let mut builder = CfgBuilder::new();
+
+    // First, add all instructions to the CFG without connecting.
+    for (label, inst, _) in insts {
+        if matches!(inst, Instruction::Undefined(_)) {
+            continue;
+        }
+        builder.insert(label.clone(), inst.clone());
+    }
+
+    if insts.is_empty() {
+        return Err(InvalidControlFlow {
+            message: "empty instruction sequence".to_string(),
+        });
+    }
+
+    // Connect entry to the first instruction.
+    let first_label = &insts[0].0;
+    builder.add_child(&Label::entry(), first_label);
+
+    // Do a first pass ignoring all function macro calls.
+    for i in 0..insts.len() {
+        let (label, inst, _) = &insts[i];
+
+        if matches!(inst, Instruction::Undefined(_)) {
+            continue;
+        }
+
+        // Determine the fall-through target.
+        let fallthrough = if i + 1 < insts.len() {
+            insts[i + 1].0.clone()
+        } else {
+            if has_fall(inst) && must_have_exit {
+                return Err(InvalidControlFlow {
+                    message: "fallthrough in last instruction".to_string(),
+                });
+            }
+            Label::exit()
+        };
+
+        if let Instruction::Jmp(jmp) = inst
+            && let Some(cond) = &jmp.cond
+        {
+            // Conditional jump.
+            let target_label = &jmp.target;
+            if *target_label == fallthrough {
+                // Target equals fallthrough — just add one edge.
+                builder.add_child(label, &fallthrough);
+                // Also handle the Exit edge below (via the exit check).
+            } else {
+                if !builder.prog.cfg.contains(target_label) {
+                    return Err(InvalidControlFlow {
+                        message: format!("jump to undefined label {}", target_label),
+                    });
+                }
+                // Insert Assume nodes on each branch edge.
+                builder.insert_jump(
+                    label,
+                    target_label,
+                    Instruction::Assume(Assume {
+                        cond: cond.clone(),
+                        is_implicit: true,
+                    }),
+                );
+                builder.insert_jump(
+                    label,
+                    &fallthrough,
+                    Instruction::Assume(Assume {
+                        cond: reverse_condition(cond),
+                        is_implicit: true,
+                    }),
+                );
+            }
+        } else if let Instruction::Jmp(jmp) = inst {
+            // Unconditional jump.
+            builder.add_child(label, &jmp.target);
+        } else if has_fall(inst) {
+            builder.add_child(label, &fallthrough);
+        }
+
+        // Exit instructions also get an edge to the exit label.
+        if matches!(inst, Instruction::Exit(_)) {
+            builder.add_child(label, &Label::exit());
+        }
+    }
+
+    // Now replace macros. We have to do this as a second pass so that
+    // we only add new nodes that are actually reachable, based on the
+    // results of the first pass.
+    let macro_labels: Vec<(Label, Label)> = insts
+        .iter()
+        .filter_map(|(label, inst, _)| {
+            if let Instruction::CallLocal(call_local) = inst {
+                Some((label.clone(), call_local.target.clone()))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    for (label, target) in macro_labels {
+        add_cfg_nodes(&mut builder, &label, &target)?;
+    }
+
+    Ok(builder)
+}
+
+// ---------------------------------------------------------------------------
+// add_cfg_nodes — inline function macros
+// ---------------------------------------------------------------------------
+
+/// Update a control-flow graph to inline function macros.
+///
+/// Walks the transitive closure of CFG nodes starting at `entry_label` and
+/// ending at any exit instruction, cloning them into the caller's stack frame.
+fn add_cfg_nodes(
+    builder: &mut CfgBuilder,
+    caller_label: &Label,
+    entry_label: &Label,
+) -> Result<(), InvalidControlFlow> {
+    let mut first = true;
+
+    // Get the label of the node to go to on returning from the macro.
+    let exit_to_label = builder.prog.cfg.get_child(caller_label);
+
+    // Construct the variable prefix to use for the new stack frame
+    // and store a copy in the CallLocal instruction since the instruction-specific
+    // labels may only exist until the CFG is simplified.
+    let stack_frame_prefix = format!("{}", caller_label);
+    if let Instruction::CallLocal(pcall) = builder.prog.instruction_at_mut(caller_label) {
+        pcall.stack_frame_prefix = Rc::from(stack_frame_prefix.as_str());
+    }
+
+    // Walk the transitive closure of CFG nodes starting at entry_label and ending at
+    // any exit instruction.
+    let mut macro_labels = BTreeSet::new();
+    macro_labels.insert(entry_label.clone());
+    let mut seen_labels = BTreeSet::new();
+    seen_labels.insert(entry_label.clone());
+
+    while let Some(macro_label) = macro_labels.pop_first() {
+        if stack_frame_prefix == macro_label.stack_frame_prefix {
+            return Err(InvalidControlFlow {
+                message: format!("{}: illegal recursion", stack_frame_prefix),
+            });
+        }
+
+        // Clone the macro block into a new block with the new stack frame prefix.
+        let label = Label::new_full(macro_label.from, macro_label.to, stack_frame_prefix.clone());
+        let mut inst = builder.prog.instruction_at(&macro_label).clone();
+        match &mut inst {
+            Instruction::Exit(pexit) => {
+                pexit.stack_frame_prefix = Rc::from(label.stack_frame_prefix.as_str());
+            }
+            Instruction::Call(pcall) => {
+                pcall.stack_frame_prefix = Rc::from(label.stack_frame_prefix.as_str());
+            }
+            _ => {}
+        }
+        builder.insert(label.clone(), inst);
+
+        if first {
+            // Add an edge from the caller to the new block.
+            first = false;
+            builder.add_child(caller_label, &label);
+        }
+
+        // Add an edge from any other predecessors.
+        let prev_macro_nodes: Vec<Label> = builder
+            .prog
+            .cfg
+            .parents_of(&macro_label)
+            .iter()
+            .cloned()
+            .collect();
+        for prev_macro_label in &prev_macro_nodes {
+            let prev_label = Label::new_full(
+                prev_macro_label.from,
+                prev_macro_label.to,
+                stack_frame_prefix.clone(),
+            );
+            // Check if prev_label exists in the CFG.
+            if builder.prog.cfg.contains(&prev_label) {
+                builder.add_child(&prev_label, &label);
+            }
+        }
+
+        // Walk all successor nodes.
+        let next_macro_nodes: Vec<Label> = builder
+            .prog
+            .cfg
+            .children_of(&macro_label)
+            .iter()
+            .cloned()
+            .collect();
+        for next_macro_label in &next_macro_nodes {
+            if *next_macro_label == Label::exit() {
+                // This is an exit transition, so add edge to the block to execute
+                // upon returning from the macro.
+                builder.add_child(&label, &exit_to_label);
+            } else if !seen_labels.contains(next_macro_label) {
+                // Push any other unprocessed successor label onto the list to be processed.
+                macro_labels.insert(next_macro_label.clone());
+                seen_labels.insert(next_macro_label.clone());
+            }
+        }
+    }
+
+    // Remove the original edge from the caller node to its successor,
+    // since processing now goes through the function macro instead.
+    builder.remove_child(caller_label, &exit_to_label);
+
+    // Finally, recurse to replace any nested function macros.
+    let caller_label_str = format!("{}", caller_label);
+    let stack_frame_depth = caller_label_str
+        .chars()
+        .filter(|&c| c == STACK_FRAME_DELIMITER)
+        .count() as i32
+        + 2;
+
+    let seen_labels_snapshot: Vec<Label> = seen_labels.into_iter().collect();
+    for macro_label in &seen_labels_snapshot {
+        let label = Label::new_full(macro_label.from, macro_label.to, caller_label_str.clone());
+        if builder.prog.cfg.contains(&label)
+            && let Instruction::CallLocal(cl) = builder.prog.instruction_at(&label)
+        {
+            if stack_frame_depth >= MAX_CALL_STACK_FRAMES {
+                return Err(InvalidControlFlow {
+                    message: "too many call stack frames".to_string(),
+                });
+            }
+            let target = cl.target.clone();
+            add_cfg_nodes(builder, &label, &target)?;
+        }
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Statistics
+// ---------------------------------------------------------------------------
+
+/// Get the type string of an instruction. Most of these type names are also
+/// statistics header labels.
+pub fn instype(ins: &Instruction) -> &'static str {
+    match ins {
+        Instruction::Call(call) => {
+            if call.is_map_lookup {
+                "call_1"
+            } else if call.pairs.is_empty() {
+                if call
+                    .singles
+                    .iter()
+                    .all(|kr| kr.kind == ArgSingleKind::Anything)
+                {
+                    "call_nomem"
+                } else {
+                    "call_mem"
+                }
+            } else {
+                "call_mem"
+            }
+        }
+        Instruction::Callx(_) => "callx",
+        Instruction::Mem(mem) => {
+            if mem.is_load {
+                "load"
+            } else {
+                "store"
+            }
+        }
+        Instruction::Atomic(_) => "load_store",
+        Instruction::Packet(_) => "packet_access",
+        Instruction::Bin(bin) => match bin.op {
+            BinOp::MOV | BinOp::MOVSX8 | BinOp::MOVSX16 | BinOp::MOVSX32 => "assign",
+            _ => "arith",
+        },
+        Instruction::Un(_) => "arith",
+        Instruction::LoadMapFd(_) => "assign",
+        Instruction::LoadMapAddress(_) => "assign",
+        Instruction::Assume(_) => "assume",
+        _ => "other",
+    }
+}
+
+/// Returns the list of statistics header keys.
+pub fn stats_headers() -> Vec<&'static str> {
+    vec![
+        "instructions",
+        "joins",
+        "other",
+        "jumps",
+        "assign",
+        "arith",
+        "load",
+        "store",
+        "load_store",
+        "packet_access",
+        "call_1",
+        "call_mem",
+        "call_nomem",
+        "reallocate",
+        "map_in_map",
+        "arith64",
+        "arith32",
+    ]
+}
+
+/// Collect statistics about the instructions in a program.
+pub fn collect_stats(prog: &Program) -> BTreeMap<String, i32> {
+    let mut res = BTreeMap::new();
+    for h in stats_headers() {
+        res.insert(h.to_string(), 0);
+    }
+    for label in prog.labels() {
+        *res.get_mut("instructions").unwrap() += 1;
+        let cmd = prog.instruction_at(label);
+
+        if let Instruction::LoadMapFd(lmf) = cmd
+            && lmf.mapfd == -1
+        {
+            res.insert("map_in_map".to_string(), 1);
+        }
+        if let Instruction::Call(call) = cmd
+            && call.reallocate_packet
+        {
+            res.insert("reallocate".to_string(), 1);
+        }
+        if let Instruction::Bin(bin) = cmd {
+            let key = if bin.is64 { "arith64" } else { "arith32" };
+            *res.get_mut(key).unwrap() += 1;
+        }
+
+        let typ = instype(cmd);
+        *res.get_mut(typ).unwrap() += 1;
+
+        if prog.cfg().in_degree(label) > 1 {
+            *res.get_mut("joins").unwrap() += 1;
+        }
+        if prog.cfg().out_degree(label) > 1 {
+            *res.get_mut("jumps").unwrap() += 1;
+        }
+    }
+    res
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cfg::label::Label;
+    use crate::ir::syntax::{Bin, BinOp, InstructionSeq, Reg, Value};
+    use crate::spec::config::EbpfVerifierOptions;
+    use crate::spec::type_descriptors::ProgramInfo;
+
+    fn create_simple_seq() -> InstructionSeq {
+        // 0: MOV r1, 10
+        // 1: EXIT
+        vec![
+            (
+                Label::new(0),
+                Instruction::Bin(Bin {
+                    op: BinOp::MOV,
+                    dst: Reg { v: 1 },
+                    v: Value::Imm(crate::ir::syntax::Imm { v: 10 }),
+                    is64: true,
+                    lddw: false,
+                }),
+                None,
+            ),
+            (
+                Label::new(1),
+                Instruction::Exit(crate::ir::syntax::Exit {
+                    stack_frame_prefix: Rc::from(""),
+                }),
+                None,
+            ),
+        ]
+    }
+
+    #[test]
+    fn test_program_from_sequence_simple() {
+        let seq = create_simple_seq();
+        let info = ProgramInfo::default();
+        let opts = EbpfVerifierOptions::default();
+
+        let prog = Program::from_sequence(&seq, &info, &opts).expect("Result should be Ok");
+
+        // Check CFG structure
+        // Entry -> 0 -> 1 -> Exit
+        let entry = Label::entry();
+        let exit = Label::exit();
+        let l0 = Label::new(0);
+        let l1 = Label::new(1);
+
+        assert!(prog.cfg.contains(&entry));
+        assert!(prog.cfg.contains(&exit));
+        assert!(prog.cfg.contains(&l0));
+        assert!(prog.cfg.contains(&l1));
+
+        // Edges
+        // Entry -> 0
+        let children_entry = prog.cfg.children_of(&entry);
+        assert!(children_entry.contains(&l0));
+
+        // 0 -> 1 (fallthrough)
+        let children_0 = prog.cfg.children_of(&l0);
+        assert!(children_0.contains(&l1));
+
+        // 1 -> Exit
+        let children_1 = prog.cfg.children_of(&l1);
+        assert!(children_1.contains(&exit));
+    }
+
+    #[test]
+    fn test_program_empty_error() {
+        let seq: InstructionSeq = Vec::new();
+        let info = ProgramInfo::default();
+        let opts = EbpfVerifierOptions::default();
+
+        let res = Program::from_sequence(&seq, &info, &opts);
+        assert!(res.is_err());
+    }
+}

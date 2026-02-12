@@ -1,0 +1,28 @@
+# This file uses regular expressions, not shell globs!
+
+# File extensions that don't support embedding license info
+.*\.md$
+.*\.patch$
+.*\.pdf$
+.*\.yaml$
+.*\.toml$
+.*\.lock$
+.*\.data$
+.*\.sh$
+.*\.py$
+
+# External / vendored code
+tests/upstream/
+
+# Non-source files
+tests/certs/
+\.check-license\.ignore
+\.gitattributes
+\.gitmodules
+\.github/
+\.gitignore
+Dockerfile
+LICENSE.*
+UPSTREAM
+benchmark_report\.txt
+test-schema\.yaml

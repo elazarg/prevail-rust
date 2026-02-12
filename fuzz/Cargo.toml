@@ -1,0 +1,41 @@
+[package]
+name = "prevail-rs-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+prevail_rs = { path = ".." }
+
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "fuzz_assembler"
+path = "fuzz_targets/fuzz_assembler.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_elf_parse"
+path = "fuzz_targets/fuzz_elf_parse.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_unmarshal"
+path = "fuzz_targets/fuzz_unmarshal.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_btf_parse"
+path = "fuzz_targets/fuzz_btf_parse.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_end_to_end"
+path = "fuzz_targets/fuzz_end_to_end.rs"
+doc = false

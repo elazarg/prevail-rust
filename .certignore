@@ -1,0 +1,12 @@
+# Copyright (c) Prevail Verifier contributors.
+# SPDX-License-Identifier: MIT
+
+# Additional path exclusions for xtask test certification.
+# One rule per line:
+# - "*.ext"  -> ignore by extension
+# - "dir/"   -> ignore by repo-root prefix
+# - "path"   -> ignore exact repo-root relative path
+#
+# Default exclusions are built-in and do not need to be listed here:
+# - tests/certs/
+# - *.md

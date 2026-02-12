@@ -1,0 +1,59 @@
+// Copyright (c) Prevail Verifier contributors.
+// SPDX-License-Identifier: MIT
+
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result, bail};
+
+/// Return the repository root (the directory containing `Cargo.toml` in the workspace root).
+pub fn repo_root() -> Result<PathBuf> {
+    let output = std::process::Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .output()
+        .context("failed to run git rev-parse --show-toplevel")?;
+    if !output.status.success() {
+        bail!(
+            "git rev-parse --show-toplevel failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let root = String::from_utf8(output.stdout)
+        .context("non-UTF-8 repo root")?
+        .trim()
+        .to_string();
+    Ok(PathBuf::from(root))
+}
+
+/// `tests/upstream/ebpf-samples` directory.
+pub fn samples_dir(root: &Path) -> PathBuf {
+    root.join("tests/upstream/ebpf-samples")
+}
+
+/// Rust release binary path.
+pub fn rust_bin(root: &Path) -> PathBuf {
+    root.join("target/release/check")
+}
+
+/// C++ upstream binary path.
+pub fn cpp_bin(root: &Path) -> PathBuf {
+    root.join("tests/upstream/bin/check")
+}
+
+/// Upstream repo directory.
+pub fn upstream_dir(root: &Path) -> PathBuf {
+    root.join("tests/upstream")
+}
+
+/// Temporary/cache directory for xtask artifacts.
+pub fn tmp_dir(root: &Path) -> PathBuf {
+    root.join("target/xtask/tmp")
+}
+
+/// Parity baseline directory for a specific upstream hash.
+pub fn parity_baseline_dir(root: &Path, upstream_hash: &str) -> PathBuf {
+    if let Ok(dir) = std::env::var("PREVAIL_PARITY_BASELINE_DIR") {
+        return PathBuf::from(dir).join(upstream_hash);
+    }
+    root.join("target/xtask/upstream_parity")
+        .join(upstream_hash)
+}

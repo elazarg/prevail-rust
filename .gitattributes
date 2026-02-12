@@ -1,0 +1,13 @@
+# Force LF line endings everywhere (WSL + Windows coexistence)
+* text=auto eol=lf
+
+# Don't touch external submodules/vendored code
+ebpf-samples/** -text
+external/** -text
+
+# Ensure these are always treated as binary
+*.png binary
+*.jpg binary
+*.o binary
+*.so binary
+*.elf binary

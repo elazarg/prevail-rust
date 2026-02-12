@@ -1,0 +1,122 @@
+name: Build and Test
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  smoke_no_submodules:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - run: rustup show
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build without submodules
+        run: cargo build --features bin
+
+      - name: CLI smoke test
+        run: target/debug/check --help
+
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - run: rustup show
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy -- -D warnings
+
+      - name: Build
+        run: cargo build
+
+      - name: Build CLI
+        run: cargo build --features bin
+
+      - name: Test
+        run: cargo test
+
+  upstream_parity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - run: rustup show
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build Rust CLI
+        run: cargo build --release --features bin
+
+      - name: Read upstream commit
+        id: upstream
+        run: echo "hash=$(git rev-parse HEAD:tests/upstream)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache upstream C++ binary
+        id: cpp-cache
+        uses: actions/cache@v4
+        with:
+          path: tests/upstream/bin/check
+          key: upstream-cpp-${{ steps.upstream.outputs.hash }}
+
+      - name: Build upstream C++
+        if: steps.cpp-cache.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update && sudo apt-get install -y libboost-dev libyaml-cpp-dev libboost-filesystem-dev libboost-program-options-dev
+          cd tests/upstream
+          cmake -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j$(nproc)
+
+      - name: Generate upstream parity baseline
+        run: |
+          cargo xtask parity generate-baseline
+
+      - name: Run upstream parity check
+        run: |
+          cargo xtask parity compare
+
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - run: rustup show
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Generate coverage
+        run: cargo llvm-cov --lcov --output-path lcov.info
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: lcov.info

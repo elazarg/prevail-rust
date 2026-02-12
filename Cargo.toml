@@ -1,0 +1,50 @@
+[workspace]
+members = [".", "xtask"]
+
+[package]
+name = "prevail"
+version = "0.1.0"
+edition = "2024"
+description = "A Polynomial-Runtime eBPF Verifier using an Abstract Interpretation Layer"
+license = "MIT"
+repository = "https://github.com/elazarg/prevail-rust"
+homepage = "https://github.com/elazarg/prevail-rust"
+readme = "README.md"
+keywords = ["ebpf", "verifier", "abstract-interpretation", "bpf", "static-analysis"]
+categories = ["development-tools"]
+exclude = [
+    "tests/upstream/",
+    "fuzz/",
+    ".github/",
+    "xtask/",
+]
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+bin = ["clap"]
+
+[dependencies]
+object = { version = "0.36", default-features = false, features = ["read", "elf"] }
+regex = "1"
+clap = { version = "4", features = ["derive"], optional = true }
+
+[[bin]]
+name = "check"
+path = "src/main.rs"
+required-features = ["bin"]
+
+[dev-dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+
+[profile.release]
+panic = "abort"
+
+[profile.dev]
+panic = "abort"
+
+[profile.profiling]
+inherits = "release"
+debug = 1
