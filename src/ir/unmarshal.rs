@@ -7,9 +7,10 @@ use std::rc::Rc;
 
 use crate::cfg::label::Label;
 use crate::ir::syntax::{
-    ArgPair, ArgPairKind, ArgSingle, ArgSingleKind, Atomic, AtomicOp, Bin, BinOp, Call, CallLocal,
-    Callx, Condition, ConditionOp, Deref, Exit, Imm, Instruction, InstructionSeq, Jmp,
-    LoadMapAddress, LoadMapFd, Mem, Packet, Reg, Un, UnOp, Value,
+    ArgPair, ArgPairKind, ArgSingle, ArgSingleKind, Atomic, AtomicOp, Bin, BinOp, Call, CallBtf,
+    CallLocal, Callx, Condition, ConditionOp, Deref, Exit, Imm, Instruction, InstructionSeq, Jmp,
+    LoadMapAddress, LoadMapFd, LoadPseudo, Mem, Packet, PseudoAddress, PseudoAddressKind, Reg, Un,
+    UnOp, Value,
 };
 use crate::platform::EbpfPlatform;
 use crate::spec::config::EbpfVerifierOptions;
@@ -119,58 +120,33 @@ impl<'a> Unmarshaller<'a> {
         self.notes.push(Vec::new());
     }
 
-    fn check_group(&self, pc: usize, group: u32, opcode: u8) -> Result<(), UnmarshalError> {
-        if (self.platform.supported_conformance_groups() & group) == 0 {
-            Err(UnmarshalError::invalid_opcode(
-                pc,
-                "bad instruction",
-                opcode,
-            ))
-        } else {
-            Ok(())
-        }
-    }
-
     fn get_alu_op(
         &mut self,
         pc: usize,
         inst: &EbpfInst,
     ) -> Result<Result<BinOp, UnOp>, UnmarshalError> {
-        let is64 = (inst.opcode & INST_CLS_MASK) == INST_CLS_ALU64;
-        let group = if is64 {
-            conformance_groups::DIVMUL64
-        } else {
-            conformance_groups::DIVMUL32
-        };
-
         let alu_op = AluOp::from_opcode(inst.opcode)
             .ok_or_else(|| UnmarshalError::invalid_opcode(pc, "bad instruction", inst.opcode))?;
 
         match alu_op {
-            AluOp::DIV => {
-                self.check_group(pc, group, inst.opcode)?;
-                match inst.offset {
-                    0 => Ok(Ok(BinOp::UDIV)),
-                    1 => Ok(Ok(BinOp::SDIV)),
-                    _ => Err(UnmarshalError::invalid_opcode(
-                        pc,
-                        "invalid offset for",
-                        inst.opcode,
-                    )),
-                }
-            }
-            AluOp::MOD => {
-                self.check_group(pc, group, inst.opcode)?;
-                match inst.offset {
-                    0 => Ok(Ok(BinOp::UMOD)),
-                    1 => Ok(Ok(BinOp::SMOD)),
-                    _ => Err(UnmarshalError::invalid_opcode(
-                        pc,
-                        "invalid offset for",
-                        inst.opcode,
-                    )),
-                }
-            }
+            AluOp::DIV => match inst.offset {
+                0 => Ok(Ok(BinOp::UDIV)),
+                1 => Ok(Ok(BinOp::SDIV)),
+                _ => Err(UnmarshalError::invalid_opcode(
+                    pc,
+                    "invalid offset for",
+                    inst.opcode,
+                )),
+            },
+            AluOp::MOD => match inst.offset {
+                0 => Ok(Ok(BinOp::UMOD)),
+                1 => Ok(Ok(BinOp::SMOD)),
+                _ => Err(UnmarshalError::invalid_opcode(
+                    pc,
+                    "invalid offset for",
+                    inst.opcode,
+                )),
+            },
             AluOp::MOV => {
                 if inst.offset > 0 && (inst.opcode & INST_SRC_REG) == 0 {
                     return Err(UnmarshalError::invalid_opcode(
@@ -204,10 +180,7 @@ impl<'a> Unmarshaller<'a> {
                 match alu_op {
                     AluOp::ADD => Ok(Ok(BinOp::ADD)),
                     AluOp::SUB => Ok(Ok(BinOp::SUB)),
-                    AluOp::MUL => {
-                        self.check_group(pc, group, inst.opcode)?;
-                        Ok(Ok(BinOp::MUL))
-                    }
+                    AluOp::MUL => Ok(Ok(BinOp::MUL)),
                     AluOp::OR => Ok(Ok(BinOp::OR)),
                     AluOp::AND => Ok(Ok(BinOp::AND)),
                     AluOp::LSH => Ok(Ok(BinOp::LSH)),
@@ -253,46 +226,28 @@ impl<'a> Unmarshaller<'a> {
                                 ));
                             }
                             match inst.imm {
-                                16 => {
-                                    self.check_group(pc, conformance_groups::BASE32, inst.opcode)?;
-                                    Ok(Err(UnOp::SWAP16))
-                                }
-                                32 => {
-                                    self.check_group(pc, conformance_groups::BASE32, inst.opcode)?;
-                                    Ok(Err(UnOp::SWAP32))
-                                }
-                                64 => {
-                                    self.check_group(pc, conformance_groups::BASE64, inst.opcode)?;
-                                    Ok(Err(UnOp::SWAP64))
-                                }
+                                16 => Ok(Err(UnOp::SWAP16)),
+                                32 => Ok(Err(UnOp::SWAP32)),
+                                64 => Ok(Err(UnOp::SWAP64)),
                                 _ => Err(UnmarshalError::invalid(pc, "unsupported immediate")),
                             }
                         } else {
                             match inst.imm {
-                                16 => {
-                                    self.check_group(pc, conformance_groups::BASE32, inst.opcode)?;
-                                    Ok(Err(if (inst.opcode & INST_END_BE) != 0 {
-                                        UnOp::BE16
-                                    } else {
-                                        UnOp::LE16
-                                    }))
-                                }
-                                32 => {
-                                    self.check_group(pc, conformance_groups::BASE32, inst.opcode)?;
-                                    Ok(Err(if (inst.opcode & INST_END_BE) != 0 {
-                                        UnOp::BE32
-                                    } else {
-                                        UnOp::LE32
-                                    }))
-                                }
-                                64 => {
-                                    self.check_group(pc, conformance_groups::BASE64, inst.opcode)?;
-                                    Ok(Err(if (inst.opcode & INST_END_BE) != 0 {
-                                        UnOp::BE64
-                                    } else {
-                                        UnOp::LE64
-                                    }))
-                                }
+                                16 => Ok(Err(if (inst.opcode & INST_END_BE) != 0 {
+                                    UnOp::BE16
+                                } else {
+                                    UnOp::LE16
+                                })),
+                                32 => Ok(Err(if (inst.opcode & INST_END_BE) != 0 {
+                                    UnOp::BE32
+                                } else {
+                                    UnOp::LE32
+                                })),
+                                64 => Ok(Err(if (inst.opcode & INST_END_BE) != 0 {
+                                    UnOp::BE64
+                                } else {
+                                    UnOp::LE64
+                                })),
                                 _ => Err(UnmarshalError::invalid(pc, "unsupported immediate")),
                             }
                         }
@@ -312,15 +267,6 @@ impl<'a> Unmarshaller<'a> {
         options: &EbpfVerifierOptions,
     ) -> Result<Instruction, UnmarshalError> {
         let is64 = (inst.opcode & INST_CLS_MASK) == INST_CLS_ALU64;
-        self.check_group(
-            pc,
-            if is64 {
-                conformance_groups::BASE64
-            } else {
-                conformance_groups::BASE32
-            },
-            inst.opcode,
-        )?;
 
         if inst.dst() == R10_STACK_POINTER {
             return Err(UnmarshalError::invalid(pc, "invalid target r10"));
@@ -385,15 +331,6 @@ impl<'a> Unmarshaller<'a> {
         }
 
         let width = AccessSize::from_opcode(inst.opcode);
-        self.check_group(
-            pc,
-            if width == AccessSize::DWord {
-                conformance_groups::BASE64
-            } else {
-                conformance_groups::BASE32
-            },
-            inst.opcode,
-        )?;
 
         let is_ld = (inst.opcode & INST_CLS_MASK) == INST_CLS_LD;
 
@@ -404,11 +341,7 @@ impl<'a> Unmarshaller<'a> {
                 inst.opcode,
             )),
             INST_MODE_ABS => {
-                let packet_group = conformance_groups::PACKET;
-                if (self.platform.supported_conformance_groups() & packet_group) == 0
-                    || !is_ld
-                    || width == AccessSize::DWord
-                {
+                if !is_ld || width == AccessSize::DWord {
                     return Err(UnmarshalError::invalid_opcode(
                         pc,
                         "bad instruction",
@@ -443,11 +376,7 @@ impl<'a> Unmarshaller<'a> {
                 }))
             }
             INST_MODE_IND => {
-                let packet_group = conformance_groups::PACKET;
-                if (self.platform.supported_conformance_groups() & packet_group) == 0
-                    || !is_ld
-                    || width == AccessSize::DWord
-                {
+                if !is_ld || width == AccessSize::DWord {
                     return Err(UnmarshalError::invalid_opcode(
                         pc,
                         "bad instruction",
@@ -526,6 +455,43 @@ impl<'a> Unmarshaller<'a> {
                         Value::Reg(inst.src())
                     },
                     is_load,
+                    is_signed: false,
+                }))
+            }
+            INST_MODE_MEMSX => {
+                // Sign-extending loads are only valid for LDX B/H/W forms.
+                if (inst.opcode & INST_CLS_MASK) != INST_CLS_LDX || width == AccessSize::DWord {
+                    return Err(UnmarshalError::invalid_opcode(
+                        pc,
+                        "bad instruction",
+                        inst.opcode,
+                    ));
+                }
+                if inst.dst() == R10_STACK_POINTER {
+                    return Err(UnmarshalError::invalid(pc, "cannot modify r10"));
+                }
+                if inst.imm != 0 {
+                    return Err(UnmarshalError::invalid_opcode(
+                        pc,
+                        "nonzero imm for",
+                        inst.opcode,
+                    ));
+                }
+                if inst.src() == R10_STACK_POINTER
+                    && (inst.offset + width.bytes() as i16 > 0
+                        || inst.offset < -EBPF_TOTAL_STACK_SIZE as i16)
+                {
+                    self.note("Stack access out of bounds".to_string());
+                }
+                Ok(Instruction::Mem(Mem {
+                    access: Deref {
+                        width,
+                        basereg: inst.src(),
+                        offset: i32::from(inst.offset),
+                    },
+                    value: Value::Reg(inst.dst()),
+                    is_load: true,
+                    is_signed: true,
                 }))
             }
             INST_MODE_ATOMIC => {
@@ -539,17 +505,6 @@ impl<'a> Unmarshaller<'a> {
                         inst.opcode,
                     ));
                 }
-
-                let is64 = (inst.opcode & INST_SIZE_MASK) == INST_SIZE_DW;
-                self.check_group(
-                    pc,
-                    if is64 {
-                        conformance_groups::ATOMIC64
-                    } else {
-                        conformance_groups::ATOMIC32
-                    },
-                    inst.opcode,
-                )?;
 
                 let op = match inst.imm & !INST_FETCH as i32 {
                     x if x == AtomicOp::ADD as i32 => AtomicOp::ADD,
@@ -597,21 +552,12 @@ impl<'a> Unmarshaller<'a> {
         next_imm: i32,
         insts: &[EbpfInst],
     ) -> Result<Instruction, UnmarshalError> {
-        self.check_group(pc, conformance_groups::BASE64, inst.opcode)?;
-
         if pc >= insts.len() - 1 {
             return Err(UnmarshalError::invalid(pc, "incomplete lddw"));
         }
         let next = &insts[pc + 1];
         if next.opcode != 0 || next.dst_raw() != 0 || next.src_raw() != 0 || next.offset != 0 {
             return Err(UnmarshalError::invalid(pc, "invalid lddw"));
-        }
-        if inst.src_raw() > INST_LD_MODE_MAP_VALUE {
-            return Err(UnmarshalError::invalid_opcode(
-                pc,
-                "bad instruction",
-                inst.opcode,
-            ));
         }
         if inst.offset != 0 {
             return Err(UnmarshalError::invalid_opcode(
@@ -648,6 +594,53 @@ impl<'a> Unmarshaller<'a> {
                 mapfd: inst.imm,
                 offset: next_imm,
             })),
+            INST_LD_MODE_VARIABLE_ADDR => {
+                if next.imm != 0 {
+                    return Err(UnmarshalError::invalid(pc, "lddw uses reserved fields"));
+                }
+                Ok(Instruction::LoadPseudo(LoadPseudo {
+                    dst: inst.dst(),
+                    addr: PseudoAddress {
+                        kind: PseudoAddressKind::VariableAddr,
+                        imm: inst.imm,
+                        next_imm,
+                    },
+                }))
+            }
+            INST_LD_MODE_CODE_ADDR => {
+                if next.imm != 0 {
+                    return Err(UnmarshalError::invalid(pc, "lddw uses reserved fields"));
+                }
+                Ok(Instruction::LoadPseudo(LoadPseudo {
+                    dst: inst.dst(),
+                    addr: PseudoAddress {
+                        kind: PseudoAddressKind::CodeAddr,
+                        imm: inst.imm,
+                        next_imm,
+                    },
+                }))
+            }
+            INST_LD_MODE_MAP_BY_IDX => {
+                if next.imm != 0 {
+                    return Err(UnmarshalError::invalid(pc, "lddw uses reserved fields"));
+                }
+                Ok(Instruction::LoadPseudo(LoadPseudo {
+                    dst: inst.dst(),
+                    addr: PseudoAddress {
+                        kind: PseudoAddressKind::MapByIdx,
+                        imm: inst.imm,
+                        next_imm,
+                    },
+                }))
+            }
+            INST_LD_MODE_MAP_VALUE_BY_IDX => Ok(Instruction::LoadPseudo(LoadPseudo {
+                dst: inst.dst(),
+                addr: PseudoAddress {
+                    kind: PseudoAddressKind::MapValueByIdx,
+                    imm: inst.imm,
+                    next_imm,
+                },
+            })),
             _ => Err(UnmarshalError::invalid_opcode(
                 pc,
                 "bad instruction",
@@ -673,12 +666,7 @@ impl<'a> Unmarshaller<'a> {
                         inst.opcode,
                     ));
                 }
-                if (inst.opcode & INST_SRC_REG) != 0 {
-                    self.check_group(pc, conformance_groups::CALLX, inst.opcode)?;
-                }
-                self.check_group(pc, conformance_groups::BASE32, inst.opcode)?;
-
-                if inst.src_raw() >= INST_CALL_BTF_HELPER {
+                if inst.src_raw() > INST_CALL_BTF_HELPER {
                     return Err(UnmarshalError::invalid_opcode(
                         pc,
                         "bad instruction",
@@ -722,6 +710,15 @@ impl<'a> Unmarshaller<'a> {
                 }
 
                 if (inst.opcode & INST_SRC_REG) != 0 {
+                    // Register-call opcode form is reserved for callx and must not be
+                    // used for src-based call modes.
+                    if inst.src_raw() != 0 {
+                        return Err(UnmarshalError::invalid_opcode(
+                            pc,
+                            "bad instruction",
+                            inst.opcode,
+                        ));
+                    }
                     // Callx
                     if inst.dst() > R10_STACK_POINTER {
                         return Err(UnmarshalError::invalid(pc, "bad register"));
@@ -744,6 +741,17 @@ impl<'a> Unmarshaller<'a> {
                     return Ok(Instruction::Callx(Callx { func: inst.dst() }));
                 }
 
+                if inst.src_raw() == INST_CALL_BTF_HELPER {
+                    if inst.dst_raw() != 0 {
+                        return Err(UnmarshalError::invalid_opcode(
+                            pc,
+                            "nonzero dst for register",
+                            inst.opcode,
+                        ));
+                    }
+                    return Ok(Instruction::CallBtf(CallBtf { btf_id: inst.imm }));
+                }
+
                 if inst.dst_raw() != 0 {
                     return Err(UnmarshalError::invalid_opcode(
                         pc,
@@ -753,18 +761,25 @@ impl<'a> Unmarshaller<'a> {
                 }
 
                 if !self.platform.is_helper_usable(inst.imm) {
-                    return Err(UnmarshalError::invalid(
-                        pc,
-                        format!("invalid helper function id {}", inst.imm),
-                    ));
+                    let name = self.platform.get_helper_prototype(inst.imm).name;
+                    return Ok(Instruction::Call(Call {
+                        func: inst.imm,
+                        name: Rc::from(name),
+                        is_supported: false,
+                        unsupported_reason: Rc::from(
+                            "helper function is unavailable on this platform",
+                        ),
+                        is_map_lookup: false,
+                        reallocate_packet: false,
+                        singles: Vec::new(),
+                        pairs: Vec::new(),
+                        stack_frame_prefix: Rc::from(""),
+                    }));
                 }
 
-                let call = make_call_result(inst.imm, self.platform)
-                    .map_err(|msg| UnmarshalError::invalid(pc, msg))?;
-                Ok(Instruction::Call(call))
+                Ok(Instruction::Call(make_call(inst.imm, self.platform)))
             }
             JmpOp::EXIT => {
-                self.check_group(pc, conformance_groups::BASE32, inst.opcode)?;
                 if (inst.opcode & INST_CLS_MASK) != INST_CLS_JMP
                     || (inst.opcode & INST_SRC_REG) != 0
                 {
@@ -816,7 +831,6 @@ impl<'a> Unmarshaller<'a> {
                         inst.opcode,
                     ));
                 }
-                self.check_group(pc, conformance_groups::BASE32, inst.opcode)?;
                 if (inst.opcode & INST_SRC_REG) != 0 {
                     return Err(UnmarshalError::invalid_opcode(
                         pc,
@@ -864,15 +878,6 @@ impl<'a> Unmarshaller<'a> {
             // All other JmpOp variants are conditional jumps
             _ => {
                 let is64 = (inst.opcode & INST_CLS_MASK) == INST_CLS_JMP;
-                self.check_group(
-                    pc,
-                    if is64 {
-                        conformance_groups::BASE64
-                    } else {
-                        conformance_groups::BASE32
-                    },
-                    inst.opcode,
-                )?;
 
                 let cond_op = jmp_op_to_cond(jmp_op);
 
@@ -1060,7 +1065,7 @@ pub fn unmarshal(
 // make_call — convert helper prototype to Call instruction
 // ============================================================================
 
-use crate::spec::ebpf_base::{EbpfArgumentType, EbpfReturnType};
+use crate::spec::ebpf_base::{EBPF_TOTAL_STACK_SIZE, EbpfArgumentType, EbpfReturnType};
 
 fn to_arg_single_kind(t: EbpfArgumentType) -> ArgSingleKind {
     use crate::ir::syntax::ArgSingleKind::*;
@@ -1104,21 +1109,34 @@ pub fn make_call(imm: i32, platform: &dyn EbpfPlatform) -> Call {
 pub fn make_call_result(imm: i32, platform: &dyn EbpfPlatform) -> Result<Call, String> {
     let proto = platform.get_helper_prototype(imm);
 
-    if proto.return_type == EbpfReturnType::Unsupported {
-        return Err(format!("unsupported function: {}", proto.name));
-    }
-
     let name: Rc<str> = Rc::from(proto.name);
 
     let mut res = Call {
         func: imm,
         name,
+        is_supported: true,
+        unsupported_reason: Rc::from(""),
         is_map_lookup: proto.return_type == EbpfReturnType::PtrToMapValueOrNull,
         reallocate_packet: proto.reallocate_packet,
         singles: vec![],
         pairs: vec![],
         stack_frame_prefix: Rc::from(""),
     };
+    let mark_unsupported = |res: &mut Call, why: String| {
+        res.is_supported = false;
+        res.unsupported_reason = Rc::from(why);
+    };
+
+    if proto.return_type == EbpfReturnType::Unsupported {
+        mark_unsupported(
+            &mut res,
+            format!(
+                "helper prototype is unavailable on this platform: {}",
+                proto.name
+            ),
+        );
+        return Ok(res);
+    }
 
     // Build argument list: pad with DontCare sentinel on each end (matching C++ array layout)
     let args = [
@@ -1135,7 +1153,14 @@ pub fn make_call_result(imm: i32, platform: &dyn EbpfPlatform) -> Result<Call, S
     while i < args.len() - 1 {
         match args[i] {
             EbpfArgumentType::Unsupported => {
-                return Err(format!("unsupported function: {}", proto.name));
+                mark_unsupported(
+                    &mut res,
+                    format!(
+                        "helper argument type is unavailable on this platform: {}",
+                        proto.name
+                    ),
+                );
+                return Ok(res);
             }
             EbpfArgumentType::DontCare => {
                 // No more arguments
@@ -1163,10 +1188,14 @@ pub fn make_call_result(imm: i32, platform: &dyn EbpfPlatform) -> Result<Call, S
             }
             EbpfArgumentType::ConstSize | EbpfArgumentType::ConstSizeOrZero => {
                 // These should not appear without a preceding PTR_TO_*_MEM
-                return Err(format!(
-                    "mismatched EBPF_ARGUMENT_TYPE_PTR_TO* and EBPF_ARGUMENT_TYPE_CONST_SIZE: {}",
-                    proto.name
-                ));
+                mark_unsupported(
+                    &mut res,
+                    format!(
+                        "mismatched EBPF_ARGUMENT_TYPE_PTR_TO* and EBPF_ARGUMENT_TYPE_CONST_SIZE: {}",
+                        proto.name
+                    ),
+                );
+                return Ok(res);
             }
             EbpfArgumentType::PtrToReadableMemOrNull
             | EbpfArgumentType::PtrToReadableMem
@@ -1174,10 +1203,26 @@ pub fn make_call_result(imm: i32, platform: &dyn EbpfPlatform) -> Result<Call, S
             | EbpfArgumentType::PtrToWritableMem => {
                 // Must be followed by ConstSize or ConstSizeOrZero
                 if i + 1 >= args.len() - 1 {
-                    return Err(format!(
-                        "mismatched EBPF_ARGUMENT_TYPE_PTR_TO* and EBPF_ARGUMENT_TYPE_CONST_SIZE: {}",
-                        proto.name
-                    ));
+                    mark_unsupported(
+                        &mut res,
+                        format!(
+                            "mismatched EBPF_ARGUMENT_TYPE_PTR_TO* and EBPF_ARGUMENT_TYPE_CONST_SIZE: {}",
+                            proto.name
+                        ),
+                    );
+                    return Ok(res);
+                }
+                if args[i + 1] != EbpfArgumentType::ConstSize
+                    && args[i + 1] != EbpfArgumentType::ConstSizeOrZero
+                {
+                    mark_unsupported(
+                        &mut res,
+                        format!(
+                            "Pointer argument not followed by EBPF_ARGUMENT_TYPE_CONST_SIZE or EBPF_ARGUMENT_TYPE_CONST_SIZE_OR_ZERO: {}",
+                            proto.name
+                        ),
+                    );
+                    return Ok(res);
                 }
                 let can_be_zero = args[i + 1] == EbpfArgumentType::ConstSizeOrZero;
                 let or_null = args[i] == EbpfArgumentType::PtrToReadableMemOrNull

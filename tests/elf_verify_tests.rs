@@ -195,7 +195,7 @@ fn fail_load_elf_badsymsize() {
 }
 
 // ============================================================================
-// FAIL_UNMARSHAL: Loading succeeds but unmarshalling should fail
+// Unsupported forms: decode succeeds; rejection happens in CFG validation
 // ============================================================================
 
 #[test]
@@ -213,11 +213,20 @@ fn fail_unmarshal_wronghelper() {
     assert_eq!(raw_progs.len(), 1);
     let raw_prog = &raw_progs[0];
     let mut notes = Vec::new();
-    let result = unmarshal::unmarshal(&raw_prog.prog, &mut notes, &raw_prog.info, &platform, &opts);
-    assert!(
-        result.is_err(),
-        "Expected unmarshal error for wronghelper.o"
-    );
+    let inst_seq =
+        unmarshal::unmarshal(&raw_prog.prog, &mut notes, &raw_prog.info, &platform, &opts)
+            .expect("Expected unmarshal success for wronghelper.o");
+    match Program::from_sequence(&inst_seq, &raw_prog.info, &opts) {
+        Ok(_) => panic!("Expected CFG validation rejection for wronghelper.o"),
+        Err(err) => {
+            assert!(
+                err.to_string()
+                    .contains("rejected: helper function is unavailable on this platform"),
+                "unexpected error: {}",
+                err
+            );
+        }
+    }
 }
 
 #[test]

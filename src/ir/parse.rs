@@ -20,9 +20,9 @@ use crate::crab::interval::Interval;
 use crate::crab::type_encoding::{DataKind, T_NUM, regkind, string_to_type_encoding};
 use crate::crab::var_registry::VariableRegistry;
 use crate::ir::syntax::{
-    Assume, Atomic, AtomicOp, Bin, BinOp, CallLocal, Callx, Condition, ConditionOp, Deref, Exit,
-    Imm, Instruction, InstructionSeq, Jmp, LoadMapAddress, LoadMapFd, Mem, Packet, Reg, Un, UnOp,
-    Undefined, Value,
+    Assume, Atomic, AtomicOp, Bin, BinOp, CallBtf, CallLocal, Callx, Condition, ConditionOp, Deref,
+    Exit, Imm, Instruction, InstructionSeq, Jmp, LoadMapAddress, LoadMapFd, LoadPseudo, Mem,
+    Packet, PseudoAddress, PseudoAddressKind, Reg, Un, UnOp, Undefined, Value,
 };
 use crate::spec::vm_isa::AccessSize;
 
@@ -242,7 +242,13 @@ fn reg_or_imm(s: &str) -> Value {
     }
 }
 
-fn make_deref(width_str: &str, basereg_str: &str, sign_str: &str, offset_str: &str) -> Deref {
+fn make_deref(
+    _signedness: &str,
+    width_str: &str,
+    basereg_str: &str,
+    sign_str: &str,
+    offset_str: &str,
+) -> Deref {
     let offset = to_int(offset_str);
     let widths = str_to_width();
     Deref {
@@ -334,6 +340,16 @@ pub fn parse_instruction_with_platform(
         }
     }
 
+    // call_btf <imm>
+    {
+        let pat = format!("^call_btf {}$", IMM);
+        if let Some(m) = Regex::new(&pat).unwrap().captures(text) {
+            return Instruction::CallBtf(CallBtf {
+                btf_id: to_int(m.get(1).unwrap().as_str()),
+            });
+        }
+    }
+
     // <wreg> <op>= <wreg>  (binary reg-reg)
     {
         let pat = format!("^{}{}{}$", WREG, OPASSIGN, WREG);
@@ -405,6 +421,69 @@ pub fn parse_instruction_with_platform(
         }
     }
 
+    // <wreg> = variable_addr <imm>
+    {
+        let pat = format!("^{}{}variable_addr\\s+{}$", WREG, ASSIGN, IMM);
+        if let Some(m) = Regex::new(&pat).unwrap().captures(text) {
+            return Instruction::LoadPseudo(LoadPseudo {
+                dst: reg(m.get(1).unwrap().as_str()),
+                addr: PseudoAddress {
+                    kind: PseudoAddressKind::VariableAddr,
+                    imm: to_int(m.get(2).unwrap().as_str()),
+                    next_imm: 0,
+                },
+            });
+        }
+    }
+
+    // <wreg> = code_addr <imm>
+    {
+        let pat = format!("^{}{}code_addr\\s+{}$", WREG, ASSIGN, IMM);
+        if let Some(m) = Regex::new(&pat).unwrap().captures(text) {
+            return Instruction::LoadPseudo(LoadPseudo {
+                dst: reg(m.get(1).unwrap().as_str()),
+                addr: PseudoAddress {
+                    kind: PseudoAddressKind::CodeAddr,
+                    imm: to_int(m.get(2).unwrap().as_str()),
+                    next_imm: 0,
+                },
+            });
+        }
+    }
+
+    // <wreg> = map_by_idx <imm>
+    {
+        let pat = format!("^{}{}map_by_idx\\s+{}$", WREG, ASSIGN, IMM);
+        if let Some(m) = Regex::new(&pat).unwrap().captures(text) {
+            return Instruction::LoadPseudo(LoadPseudo {
+                dst: reg(m.get(1).unwrap().as_str()),
+                addr: PseudoAddress {
+                    kind: PseudoAddressKind::MapByIdx,
+                    imm: to_int(m.get(2).unwrap().as_str()),
+                    next_imm: 0,
+                },
+            });
+        }
+    }
+
+    // <wreg> = map_val_by_idx <imm> + <imm>
+    {
+        let pat = format!(
+            "^{}{}map_val_by_idx\\s+{}\\s*\\+\\s*{}$",
+            WREG, ASSIGN, IMM, IMM
+        );
+        if let Some(m) = Regex::new(&pat).unwrap().captures(text) {
+            return Instruction::LoadPseudo(LoadPseudo {
+                dst: reg(m.get(1).unwrap().as_str()),
+                addr: PseudoAddress {
+                    kind: PseudoAddressKind::MapValueByIdx,
+                    imm: to_int(m.get(2).unwrap().as_str()),
+                    next_imm: to_int(m.get(3).unwrap().as_str()),
+                },
+            });
+        }
+    }
+
     // <wreg> <op>= <imm> [ll]  (binary reg-imm)
     {
         let pat = format!("^{}{}{}{}$", WREG, OPASSIGN, IMM, LONGLONG);
@@ -428,7 +507,7 @@ pub fn parse_instruction_with_platform(
 
     // <reg> = *(u<width> *)(<reg> +/- <imm>)  (memory load)
     {
-        let deref_pat = format!("{}{}u(\\d+){}{}", STAR, LPAREN, STAR, RPAREN);
+        let deref_pat = format!("{}{}([su])(\\d+){}{}", STAR, LPAREN, STAR, RPAREN);
         let inner = format!("{}{}{}", REG, PLUSMINUS, IMM);
         let pat = format!(
             "^{}{}{}{}{}{}$",
@@ -441,16 +520,18 @@ pub fn parse_instruction_with_platform(
                     m.get(3).unwrap().as_str(),
                     m.get(4).unwrap().as_str(),
                     m.get(5).unwrap().as_str(),
+                    m.get(6).unwrap().as_str(),
                 ),
                 value: Value::Reg(reg(m.get(1).unwrap().as_str())),
                 is_load: true,
+                is_signed: m.get(2).unwrap().as_str() == "s",
             });
         }
     }
 
     // *(u<width> *)(<reg> +/- <imm>) = <reg_or_imm>  (memory store)
     {
-        let deref_pat = format!("{}{}u(\\d+){}{}", STAR, LPAREN, STAR, RPAREN);
+        let deref_pat = format!("{}{}([su])(\\d+){}{}", STAR, LPAREN, STAR, RPAREN);
         let inner = format!("{}{}{}", REG, PLUSMINUS, IMM);
         let pat = format!(
             "^{}{}{}{}{}{}$",
@@ -463,24 +544,26 @@ pub fn parse_instruction_with_platform(
                     m.get(2).unwrap().as_str(),
                     m.get(3).unwrap().as_str(),
                     m.get(4).unwrap().as_str(),
+                    m.get(5).unwrap().as_str(),
                 ),
-                value: reg_or_imm(m.get(5).unwrap().as_str()),
+                value: reg_or_imm(m.get(6).unwrap().as_str()),
                 is_load: false,
+                is_signed: false,
             });
         }
     }
 
     // lock *(u<width> *)(<reg> +/- <imm>) <atomicop> <reg> [fetch]
     {
-        let deref_pat = format!("{}{}u(\\d+){}{}", STAR, LPAREN, STAR, RPAREN);
+        let deref_pat = format!("{}{}([su])(\\d+){}{}", STAR, LPAREN, STAR, RPAREN);
         let inner = format!("{}{}{}", REG, PLUSMINUS, IMM);
         let pat = format!(
             r"^lock {}{}{}{}{}{}( fetch)?$",
             deref_pat, LPAREN, inner, RPAREN, ATOMICOP, REG
         );
         if let Some(m) = Regex::new(&pat).unwrap().captures(text) {
-            let op = atomicops[m.get(5).unwrap().as_str()];
-            let fetch_matched = m.get(7).is_some();
+            let op = atomicops[m.get(6).unwrap().as_str()];
+            let fetch_matched = m.get(8).is_some();
             return Instruction::Atomic(Atomic {
                 op,
                 fetch: fetch_matched || op == AtomicOp::XCHG || op == AtomicOp::CMPXCHG,
@@ -489,8 +572,9 @@ pub fn parse_instruction_with_platform(
                     m.get(2).unwrap().as_str(),
                     m.get(3).unwrap().as_str(),
                     m.get(4).unwrap().as_str(),
+                    m.get(5).unwrap().as_str(),
                 ),
-                valreg: reg(m.get(6).unwrap().as_str()),
+                valreg: reg(m.get(7).unwrap().as_str()),
             });
         }
     }

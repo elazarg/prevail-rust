@@ -98,12 +98,26 @@ pub struct BtfLineInfo {
 ///
 /// In the C++ code this holds a raw pointer to `ebpf_platform_t`.
 /// In Rust we omit the platform reference here; the caller carries it separately.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct ProgramInfo {
     pub map_descriptors: Vec<EbpfMapDescriptor>,
     pub program_type: EbpfProgramType,
     pub cache: BTreeMap<EquivalenceKey, i32>,
     pub line_info: BTreeMap<usize, BtfLineInfo>,
+    pub supported_conformance_groups: u32,
+}
+
+impl Default for ProgramInfo {
+    fn default() -> Self {
+        Self {
+            map_descriptors: Vec::new(),
+            program_type: EbpfProgramType::default(),
+            cache: BTreeMap::new(),
+            line_info: BTreeMap::new(),
+            // Unknown context defaults to permissive mask.
+            supported_conformance_groups: u32::MAX,
+        }
+    }
 }
 
 /// A parsed but not yet verified eBPF program.

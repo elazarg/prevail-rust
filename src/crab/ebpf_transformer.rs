@@ -130,12 +130,18 @@ pub fn ebpf_domain_transform(
         Instruction::Call(s) => transform_call(dom, s, ctx, registry, array_map),
         Instruction::CallLocal(s) => transform_call_local(dom, s, ctx, registry),
         Instruction::Callx(s) => transform_callx(dom, s, ctx, registry, array_map),
+        Instruction::CallBtf(_) => {
+            panic!("CallBtf should be rejected before abstract transformation")
+        }
         Instruction::Exit(s) => transform_exit(dom, s, ctx, registry, array_map),
         Instruction::Jmp(_) => { /* NOP: only holds jump preconditions */ }
         Instruction::Packet(s) => transform_packet(dom, s, ctx, registry),
         Instruction::Atomic(s) => transform_atomic(dom, s, ctx, registry, array_map),
         Instruction::LoadMapFd(s) => transform_load_map_fd(dom, s, ctx, registry),
         Instruction::LoadMapAddress(s) => transform_load_map_address(dom, s, ctx, registry),
+        Instruction::LoadPseudo(_) => {
+            panic!("LoadPseudo should be rejected before abstract transformation")
+        }
         Instruction::Undefined(_) => { /* NOP */ }
         Instruction::IncrementLoopCounter(s) => {
             transform_increment_loop_counter(dom, s, ctx, registry)
@@ -557,6 +563,7 @@ fn do_load_packet_or_shared(
     rcp: &mut TypeToNumDomain,
     target_reg: &Reg,
     width: i32,
+    is_signed: bool,
     registry: &mut VariableRegistry,
 ) {
     if rcp.values.is_bottom() {
@@ -567,8 +574,13 @@ fn do_load_packet_or_shared(
     rcp.havoc_register(target_reg, registry);
     rcp.assign_type_encoding(target_reg, T_NUM, registry);
 
-    // A 1 or 2 byte copy results in a limited range of values.
-    if width == 1 || width == 2 {
+    // Small copies can be range-limited and useful for later arithmetic.
+    if is_signed && (width == 1 || width == 2 || width == 4) {
+        rcp.values
+            .set(target.svalue, &Interval::signed_int(width * 8), registry);
+        rcp.values
+            .set(target.uvalue, &Interval::unsigned_int(width * 8), registry);
+    } else if width == 1 || width == 2 {
         let full = Interval::unsigned_int(width * 8);
         rcp.values.set(target.svalue, &full, registry);
         rcp.values.set(target.uvalue, &full, registry);
@@ -643,10 +655,10 @@ fn do_load(
                     );
                 }
                 TypeEncoding::TPacket => {
-                    do_load_packet_or_shared(rcp, target_reg, width, registry);
+                    do_load_packet_or_shared(rcp, target_reg, width, b.is_signed, registry);
                 }
                 TypeEncoding::TShared => {
-                    do_load_packet_or_shared(rcp, target_reg, width, registry);
+                    do_load_packet_or_shared(rcp, target_reg, width, b.is_signed, registry);
                 }
             }
         });
@@ -1355,6 +1367,26 @@ fn transform_mem(
         Value::Reg(preg) => {
             if b.is_load {
                 do_load(dom, b, preg, ctx, registry, array_map);
+                if b.is_signed {
+                    let op = match b.access.width {
+                        AccessSize::Byte => BinOp::MOVSX8,
+                        AccessSize::Half => BinOp::MOVSX16,
+                        AccessSize::Word => BinOp::MOVSX32,
+                        AccessSize::DWord => panic!("unexpected MEMSX width"),
+                    };
+                    transform_bin(
+                        dom,
+                        &Bin {
+                            op,
+                            dst: *preg,
+                            v: Value::Reg(*preg),
+                            is64: true,
+                            lddw: false,
+                        },
+                        ctx,
+                        registry,
+                    );
+                }
             } else {
                 let data_reg = reg_pack(preg, registry);
                 let svalue: LinearExpression = data_reg.svalue.into();
@@ -1405,6 +1437,7 @@ fn transform_atomic(
         access: a.access.clone(),
         value: Value::Reg(r11),
         is_load: true,
+        is_signed: false,
     };
     transform_mem(dom, &load_mem, ctx, registry, array_map);
 
@@ -1418,6 +1451,7 @@ fn transform_atomic(
             access: a.access.clone(),
             value: Value::Reg(R0_RETURN_VALUE),
             is_load: true,
+            is_signed: false,
         };
         transform_mem(dom, &load_r0, ctx, registry, array_map);
 
@@ -1429,6 +1463,7 @@ fn transform_atomic(
             access: a.access.clone(),
             value: Value::Reg(a.valreg),
             is_load: true,
+            is_signed: false,
         };
         transform_mem(dom, &load_valreg, ctx, registry, array_map);
     }
@@ -1438,6 +1473,7 @@ fn transform_atomic(
         access: a.access.clone(),
         value: Value::Reg(r11),
         is_load: false,
+        is_signed: false,
     };
     transform_mem(dom, &store_mem, ctx, registry, array_map);
 

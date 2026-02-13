@@ -1148,6 +1148,7 @@ impl<'a> ProgramReader<'a> {
                     info: ProgramInfo {
                         map_descriptors: self.global.map_descriptors.clone(),
                         program_type: prog_type.clone(),
+                        supported_conformance_groups: self.platform.supported_conformance_groups(),
                         ..Default::default()
                     },
                 });

@@ -732,6 +732,9 @@ conformance_pass!(rfc9669_lddw, "rfc9669_lddw.data");
 conformance_pass!(rfc9669_ldxb, "rfc9669_ldxb.data");
 conformance_pass!(rfc9669_ldxdw, "rfc9669_ldxdw.data");
 conformance_pass!(rfc9669_ldxh, "rfc9669_ldxh.data");
+conformance_pass!(rfc9669_ldxsb, "rfc9669_ldxsb.data");
+conformance_pass!(rfc9669_ldxsh, "rfc9669_ldxsh.data");
+conformance_pass!(rfc9669_ldxsw, "rfc9669_ldxsw.data");
 conformance_pass!(rfc9669_ldxw, "rfc9669_ldxw.data");
 conformance_pass!(rfc9669_le16, "rfc9669_le16.data");
 conformance_pass!(rfc9669_le32, "rfc9669_le32.data");
@@ -789,10 +792,6 @@ conformance_pass!(rfc9669_xor64, "rfc9669_xor64.data");
 // ============================================================================
 
 conformance_verification_failed!(mem_len, "mem-len.data");
-// LDXS* sign-extending loads are not implemented by Prevail
-conformance_verification_failed!(rfc9669_ldxsb, "rfc9669_ldxsb.data");
-conformance_verification_failed!(rfc9669_ldxsh, "rfc9669_ldxsh.data");
-conformance_verification_failed!(rfc9669_ldxsw, "rfc9669_ldxsw.data");
 
 // ============================================================================
 // TEST_CONFORMANCE_TOP — r0 is top/unknown (imprecision, safe)

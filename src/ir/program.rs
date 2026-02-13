@@ -15,8 +15,9 @@ use crate::cfg::wto::Wto;
 use crate::ir::assertions::get_assertions;
 use crate::ir::syntax::{
     ArgSingleKind, Assertion, Assume, BinOp, Condition, ConditionOp, IncrementLoopCounter,
-    Instruction, InstructionSeq, Undefined,
+    Instruction, InstructionSeq, Mem, PseudoAddressKind, Un, UnOp, Undefined,
 };
+use crate::ir::unmarshal::conformance_groups;
 use crate::spec::config::EbpfVerifierOptions;
 use crate::spec::ebpf_base::MAX_CALL_STACK_FRAMES;
 use crate::spec::type_descriptors::ProgramInfo;
@@ -122,6 +123,8 @@ impl Program {
         info: &ProgramInfo,
         options: &EbpfVerifierOptions,
     ) -> Result<Program, InvalidControlFlow> {
+        validate_instruction_feature_support(inst_seq, info)?;
+
         // Convert the instruction sequence to a deterministic control-flow graph.
         let mut builder = instruction_seq_to_cfg(inst_seq, options.cfg_opts.must_have_exit)?;
 
@@ -297,6 +300,207 @@ pub fn has_fall(ins: &Instruction) -> bool {
         }
         _ => true,
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RejectKind {
+    NotImplemented,
+    Capability,
+}
+
+#[derive(Clone, Debug)]
+struct RejectionReason {
+    kind: RejectKind,
+    detail: String,
+}
+
+fn supports(groups: u32, group: u32) -> bool {
+    (groups & group) == group
+}
+
+fn un_requires_base64(un: &Un) -> bool {
+    matches!(un.op, UnOp::BE64 | UnOp::LE64 | UnOp::SWAP64)
+}
+
+fn check_instruction_feature_support(
+    ins: &Instruction,
+    info: &ProgramInfo,
+) -> Option<RejectionReason> {
+    let reject_not_impl = |detail: &str| RejectionReason {
+        kind: RejectKind::NotImplemented,
+        detail: detail.to_string(),
+    };
+    let reject_capability = |detail: &str| RejectionReason {
+        kind: RejectKind::Capability,
+        detail: detail.to_string(),
+    };
+    let groups = info.supported_conformance_groups;
+
+    if matches!(ins, Instruction::CallBtf(_)) {
+        return Some(reject_not_impl("call helper by BTF id"));
+    }
+    if let Instruction::Call(call) = ins
+        && !call.is_supported
+    {
+        return Some(reject_capability(
+            call.unsupported_reason.to_string().as_str(),
+        ));
+    }
+    if matches!(ins, Instruction::Callx(_)) && !supports(groups, conformance_groups::CALLX) {
+        return Some(reject_capability("requires conformance group callx"));
+    }
+    if (matches!(ins, Instruction::Call(_))
+        || matches!(ins, Instruction::CallLocal(_))
+        || matches!(ins, Instruction::Callx(_))
+        || matches!(ins, Instruction::Exit(_)))
+        && !supports(groups, conformance_groups::BASE32)
+    {
+        return Some(reject_capability("requires conformance group base32"));
+    }
+    if let Instruction::Bin(bin) = ins {
+        if !supports(
+            groups,
+            if bin.is64 {
+                conformance_groups::BASE64
+            } else {
+                conformance_groups::BASE32
+            },
+        ) {
+            return Some(reject_capability(if bin.is64 {
+                "requires conformance group base64"
+            } else {
+                "requires conformance group base32"
+            }));
+        }
+        if matches!(
+            bin.op,
+            BinOp::MUL | BinOp::UDIV | BinOp::UMOD | BinOp::SDIV | BinOp::SMOD
+        ) && !supports(
+            groups,
+            if bin.is64 {
+                conformance_groups::DIVMUL64
+            } else {
+                conformance_groups::DIVMUL32
+            },
+        ) {
+            return Some(reject_capability(if bin.is64 {
+                "requires conformance group divmul64"
+            } else {
+                "requires conformance group divmul32"
+            }));
+        }
+    }
+    if let Instruction::Un(un) = ins {
+        let need_base64 = un.is64 || un_requires_base64(un);
+        if !supports(
+            groups,
+            if need_base64 {
+                conformance_groups::BASE64
+            } else {
+                conformance_groups::BASE32
+            },
+        ) {
+            return Some(reject_capability(if need_base64 {
+                "requires conformance group base64"
+            } else {
+                "requires conformance group base32"
+            }));
+        }
+    }
+    if let Instruction::Jmp(jmp) = ins {
+        let need_base64 = jmp.cond.as_ref().is_some_and(|c| c.is64);
+        if !supports(
+            groups,
+            if need_base64 {
+                conformance_groups::BASE64
+            } else {
+                conformance_groups::BASE32
+            },
+        ) {
+            return Some(reject_capability(if need_base64 {
+                "requires conformance group base64"
+            } else {
+                "requires conformance group base32"
+            }));
+        }
+    }
+    if let Instruction::LoadPseudo(lp) = ins {
+        if !supports(groups, conformance_groups::BASE64) {
+            return Some(reject_capability("requires conformance group base64"));
+        }
+        return Some(match lp.addr.kind {
+            PseudoAddressKind::VariableAddr => reject_not_impl("lddw variable_addr pseudo"),
+            PseudoAddressKind::CodeAddr => reject_not_impl("lddw code_addr pseudo"),
+            PseudoAddressKind::MapByIdx => reject_not_impl("lddw map_by_idx pseudo"),
+            PseudoAddressKind::MapValueByIdx => reject_not_impl("lddw map_value_by_idx pseudo"),
+        });
+    }
+    if (matches!(ins, Instruction::LoadMapFd(_)) || matches!(ins, Instruction::LoadMapAddress(_)))
+        && !supports(groups, conformance_groups::BASE64)
+    {
+        return Some(reject_capability("requires conformance group base64"));
+    }
+    if let Instruction::Mem(Mem {
+        access, is_signed, ..
+    }) = ins
+    {
+        if !supports(
+            groups,
+            if access.width.bytes() == 8 {
+                conformance_groups::BASE64
+            } else {
+                conformance_groups::BASE32
+            },
+        ) {
+            return Some(reject_capability(if access.width.bytes() == 8 {
+                "requires conformance group base64"
+            } else {
+                "requires conformance group base32"
+            }));
+        }
+        if *is_signed && !supports(groups, conformance_groups::BASE64) {
+            return Some(reject_capability("requires conformance group base64"));
+        }
+    }
+    if matches!(ins, Instruction::Packet(_)) && !supports(groups, conformance_groups::PACKET) {
+        return Some(reject_capability("requires conformance group packet"));
+    }
+    if let Instruction::Atomic(atomic) = ins {
+        let group = if atomic.access.width.bytes() == 8 {
+            conformance_groups::ATOMIC64
+        } else {
+            conformance_groups::ATOMIC32
+        };
+        if !supports(groups, group) {
+            return Some(reject_capability(
+                if group == conformance_groups::ATOMIC64 {
+                    "requires conformance group atomic64"
+                } else {
+                    "requires conformance group atomic32"
+                },
+            ));
+        }
+    }
+    None
+}
+
+fn validate_instruction_feature_support(
+    insts: &InstructionSeq,
+    info: &ProgramInfo,
+) -> Result<(), InvalidControlFlow> {
+    for (label, inst, _) in insts {
+        if let Some(reason) = check_instruction_feature_support(inst, info) {
+            return Err(InvalidControlFlow {
+                message: match reason.kind {
+                    RejectKind::NotImplemented => {
+                        format!("not implemented: {} (at {})", reason.detail, label)
+                    }
+                    RejectKind::Capability => format!("rejected: {} (at {})", reason.detail, label),
+                },
+            });
+        }
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -577,6 +781,7 @@ pub fn instype(ins: &Instruction) -> &'static str {
             }
         }
         Instruction::Callx(_) => "callx",
+        Instruction::CallBtf(_) => "call_mem",
         Instruction::Mem(mem) => {
             if mem.is_load {
                 "load"
@@ -593,6 +798,7 @@ pub fn instype(ins: &Instruction) -> &'static str {
         Instruction::Un(_) => "arith",
         Instruction::LoadMapFd(_) => "assign",
         Instruction::LoadMapAddress(_) => "assign",
+        Instruction::LoadPseudo(_) => "assign",
         Instruction::Assume(_) => "assume",
         _ => "other",
     }

@@ -139,6 +139,29 @@ pub struct LoadMapAddress {
     pub offset: i32,
 }
 
+/// Addressing payload for LDDW pseudo forms.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PseudoAddress {
+    pub kind: PseudoAddressKind,
+    pub imm: i32,
+    pub next_imm: i32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PseudoAddressKind {
+    VariableAddr,  // src=3
+    CodeAddr,      // src=4
+    MapByIdx,      // src=5
+    MapValueByIdx, // src=6
+}
+
+/// Load one of the currently-unsupported LDDW pseudo forms.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LoadPseudo {
+    pub dst: Reg,
+    pub addr: PseudoAddress,
+}
+
 /// A condition comparing a register with a value.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Condition {
@@ -191,16 +214,26 @@ pub enum ArgPairKind {
 }
 
 /// Helper function call.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct Call {
     pub func: i32,
     pub name: Rc<str>,
+    pub is_supported: bool,
+    pub unsupported_reason: Rc<str>,
     pub is_map_lookup: bool,
     pub reallocate_packet: bool,
     pub singles: Vec<ArgSingle>,
     pub pairs: Vec<ArgPair>,
     pub stack_frame_prefix: Rc<str>,
 }
+
+impl PartialEq for Call {
+    fn eq(&self, other: &Self) -> bool {
+        self.func == other.func
+    }
+}
+
+impl Eq for Call {}
 
 /// Call a local function (macro) within the same program.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -221,6 +254,12 @@ pub struct Callx {
     pub func: Reg,
 }
 
+/// Call helper by BTF id (CALL src=2).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CallBtf {
+    pub btf_id: i32,
+}
+
 /// Memory dereference descriptor.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Deref {
@@ -235,6 +274,7 @@ pub struct Mem {
     pub access: Deref,
     pub value: Value,
     pub is_load: bool,
+    pub is_signed: bool,
 }
 
 /// Deprecated checked packet access instruction.
@@ -280,9 +320,12 @@ pub enum Instruction {
     Bin(Bin),
     Un(Un),
     LoadMapFd(LoadMapFd),
+    LoadMapAddress(LoadMapAddress),
+    LoadPseudo(LoadPseudo),
     Call(Call),
     CallLocal(CallLocal),
     Callx(Callx),
+    CallBtf(CallBtf),
     Exit(Exit),
     Jmp(Jmp),
     Mem(Mem),
@@ -290,7 +333,6 @@ pub enum Instruction {
     Atomic(Atomic),
     Assume(Assume),
     IncrementLoopCounter(IncrementLoopCounter),
-    LoadMapAddress(LoadMapAddress),
 }
 
 /// A labeled instruction with optional BTF line info.

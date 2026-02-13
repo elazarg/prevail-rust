@@ -14,11 +14,11 @@ use crate::crab::type_encoding::TypeGroup;
 use crate::crab::var_registry::VariableRegistry;
 use crate::ir::syntax::{
     AccessType, Addable, ArgPair, ArgPairKind, ArgSingle, ArgSingleKind, Assertion, Assume, Atomic,
-    AtomicOp, Bin, BinOp, BoundedLoopCount, BtfLineInfo, Call, CallLocal, Callx, Comparable,
-    Condition, ConditionOp, Deref, Exit, FuncConstraint, Imm, IncrementLoopCounter, Instruction,
-    InstructionSeq, Jmp, LoadMapAddress, LoadMapFd, Mem, Packet, Reg, TypeConstraint, Un, UnOp,
-    Undefined, ValidAccess, ValidCall, ValidDivisor, ValidMapKeyValue, ValidSize, ValidStore,
-    Value, ZeroCtxOffset,
+    AtomicOp, Bin, BinOp, BoundedLoopCount, BtfLineInfo, Call, CallBtf, CallLocal, Callx,
+    Comparable, Condition, ConditionOp, Deref, Exit, FuncConstraint, Imm, IncrementLoopCounter,
+    Instruction, InstructionSeq, Jmp, LoadMapAddress, LoadMapFd, LoadPseudo, Mem, Packet, Reg,
+    TypeConstraint, Un, UnOp, Undefined, ValidAccess, ValidCall, ValidDivisor, ValidMapKeyValue,
+    ValidSize, ValidStore, Value, ZeroCtxOffset,
 };
 use crate::spec::type_descriptors::EbpfMapDescriptor;
 use crate::spec::vm_isa::AccessSize;
@@ -126,7 +126,9 @@ fn reg_name(reg: &Reg, is64: bool) -> String {
 /// Returns the instruction size in 8-byte units. LDDW is 2; everything else is 1.
 pub fn instruction_size(ins: &Instruction) -> Pc {
     match ins {
-        Instruction::LoadMapFd(_) | Instruction::LoadMapAddress(_) => 2,
+        Instruction::LoadMapFd(_) | Instruction::LoadMapAddress(_) | Instruction::LoadPseudo(_) => {
+            2
+        }
         Instruction::Bin(bin) if bin.lddw => 2,
         _ => 1,
     }
@@ -324,6 +326,32 @@ impl fmt::Display for Callx {
     }
 }
 
+impl fmt::Display for CallBtf {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "call_btf {}", self.btf_id)
+    }
+}
+
+impl fmt::Display for LoadPseudo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use crate::ir::syntax::PseudoAddressKind;
+        match self.addr.kind {
+            PseudoAddressKind::VariableAddr => {
+                write!(f, "{} = variable_addr {}", self.dst, self.addr.imm)
+            }
+            PseudoAddressKind::CodeAddr => write!(f, "{} = code_addr {}", self.dst, self.addr.imm),
+            PseudoAddressKind::MapByIdx => write!(f, "{} = map_by_idx {}", self.dst, self.addr.imm),
+            PseudoAddressKind::MapValueByIdx => {
+                write!(
+                    f,
+                    "{} = map_val_by_idx {} + {}",
+                    self.dst, self.addr.imm, self.addr.next_imm
+                )
+            }
+        }
+    }
+}
+
 impl fmt::Display for Exit {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "exit")
@@ -383,7 +411,17 @@ impl fmt::Display for Mem {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.is_load {
             write!(f, "{} = ", self.value)?;
-            fmt_deref(&self.access, f)
+            if self.is_signed {
+                let sign = if self.access.offset < 0 { " - " } else { " + " };
+                let offset = self.access.offset.unsigned_abs();
+                write!(
+                    f,
+                    "*(s{} *)({}{sign}{offset})",
+                    self.access.width, self.access.basereg
+                )
+            } else {
+                fmt_deref(&self.access, f)
+            }
         } else {
             fmt_deref(&self.access, f)?;
             write!(f, " = {}", self.value)
@@ -438,6 +476,7 @@ impl fmt::Display for Instruction {
             Instruction::Call(x) => write!(f, "{x}"),
             Instruction::CallLocal(x) => write!(f, "{x}"),
             Instruction::Callx(x) => write!(f, "{x}"),
+            Instruction::CallBtf(x) => write!(f, "{x}"),
             Instruction::Exit(x) => write!(f, "{x}"),
             Instruction::Jmp(x) => write!(f, "{x}"),
             Instruction::Mem(x) => write!(f, "{x}"),
@@ -445,6 +484,7 @@ impl fmt::Display for Instruction {
             Instruction::Atomic(x) => write!(f, "{x}"),
             Instruction::Assume(x) => write!(f, "{x}"),
             Instruction::IncrementLoopCounter(x) => write!(f, "{x}"),
+            Instruction::LoadPseudo(x) => write!(f, "{x}"),
         }
     }
 }
@@ -1089,6 +1129,7 @@ mod tests {
             },
             value: Value::Reg(Reg { v: 1 }),
             is_load: true,
+            is_signed: false,
         };
         assert_eq!(format!("{mem}"), "r1 = *(u32 *)(r10 - 4)");
     }
@@ -1103,6 +1144,7 @@ mod tests {
             },
             value: Value::Imm(Imm { v: 0 }),
             is_load: false,
+            is_signed: false,
         };
         assert_eq!(format!("{mem}"), "*(u64 *)(r10 - 8) = 0");
     }
@@ -1509,6 +1551,8 @@ mod tests {
         let call = Call {
             func: 1,
             name: Rc::from("bpf_map_lookup_elem"),
+            is_supported: true,
+            unsupported_reason: Rc::from(""),
             is_map_lookup: true,
             reallocate_packet: false,
             singles: vec![ArgSingle {

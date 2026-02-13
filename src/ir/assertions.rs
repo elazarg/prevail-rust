@@ -15,10 +15,10 @@ use crate::spec::vm_isa::{R0_RETURN_VALUE, R6, R10_STACK_POINTER};
 
 use super::syntax::{
     AccessType, Addable, ArgPairKind, ArgSingleKind, Assertion, Assume, Atomic, Bin, BinOp,
-    BoundedLoopCount, Call, CallLocal, Callx, Comparable, Condition, ConditionOp, Exit,
-    FuncConstraint, Imm, IncrementLoopCounter, Instruction, Jmp, LoadMapAddress, LoadMapFd, Mem,
-    Packet, Reg, TypeConstraint, Un, Undefined, ValidAccess, ValidCall, ValidDivisor,
-    ValidMapKeyValue, ValidSize, ValidStore, Value, ZeroCtxOffset,
+    BoundedLoopCount, Call, CallBtf, CallLocal, Callx, Comparable, Condition, ConditionOp, Exit,
+    FuncConstraint, Imm, IncrementLoopCounter, Instruction, Jmp, LoadMapAddress, LoadMapFd,
+    LoadPseudo, Mem, Packet, Reg, TypeConstraint, Un, Undefined, ValidAccess, ValidCall,
+    ValidDivisor, ValidMapKeyValue, ValidSize, ValidStore, Value, ZeroCtxOffset,
 };
 
 // ---------------------------------------------------------------------------
@@ -97,6 +97,10 @@ fn assertions_load_map_fd(_ins: &LoadMapFd) -> Vec<Assertion> {
 
 fn assertions_load_map_address(_ins: &LoadMapAddress) -> Vec<Assertion> {
     vec![]
+}
+
+fn assertions_load_pseudo(_ins: &LoadPseudo) -> Vec<Assertion> {
+    panic!("LoadPseudo should be rejected before assertion extraction");
 }
 
 /// Packet access implicitly uses R6, so verify that R6 still has a pointer to
@@ -241,6 +245,10 @@ fn assertions_callx(ins: &Callx) -> Vec<Assertion> {
         }),
         Assertion::FuncConstraint(FuncConstraint { reg: ins.func }),
     ]
+}
+
+fn assertions_call_btf(_ins: &CallBtf) -> Vec<Assertion> {
+    panic!("CallBtf should be rejected before assertion extraction");
 }
 
 /// Generate assertions for a conditional comparison.
@@ -563,9 +571,11 @@ pub fn get_assertions(
         Instruction::Un(i) => assertions_un(i),
         Instruction::LoadMapFd(i) => assertions_load_map_fd(i),
         Instruction::LoadMapAddress(i) => assertions_load_map_address(i),
+        Instruction::LoadPseudo(i) => assertions_load_pseudo(i),
         Instruction::Call(i) => assertions_call(i, info, label),
         Instruction::CallLocal(i) => assertions_call_local(i),
         Instruction::Callx(i) => assertions_callx(i),
+        Instruction::CallBtf(i) => assertions_call_btf(i),
         Instruction::Exit(i) => assertions_exit(i, label),
         Instruction::Jmp(i) => assertions_jmp(i, info, label),
         Instruction::Mem(i) => assertions_mem(i, info, label),

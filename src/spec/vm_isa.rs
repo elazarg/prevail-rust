@@ -212,6 +212,10 @@ impl AluOp {
 pub const INST_LD_MODE_IMM: u8 = 0x0;
 pub const INST_LD_MODE_MAP_FD: u8 = 0x1;
 pub const INST_LD_MODE_MAP_VALUE: u8 = 0x2;
+pub const INST_LD_MODE_VARIABLE_ADDR: u8 = 0x3;
+pub const INST_LD_MODE_CODE_ADDR: u8 = 0x4;
+pub const INST_LD_MODE_MAP_BY_IDX: u8 = 0x5;
+pub const INST_LD_MODE_MAP_VALUE_BY_IDX: u8 = 0x6;
 
 // ── Register aliases ─────────────────────────────────────────────────
 use crate::ir::syntax::Reg;

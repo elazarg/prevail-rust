@@ -71,6 +71,7 @@ fn test_assertions_mem_load() {
         },
         value: Value::Reg(val_reg),
         is_load: true,
+        is_signed: false,
     });
 
     let info = ProgramInfo::default();
