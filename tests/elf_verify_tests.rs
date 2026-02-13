@@ -2583,12 +2583,12 @@ fn help_output_matches_cpp() {
         return;
     }
 
-    // The Rust binary requires --features bin; look for it in the target directory.
-    let rust_binary = "target/debug/check";
+    // Look for the default Rust binary name in the target directory.
+    let rust_binary = "target/debug/prevail";
     if !std::path::Path::new(rust_binary).exists() {
         eprintln!(
             "Skipping help comparison: Rust binary not found at {rust_binary}\n\
-             Build it with: cargo build --features bin"
+             Build it with: cargo build"
         );
         return;
     }

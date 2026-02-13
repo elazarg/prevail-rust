@@ -3,14 +3,14 @@ members = [".", "xtask"]
 
 [package]
 name = "prevail"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
-description = "A Polynomial-Runtime eBPF Verifier using an Abstract Interpretation Layer"
+description = "eBPF Verifier using Abstract Interpretation"
 license = "MIT"
 repository = "https://github.com/elazarg/prevail-rust"
 homepage = "https://github.com/elazarg/prevail-rust"
 readme = "README.md"
-keywords = ["ebpf", "verifier", "abstract-interpretation", "bpf", "static-analysis"]
+keywords = ["ebpf", "bpf", "verifier", "static-analysis"]
 categories = ["development-tools"]
 exclude = [
     "tests/upstream/",
@@ -22,18 +22,10 @@ exclude = [
 [lib]
 path = "src/lib.rs"
 
-[features]
-bin = ["clap"]
-
 [dependencies]
 object = { version = "0.36", default-features = false, features = ["read", "elf"] }
 regex = "1"
-clap = { version = "4", features = ["derive"], optional = true }
-
-[[bin]]
-name = "check"
-path = "src/main.rs"
-required-features = ["bin"]
+clap = { version = "4", features = ["derive"] }
 
 [dev-dependencies]
 serde = { version = "1", features = ["derive"] }

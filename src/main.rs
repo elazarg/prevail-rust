@@ -76,7 +76,7 @@ const GROUP_NAMES: [&str; 8] = [
 
 #[derive(Parser)]
 #[command(
-    name = "check",
+    name = "prevail",
     about = "PREVAIL is a new eBPF verifier based on abstract interpretation.",
     disable_help_flag = true
 )]

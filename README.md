@@ -7,6 +7,20 @@ This is a Rust port of the [original C++ implementation](https://github.com/vbpf
 The version discussed in the [PLDI paper](https://vbpf.github.io/assets/prevail-paper.pdf) is
 available [here](https://github.com/vbpf/prevail/tree/d29fd26345c3126bf166cf1c45233a9b2f9fb0a0).
 
+### CLI usage
+
+```bash
+prevail tests/upstream/ebpf-samples/cilium/bpf_lxc.o 2/1
+```
+
+The output is three comma-separated values:
+
+* 1 or 0, for "pass" and "fail" respectively
+* The runtime of the fixpoint algorithm (in seconds)
+* The peak memory consumption, in kb, as reflected by the resident-set size (rss)
+
+Additional flags: `--asm <file>` (disassembly), `--dot <file>` (CFG dot graph), `-v` (verbose invariants), `-f` (print first failure).
+
 ## Goals
 
 - **Functional parity with upstream.** The Rust verifier should accept and reject
@@ -78,10 +92,10 @@ cargo build --release
 ### Installing the CLI
 
 ```bash
-cargo install --path . --root . --features bin
+cargo install --path .
 ```
 
-This puts the release binary at `bin/check`.
+This installs the `prevail` binary into your Cargo bin directory.
 
 ### Running tests
 
@@ -116,20 +130,6 @@ cargo fuzz run fuzz_assembler fuzz/corpus/fuzz_assembler
 
 Seed corpora are generated under `fuzz/corpus/` from upstream conformance and
 ELF sample fixtures.
-
-### CLI usage
-
-```bash
-bin/check tests/upstream/ebpf-samples/cilium/bpf_lxc.o 2/1
-```
-
-The output is three comma-separated values:
-
-* 1 or 0, for "pass" and "fail" respectively
-* The runtime of the fixpoint algorithm (in seconds)
-* The peak memory consumption, in kb, as reflected by the resident-set size (rss)
-
-Additional flags: `--asm <file>` (disassembly), `--dot <file>` (CFG dot graph), `-v` (verbose invariants), `-f` (print first failure).
 
 ## License
 

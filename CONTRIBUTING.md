@@ -159,7 +159,7 @@ cargo xtask bench before-after compare    # compare
 ### Hotspot identification
 
 ```bash
-cargo build --profile profiling --features bin
+cargo build --profile profiling
 cargo xtask profile
 ```
 
