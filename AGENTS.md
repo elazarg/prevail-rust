@@ -53,9 +53,19 @@ upstream parity testing, performance profiling, and upstream sync workflow.
 - **Review for soundness.** Before finishing a change, walk through the modified control-flow and data-flow manually to ensure no unsound analysis paths were introduced.
 
 ## Working efficiently
-- **Toolchain first.** Before starting a work session, verify the Rust toolchain is current. See [CONTRIBUTING.md](CONTRIBUTING.md#toolchain-version-bump) for the version bump workflow.
 - When touching YAML-driven fixtures, update schemas in `tests/upstream/test-schema.yaml` if new fields are introduced.
 - Keep runtime/tooling flags documented by updating `README.md` if you introduce new CLI options.
 - When in doubt, favour explicit error handling and early returns to surface problems instead of deferring to implicit behaviour.
 - The upstream C++ source is available in the `tests/upstream` submodule and should be used as the canonical reference for parity work.
 - Canonical divergence list for bumping lives in `README.md` under `Known Divergences From Upstream`.
+
+## Upstream bump workflow
+- Start with `cargo xtask bump` to sync/update submodules (including nested ones), or:
+  - `cargo xtask bump <commit-or-ref>` to bump to a specific commit/ref.
+  - `cargo xtask bump <N>` (e.g. `1`, `2`) to move N commits forward from current.
+- Identify upstream changes with `cargo xtask upstream-diff`.
+- Port changes **piecewise by feature area** (IR, finite domain, loop logic, CLI text, etc.), not as one giant patch.
+- You do **not** need to port strictly commit-by-commit: if commit `A` fixes fallout from commit `B`, port `A+B` together.
+- After each piece, run focused tests first, then parity checks.
+- If a parity mismatch appears, first suspect stale upstream artifacts and rebuild/sync before changing analyzer logic.
+- When unsure about cut points, port everything from the pinned commit up to current upstream `main`.

@@ -19,6 +19,13 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Sync/update upstream and bump tests/upstream to a newer commit.
+    Bump {
+        /// Optional target:
+        /// - commit/ref (e.g. `e0379258` or `origin/main`)
+        /// - positive step count from current (e.g. `1`, `2`)
+        target: Option<String>,
+    },
     /// Git hook commands.
     Hook {
         #[command(subcommand)]
@@ -88,6 +95,11 @@ enum Command {
         /// Extra arguments forwarded to the underlying command after `--`.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
+    },
+    /// Legacy submodule command spelling.
+    Submodule {
+        #[command(subcommand)]
+        action: SubmoduleAction,
     },
 }
 
@@ -163,6 +175,12 @@ enum DiffAction {
     },
 }
 
+#[derive(Subcommand)]
+enum SubmoduleAction {
+    /// Deprecated: use `xtask bump`.
+    Update,
+}
+
 fn main() {
     let cli = Cli::parse();
     if let Err(e) = run(cli) {
@@ -174,6 +192,7 @@ fn main() {
 fn run(cli: Cli) -> Result<()> {
     let root = util::paths::repo_root()?;
     match cli.command {
+        Command::Bump { target } => cmd::bump::run(&root, target.as_deref()),
         Command::Hook { action } => match action {
             HookAction::PreCommit => cmd::pre_commit::run(&root),
             HookAction::PrePush => cmd::pre_push::run(&root),
@@ -233,6 +252,9 @@ fn run(cli: Cli) -> Result<()> {
             let suite = suite.unwrap_or_else(|| "all-no-parity".to_string());
             cmd::test_cert::run_suite(&root, &suite, &args, no_cache, !no_amend)
         }
+        Command::Submodule { action } => match action {
+            SubmoduleAction::Update => anyhow::bail!("did you mean \"cargo xtask bump\"?"),
+        },
     }
 }
 

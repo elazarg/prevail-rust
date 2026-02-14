@@ -1,11 +1,13 @@
 {
   "schema_version": 2,
   "suite": "all",
-  "basis_hash": "3b18b1692b4b3428",
+  "basis_hash": "9b68c46611f5978e",
   "depends_mode": "all_tracked_at_head_except_default_and_certignore_exclusions",
   "command": [
     "cargo",
-    "test"
+    "xtask",
+    "parity",
+    "compare"
   ],
   "steps": [
     [
@@ -24,13 +26,20 @@
     [
       "cargo",
       "test"
+    ],
+    [
+      "cargo",
+      "xtask",
+      "parity",
+      "compare"
     ]
   ],
   "clean_requirements": [
-    "repo_clean_except_tests_certs"
+    "repo_clean_except_tests_certs",
+    "tests_upstream_clean_except_tests_certs"
   ],
   "result": "pass",
-  "timestamp_unix_utc": 1771093345,
+  "timestamp_unix_utc": 1771110708,
   "toolchain": "rustc 1.93.0 (254b59607 2026-01-19)",
   "runner_version": "0.1.0"
 }

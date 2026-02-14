@@ -4,6 +4,7 @@
 pub mod bench;
 pub mod bench_before_after;
 pub mod bench_report;
+pub mod bump;
 pub mod check_license;
 pub mod commit_msg;
 pub mod compare_invariants;
