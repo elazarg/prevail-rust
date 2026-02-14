@@ -1,6 +1,7 @@
 // Copyright (c) Prevail Verifier contributors.
 // SPDX-License-Identifier: MIT
 
+use std::fs;
 use std::path::Path;
 
 use anyhow::{Result, bail};
@@ -37,6 +38,9 @@ pub fn run(root: &Path) -> Result<()> {
     if files.is_empty() {
         // git commit --amend with no new changes — skip file-level checks.
         return Ok(());
+    }
+    if files.iter().any(|f| f == "tests/upstream") {
+        clean_upstream_build_artifacts(root)?;
     }
 
     // Rust auto-format: if any staged .rs file needs formatting, run cargo fmt and re-stage.
@@ -76,5 +80,27 @@ pub fn run(root: &Path) -> Result<()> {
         ));
     }
 
+    Ok(())
+}
+
+fn clean_upstream_build_artifacts(root: &Path) -> Result<()> {
+    let upstream = root.join("tests/upstream");
+    let build_dir = upstream.join("build");
+    let legacy_bin_dir = upstream.join("bin");
+
+    if build_dir.exists() {
+        fs::remove_dir_all(&build_dir)?;
+        eprintln!(
+            "info: cleaned stale upstream build artifacts at {}",
+            build_dir.display()
+        );
+    }
+    if legacy_bin_dir.exists() {
+        fs::remove_dir_all(&legacy_bin_dir)?;
+        eprintln!(
+            "info: removed legacy upstream binaries at {}",
+            legacy_bin_dir.display()
+        );
+    }
     Ok(())
 }

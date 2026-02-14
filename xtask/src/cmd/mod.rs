@@ -16,6 +16,7 @@ pub mod parity_common;
 pub mod pre_commit;
 pub mod pre_push;
 pub mod profile;
+pub mod run_upstream;
 pub mod runperf;
 pub mod session_start;
 pub mod test_cert;

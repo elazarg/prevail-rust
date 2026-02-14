@@ -781,7 +781,7 @@ pub fn instype(ins: &Instruction) -> &'static str {
             }
         }
         Instruction::Callx(_) => "callx",
-        Instruction::CallBtf(_) => "call_mem",
+        Instruction::CallBtf(_) => "call_btf",
         Instruction::Mem(mem) => {
             if mem.is_load {
                 "load"
@@ -819,6 +819,7 @@ pub fn stats_headers() -> Vec<&'static str> {
         "packet_access",
         "call_1",
         "call_mem",
+        "call_btf",
         "call_nomem",
         "reallocate",
         "map_in_map",

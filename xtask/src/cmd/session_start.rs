@@ -24,7 +24,7 @@ pub fn run(root: &Path) -> Result<()> {
 
     // Build the project.
     println!("Building project...");
-    let status = process::run_status(process::cargo(root).args(["build", "--features", "bin"]))?;
+    let status = process::run_status(process::cargo(root).args(["build"]))?;
     if !status.success() {
         bail!("cargo build failed");
     }

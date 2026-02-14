@@ -79,12 +79,7 @@ pub fn run(root: &Path, mode: &str) -> Result<()> {
 
     // Build release.
     println!("Building release binary...");
-    let status = process::run_status(process::cargo(root).args([
-        "build",
-        "--release",
-        "--features",
-        "bin",
-    ]))?;
+    let status = process::run_status(process::cargo(root).args(["build", "--release"]))?;
     if !status.success() {
         bail!("cargo build --release failed");
     }

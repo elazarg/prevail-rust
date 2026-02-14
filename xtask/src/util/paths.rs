@@ -29,14 +29,24 @@ pub fn samples_dir(root: &Path) -> PathBuf {
     root.join("tests/upstream/ebpf-samples")
 }
 
+pub const UPSTREAM_CPP_BIN_NAME: &str = "check";
+
+pub fn target_dir(root: &Path) -> PathBuf {
+    if let Ok(dir) = std::env::var("CARGO_TARGET_DIR") {
+        PathBuf::from(dir)
+    } else {
+        root.join("target")
+    }
+}
+
 /// Rust release binary path.
 pub fn rust_bin(root: &Path) -> PathBuf {
-    root.join("target/release/prevail")
+    target_dir(root).join("release/prevail")
 }
 
 /// C++ upstream binary path.
 pub fn cpp_bin(root: &Path) -> PathBuf {
-    root.join("tests/upstream/bin/check")
+    root.join("tests/upstream/bin").join(UPSTREAM_CPP_BIN_NAME)
 }
 
 /// Upstream repo directory.

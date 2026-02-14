@@ -15,81 +15,65 @@ pub fn run(root: &Path) -> Result<()> {
     let upstream_dir = std::env::var("UPSTREAM_REPO")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|_| paths::upstream_dir(root));
-
-    let cpp_default = paths::cpp_bin(root);
-    let cpp = std::env::var("CPP")
+    let build_dir = std::env::var("UPSTREAM_BUILD_DIR")
         .map(std::path::PathBuf::from)
-        .unwrap_or(cpp_default);
+        .unwrap_or_else(|_| upstream_dir.join("build"));
+
+    let cpp_default = upstream_dir.join("bin").join(paths::UPSTREAM_CPP_BIN_NAME);
+    let explicit_cpp = std::env::var("CPP").ok().map(std::path::PathBuf::from);
+    let cpp = explicit_cpp.clone().unwrap_or(cpp_default);
 
     let samples_dir = paths::samples_dir(root);
 
     if !upstream_dir.join(".git").exists() {
         bail!("upstream repo not found at {}", upstream_dir.display());
     }
+    let upstream_hash = git::rev_parse_short(&upstream_dir, "HEAD")?;
 
-    if !cpp.exists() {
-        let auto_build = std::env::var("AUTO_BUILD_CPP").unwrap_or_else(|_| "1".into());
-        if auto_build == "1" {
-            eprintln!("info: C++ binary not found at {}", cpp.display());
-            eprintln!(
-                "info: attempting to build upstream C++ verifier in {}",
-                upstream_dir.join("build").display()
-            );
-            let build_dir = std::env::var("UPSTREAM_BUILD_DIR")
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(|_| upstream_dir.join("build"));
-
-            let status = Command::new("cmake")
-                .args([
-                    "-S",
-                    &upstream_dir.to_string_lossy(),
-                    "-B",
-                    &build_dir.to_string_lossy(),
-                ])
-                .status()
-                .context("failed to run cmake")?;
-            if !status.success() {
-                bail!("cmake configure failed");
-            }
-            let status = Command::new("cmake")
-                .args(["--build", &build_dir.to_string_lossy(), "-j"])
-                .status()
-                .context("failed to run cmake --build")?;
-            if !status.success() {
-                bail!("cmake build failed");
-            }
-            // Check for the built binary.
-            let candidate1 = upstream_dir.join("bin/check");
-            let candidate2 = build_dir.join("bin/check");
-            if !candidate1.exists() && !candidate2.exists() {
-                bail!(
-                    "built upstream project but check binary not found at either:\n  {}\n  {}",
-                    candidate1.display(),
-                    candidate2.display()
-                );
-            }
-        } else {
-            bail!(
-                "C++ binary not found at {}\n\
-                 Set CPP=/path/to/check or enable auto-build (AUTO_BUILD_CPP=1).",
-                cpp.display()
-            );
+    let auto_build = std::env::var("AUTO_BUILD_CPP").unwrap_or_else(|_| "1".into());
+    if explicit_cpp.is_none() && auto_build == "1" {
+        maybe_clean_build_dir_for_upstream_change(&upstream_dir, &build_dir, &upstream_hash)?;
+        eprintln!(
+            "info: building upstream C++ verifier in {}",
+            build_dir.display()
+        );
+        let status = Command::new("cmake")
+            .args([
+                "-S",
+                &upstream_dir.to_string_lossy(),
+                "-B",
+                &build_dir.to_string_lossy(),
+            ])
+            .status()
+            .context("failed to run cmake")?;
+        if !status.success() {
+            bail!("cmake configure failed");
         }
+        let status = Command::new("cmake")
+            .args(["--build", &build_dir.to_string_lossy(), "-j"])
+            .status()
+            .context("failed to run cmake --build")?;
+        if !status.success() {
+            bail!("cmake build failed");
+        }
+        write_build_stamp(&build_dir, &upstream_hash)?;
     }
 
-    let cpp = if cpp.exists() {
-        cpp
-    } else {
-        let candidate1 = upstream_dir.join("bin/check");
-        let candidate2 = upstream_dir.join("build/bin/check");
-        if candidate1.exists() {
-            candidate1
-        } else {
-            candidate2
+    if !cpp.exists() {
+        if explicit_cpp.is_some() || auto_build != "1" {
+            bail!(
+                "C++ binary not found at {}\n\
+                 Set CPP=/path/to/{} or enable auto-build (AUTO_BUILD_CPP=1).",
+                cpp.display(),
+                paths::UPSTREAM_CPP_BIN_NAME
+            );
         }
-    };
+        bail!(
+            "built upstream project but C++ binary not found at {}",
+            cpp.display()
+        );
+    }
 
-    let upstream_hash = git::rev_parse_short(&upstream_dir, "HEAD")?;
     let out_dir = paths::parity_baseline_dir(root, &upstream_hash);
     let manifest_path = out_dir.join("manifest.tsv");
     let metadata_path = out_dir.join("baseline.meta");
@@ -179,6 +163,55 @@ pub fn run(root: &Path) -> Result<()> {
     println!("Generated baseline: {total} (elf, section) pairs");
     println!("Manifest: {}", manifest_path.display());
     write_baseline_metadata(&metadata_path, &upstream_hash, &cpp)?;
+    Ok(())
+}
+
+fn maybe_clean_build_dir_for_upstream_change(
+    upstream_dir: &Path,
+    build_dir: &Path,
+    upstream_hash: &str,
+) -> Result<()> {
+    let stamp_path = build_dir.join(".prevail_upstream_hash");
+    let previous = fs::read_to_string(&stamp_path)
+        .ok()
+        .map(|s| s.trim().to_string());
+    if previous.as_deref() == Some(upstream_hash) {
+        return Ok(());
+    }
+
+    let output_bin_dir = upstream_dir.join("bin");
+    if output_bin_dir.exists() {
+        eprintln!(
+            "info: upstream hash changed; cleaning stale C++ output dir {}",
+            output_bin_dir.display()
+        );
+        fs::remove_dir_all(&output_bin_dir).with_context(|| {
+            format!(
+                "failed to clean upstream output directory {}",
+                output_bin_dir.display()
+            )
+        })?;
+    }
+    if build_dir.exists() {
+        eprintln!(
+            "info: upstream hash changed; cleaning stale C++ build dir {}",
+            build_dir.display()
+        );
+        fs::remove_dir_all(build_dir).with_context(|| {
+            format!(
+                "failed to clean upstream build directory {}",
+                build_dir.display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
+fn write_build_stamp(build_dir: &Path, upstream_hash: &str) -> Result<()> {
+    fs::create_dir_all(build_dir)?;
+    let stamp_path = build_dir.join(".prevail_upstream_hash");
+    fs::write(&stamp_path, format!("{upstream_hash}\n"))
+        .with_context(|| format!("failed to write build stamp {}", stamp_path.display()))?;
     Ok(())
 }
 

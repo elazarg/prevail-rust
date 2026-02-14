@@ -10,7 +10,7 @@ fi
 rustup show
 
 # Build the project to cache compiled dependencies
-cargo build --features bin
+cargo build
 
 # Build test dependencies so cargo test doesn't need to compile from scratch
 cargo test --no-run

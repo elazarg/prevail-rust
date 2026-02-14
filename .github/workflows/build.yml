@@ -24,10 +24,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Build without submodules
-        run: cargo build --features bin
+        run: cargo build
 
       - name: CLI smoke test
-        run: target/debug/check --help
+        run: target/debug/prevail --help
 
   test:
     strategy:
@@ -53,7 +53,7 @@ jobs:
         run: cargo build
 
       - name: Build CLI
-        run: cargo build --features bin
+        run: cargo build
 
       - name: Test
         run: cargo test
@@ -70,7 +70,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Build Rust CLI
-        run: cargo build --release --features bin
+        run: cargo build --release
 
       - name: Read upstream commit
         id: upstream

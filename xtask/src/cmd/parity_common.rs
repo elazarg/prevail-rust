@@ -55,7 +55,7 @@ pub fn prepare(root: &Path) -> Result<ParityEnv> {
     if !cpp_bin.exists() {
         bail!(
             "C++ binary not found at {}\n\
-             Set CPP=/path/to/check or build upstream check first.",
+             Set CPP=/path/to/binary or build upstream check first.",
             cpp_bin.display()
         );
     }

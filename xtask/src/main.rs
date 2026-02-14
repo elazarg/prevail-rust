@@ -56,6 +56,15 @@ enum Command {
         /// Path to upstream repo (default: tests/upstream).
         dir: Option<PathBuf>,
     },
+    /// Run the upstream C++ verifier binary.
+    RunUpstream {
+        /// Custom path to the upstream binary (default: tests/upstream/bin/check).
+        #[arg(long)]
+        bin: Option<PathBuf>,
+        /// Arguments forwarded to upstream check.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
     /// Diff a specific YAML test case between Rust and C++.
     Diff {
         #[command(subcommand)]
@@ -200,6 +209,7 @@ fn run(cli: Cli) -> Result<()> {
             ParityAction::CompareInvariants => cmd::compare_invariants::run(&root),
         },
         Command::UpstreamDiff { dir } => cmd::upstream_diff::run(&root, dir.as_deref()),
+        Command::RunUpstream { bin, args } => cmd::run_upstream::run(&root, &args, bin.as_ref()),
         Command::Diff { action } => match action {
             DiffAction::YamlCase { path, case, suite } => {
                 cmd::diff_yaml_case::run(&root, &path, &case, suite.as_deref())

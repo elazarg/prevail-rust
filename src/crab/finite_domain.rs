@@ -2141,6 +2141,22 @@ impl FiniteDomain {
         op2: &Number,
         reg: &VariableRegistry,
     ) {
+        let mask = *op2;
+        if mask.is_positive() {
+            let mask_plus = mask + Number::from(1i64);
+            if (mask & mask_plus).is_zero() {
+                let mask_interval = Interval::from_number_pair(Number::from(0i64), mask);
+                let sinterval = self.eval_interval(lhss, reg);
+                let uinterval = self.eval_interval(lhsu, reg);
+                if sinterval.is_included_in(&mask_interval)
+                    && uinterval.is_included_in(&mask_interval)
+                    && sinterval == uinterval
+                    && self.entail(&eq(lhss, lhsu), reg)
+                {
+                    return;
+                }
+            }
+        }
         self.apply_unsigned_var_num(
             FiniteBinOp::Bitwise(BitwiseBinOp::AND),
             lhss,

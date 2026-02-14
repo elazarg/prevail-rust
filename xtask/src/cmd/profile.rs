@@ -9,8 +9,9 @@ use anyhow::{Result, bail};
 use crate::util::{paths, process};
 
 pub fn run(root: &Path, workload: &[String]) -> Result<()> {
+    let target_dir = paths::target_dir(root);
     // Find binary.
-    let profiling_bin = root.join("target/profiling/prevail");
+    let profiling_bin = target_dir.join("profiling/prevail");
     let release_bin = paths::rust_bin(root);
 
     let bin = if profiling_bin.exists() {
