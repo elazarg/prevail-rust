@@ -76,8 +76,9 @@ enum Command {
     SessionStart,
     /// Run a test suite with certification-aware caching.
     Test {
-        /// Suite name (e.g., all, lib, conformance, yaml, elf-verify, parity-invariants).
-        suite: String,
+        /// Suite name (e.g., all, all-no-parity, lib, conformance, yaml, elf-verify, parity-invariants).
+        /// Omit to run the default non-parity suite (`all-no-parity`).
+        suite: Option<String>,
         /// Disable cache lookup and force execution.
         #[arg(long)]
         no_cache: bool,
@@ -228,7 +229,10 @@ fn run(cli: Cli) -> Result<()> {
             no_cache,
             no_amend,
             args,
-        } => cmd::test_cert::run_suite(&root, &suite, &args, no_cache, !no_amend),
+        } => {
+            let suite = suite.unwrap_or_else(|| "all-no-parity".to_string());
+            cmd::test_cert::run_suite(&root, &suite, &args, no_cache, !no_amend)
+        }
     }
 }
 

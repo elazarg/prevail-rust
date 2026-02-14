@@ -28,8 +28,9 @@ workflows. It is not a replacement for CI test execution.
   - Computes suite basis hash.
   - Reuses existing passing cert when basis matches.
   - Otherwise runs suite command and writes/updates cert on success.
-  - The `all` suite runs `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, and `cargo test`.
-  - `all-no-parity` is a faster local alternative: it runs formatting/lint plus non-parity suites (`--lib`, `conformance_tests`, `elf_verify_tests`, `yaml_tests`).
+  - With no suite argument, `xtask test` defaults to `all-no-parity`.
+  - `all-no-parity` runs formatting/lint plus non-parity suites (`--lib`, `conformance_tests`, `elf_verify_tests`, `yaml_tests`).
+  - `all` runs formatting/lint, `cargo test`, and then parity compare (`cargo xtask parity compare`).
   - By default, amends `HEAD` to attach/update the suite cert file.
     - opt out: `cargo xtask test <suite> --no-amend`
 
@@ -88,8 +89,7 @@ Override with:
 PREVAIL_REQUIRED_CERT_SUITES=all,conformance,yaml
 ```
 
-`all-no-parity` is available for local iteration, but should not replace `all`
-when full parity coverage is required.
+Parity can be executed directly via `cargo xtask parity compare`, or via `cargo xtask test all`.
 
 If a cert is missing or stale, pre-push fails and prints remediation commands.
 

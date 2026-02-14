@@ -153,27 +153,38 @@ impl PathFilter {
 }
 
 fn suite_spec(name: &str) -> Result<SuiteSpec> {
+    let all_non_parity = SuiteSpec {
+        name: "all-no-parity",
+        pre_commands: vec![
+            vec!["cargo", "fmt", "--check"],
+            vec!["cargo", "clippy", "--all-targets", "--", "-D", "warnings"],
+            vec!["cargo", "test", "--lib"],
+            vec!["cargo", "test", "--test", "conformance_tests"],
+            vec!["cargo", "test", "--test", "elf_verify_tests"],
+        ],
+        command: vec!["cargo", "test", "--test", "yaml_tests"],
+        clean_requirements: vec!["repo_clean_except_tests_certs"],
+    };
+
     match name {
         "all" => Ok(SuiteSpec {
             name: "all",
             pre_commands: vec![
                 vec!["cargo", "fmt", "--check"],
                 vec!["cargo", "clippy", "--all-targets", "--", "-D", "warnings"],
+                vec!["cargo", "test"],
             ],
-            command: vec!["cargo", "test"],
-            clean_requirements: vec!["repo_clean_except_tests_certs"],
+            command: vec!["cargo", "xtask", "parity", "compare"],
+            clean_requirements: vec![
+                "repo_clean_except_tests_certs",
+                "tests_upstream_clean_except_tests_certs",
+            ],
         }),
         "all-no-parity" => Ok(SuiteSpec {
             name: "all-no-parity",
-            pre_commands: vec![
-                vec!["cargo", "fmt", "--check"],
-                vec!["cargo", "clippy", "--all-targets", "--", "-D", "warnings"],
-                vec!["cargo", "test", "--lib"],
-                vec!["cargo", "test", "--test", "conformance_tests"],
-                vec!["cargo", "test", "--test", "elf_verify_tests"],
-            ],
-            command: vec!["cargo", "test", "--test", "yaml_tests"],
-            clean_requirements: vec!["repo_clean_except_tests_certs"],
+            pre_commands: all_non_parity.pre_commands,
+            command: all_non_parity.command,
+            clean_requirements: all_non_parity.clean_requirements,
         }),
         "lib" => Ok(SuiteSpec {
             name: "lib",

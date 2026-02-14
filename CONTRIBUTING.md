@@ -83,21 +83,30 @@ cargo test --test yaml_tests  # single test binary
 For day-to-day workflows, prefer running required suites via `xtask`:
 
 ```bash
-cargo xtask test all
+cargo xtask test
 ```
 
-For the `all` suite, this runs:
+By default (no suite argument), this runs the non-parity suite:
 - `cargo fmt --check`
 - `cargo clippy --all-targets -- -D warnings`
-- `cargo test`
+- `cargo test --lib`
+- `cargo test --test conformance_tests`
+- `cargo test --test elf_verify_tests`
+- `cargo test --test yaml_tests`
 
 The command reuses a local certification when valid, otherwise runs the suite
 and updates `tests/certs/<suite>.json` on success.
 
-For faster local iteration without parity suites:
+`all-no-parity` is kept as a compatibility alias and runs the same suite:
 
 ```bash
 cargo xtask test all-no-parity
+```
+
+For full coverage (including parity compare), run:
+
+```bash
+cargo xtask test all
 ```
 
 - By default, `xtask test` amends `HEAD` to attach/update the suite certification.

@@ -463,7 +463,7 @@ fn main() -> ExitCode {
     let program = match Program::from_sequence(&inst_seq, info, &opts) {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("cfg error: {}", e);
+            eprintln!("error: {}", e);
             return ExitCode::from(1);
         }
     };

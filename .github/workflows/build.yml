@@ -29,7 +29,7 @@ jobs:
       - name: CLI smoke test
         run: target/debug/prevail --help
 
-  test:
+  test_no_parity:
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest]
@@ -43,20 +43,8 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Check formatting
-        run: cargo fmt --check
-
-      - name: Clippy
-        run: cargo clippy -- -D warnings
-
-      - name: Build
-        run: cargo build
-
-      - name: Build CLI
-        run: cargo build
-
-      - name: Test
-        run: cargo test
+      - name: Run non-parity test suite
+        run: cargo xtask test --no-cache --no-amend
 
   upstream_parity:
     runs-on: ubuntu-latest

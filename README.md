@@ -114,17 +114,23 @@ cargo test
 For final testing, before a push, prefer:
 
 ```bash
-cargo xtask test all
+cargo xtask test
 ```
 
-This runs `fmt`, `clippy`, and tests through the local certification/cache workflow used by hooks.
+This runs the default non-parity suite (`all-no-parity`) through the local certification/cache workflow used by hooks.
 By default it amends `HEAD` to attach certification metadata (`--no-amend` to opt out).
 Use plain `cargo test` any time you want a direct, always-run test invocation.
 
-For faster local iteration (without parity suites), use:
+`all-no-parity` is kept as a compatibility alias and runs the same suite:
 
 ```bash
 cargo xtask test all-no-parity
+```
+
+For full coverage including parity compare:
+
+```bash
+cargo xtask test all
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development workflows.
