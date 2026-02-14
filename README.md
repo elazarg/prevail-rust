@@ -91,11 +91,19 @@ cargo build --release
 
 ### Installing the CLI
 
+To work from the local checkout:
+
 ```bash
 cargo install --path .
 ```
 
-This installs the `prevail` binary into your Cargo bin directory.
+To install the released crate with the `prevail` binary already wired up:
+
+```bash
+cargo install prevail
+```
+
+Both commands drop a `prevail` executable into your Cargo bin directory thanks to the default `prevail` binary entry in `Cargo.toml`.
 
 ### Running tests
 
@@ -103,7 +111,7 @@ This installs the `prevail` binary into your Cargo bin directory.
 cargo test
 ```
 
-For regular development, prefer:
+For final testing, before a push, prefer:
 
 ```bash
 cargo xtask test all
