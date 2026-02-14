@@ -10,7 +10,7 @@ use crate::util::{paths, process};
 
 pub fn run(root: &Path, workload: &[String]) -> Result<()> {
     // Find binary.
-    let profiling_bin = root.join("target/profiling/check");
+    let profiling_bin = root.join("target/profiling/prevail");
     let release_bin = paths::rust_bin(root);
 
     let bin = if profiling_bin.exists() {
@@ -24,12 +24,10 @@ pub fn run(root: &Path, workload: &[String]) -> Result<()> {
             "Using release binary (no debug info): {}",
             release_bin.display()
         );
-        println!(
-            "  Hint: build with 'cargo build --profile profiling --features bin' for source attribution"
-        );
+        println!("  Hint: build with 'cargo build --profile profiling' for source attribution");
         release_bin
     } else {
-        bail!("No binary found. Build with:\n  cargo build --profile profiling --features bin");
+        bail!("No binary found. Build with:\n  cargo build --profile profiling");
     };
 
     // Determine workload.
@@ -90,7 +88,7 @@ pub fn run(root: &Path, workload: &[String]) -> Result<()> {
             "report",
             "--stdio",
             "--no-children",
-            "--dsos=check",
+            "--dsos=prevail",
             "--percent-limit=1.0",
             "-i",
             &perf_data.to_string_lossy(),

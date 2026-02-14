@@ -98,7 +98,7 @@ pub fn run(root: &Path, rust_bin: Option<&Path>, cpp_bin: Option<&Path>) -> Resu
 
     if !rust_bin.exists() {
         bail!(
-            "Rust binary not found at {}\nRun: cargo build --release --features bin",
+            "Rust binary not found at {}\nRun: cargo build --release",
             rust_bin.display()
         );
     }

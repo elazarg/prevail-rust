@@ -10,13 +10,13 @@
 ## Quick project facts
 - **Language:** Pure Rust, ported from the [upstream C++ verifier](https://github.com/vbpf/prevail).
 - **Primary deliverables:**
-  - `check` (binary, `--features bin`): command-line verifier for eBPF object files.
+  - `prevail` (binary): command-line verifier for eBPF object files.
   - Test suite: `cargo test` regression suite (~1058 tests).
 - **Dependencies:** Managed via `Cargo.toml`.
 
 ## Repository map
 - `src/lib.rs` — Library entry point.
-- `src/main.rs` — CLI binary (behind `--features bin`).
+- `src/main.rs` — CLI binary (`prevail`).
 - `src/arith/` — Number (SmallNumber: i64 inline, BigInt overflow), ExtendedNumber, SafeI64, Variable, LinearExpression, LinearConstraint.
 - `src/btf/` — BTF type parsing.
 - `src/cfg/` — Label, Cfg, BasicBlock, WTO (Bourdoncle weak topological ordering).
@@ -37,7 +37,7 @@
 
 ```bash
 cargo build                # build library
-cargo build --features bin # build CLI
+cargo build --release      # build CLI
 cargo test                 # run all ~1058 tests
 cargo clippy               # lint
 cargo fmt                  # format

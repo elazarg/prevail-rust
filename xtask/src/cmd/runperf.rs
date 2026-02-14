@@ -16,7 +16,7 @@ pub fn run(root: &Path, dir: &Path, domains: &[&str]) -> Result<()> {
     let bin = paths::rust_bin(root);
     if !bin.exists() {
         bail!(
-            "check binary not found at {}\nRun: cargo build --release --features bin",
+            "prevail binary not found at {}\nRun: cargo build --release",
             bin.display()
         );
     }

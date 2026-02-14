@@ -15,7 +15,7 @@ pub fn run(root: &Path) -> Result<()> {
 
     if !rust_bin.exists() {
         bail!(
-            "Rust binary not found at {}\nRun: cargo build --release --features bin",
+            "Rust binary not found at {}\nRun: cargo build --release",
             rust_bin.display()
         );
     }

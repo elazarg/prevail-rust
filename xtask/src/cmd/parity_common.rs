@@ -31,13 +31,8 @@ pub fn prepare(root: &Path) -> Result<ParityEnv> {
     if explicit_rust_bin.is_none() {
         let auto = std::env::var("AUTO_BUILD_RUST").unwrap_or_else(|_| "1".into());
         if auto == "1" {
-            eprintln!("info: refreshing Rust CLI with cargo build --features bin --release");
-            let status = process::run_status(process::cargo(root).args([
-                "build",
-                "--features",
-                "bin",
-                "--release",
-            ]))?;
+            eprintln!("info: refreshing Rust CLI with cargo build --release");
+            let status = process::run_status(process::cargo(root).args(["build", "--release"]))?;
             if !status.success() || !rust_bin.exists() {
                 bail!(
                     "Rust build completed but binary still missing at {}",
@@ -50,7 +45,7 @@ pub fn prepare(root: &Path) -> Result<ParityEnv> {
     if !rust_bin.exists() {
         bail!(
             "Rust binary not found at {}\n\
-             Run: cargo build --features bin --release or set RUST=/path/to/check",
+                 Run: cargo build --release or set RUST=/path/to/prevail",
             rust_bin.display()
         );
     }

@@ -31,7 +31,7 @@ pub fn samples_dir(root: &Path) -> PathBuf {
 
 /// Rust release binary path.
 pub fn rust_bin(root: &Path) -> PathBuf {
-    root.join("target/release/check")
+    root.join("target/release/prevail")
 }
 
 /// C++ upstream binary path.
