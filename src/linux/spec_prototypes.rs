@@ -1314,11 +1314,18 @@ pub fn is_helper_usable(n: i32, program_context: Option<&EbpfContextDescriptor>)
 
 /// Pointer-based convenience wrapper for call sites that still carry raw
 /// context descriptor pointers.
-pub fn is_helper_usable_ptr(n: i32, program_context: *const EbpfContextDescriptor) -> bool {
+///
+/// # Safety
+/// `program_context` must either be null or point to a valid
+/// `EbpfContextDescriptor` for the duration of this call.
+pub(crate) unsafe fn is_helper_usable_ptr(
+    n: i32,
+    program_context: *const EbpfContextDescriptor,
+) -> bool {
     let ctx = if program_context.is_null() {
         None
     } else {
-        // SAFETY: callers pass pointers originating from static descriptor tables.
+        // SAFETY: required by this function's contract.
         Some(unsafe { &*program_context })
     };
     is_helper_usable(n, ctx)

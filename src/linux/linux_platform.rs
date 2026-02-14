@@ -666,7 +666,8 @@ impl EbpfPlatform for LinuxPlatform {
     }
 
     fn is_helper_usable(&self, n: i32) -> bool {
-        spec_prototypes::is_helper_usable_ptr(n, self.context_descriptor)
+        // SAFETY: `context_descriptor` is selected from static descriptor tables.
+        unsafe { spec_prototypes::is_helper_usable_ptr(n, self.context_descriptor) }
     }
 
     fn map_record_size(&self) -> usize {
