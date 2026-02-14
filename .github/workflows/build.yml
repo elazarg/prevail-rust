@@ -71,15 +71,15 @@ jobs:
           path: tests/upstream/bin/check
           key: upstream-cpp-${{ steps.upstream.outputs.hash }}
 
-      - name: Build upstream C++
+      - name: Install upstream C++ dependencies
         if: steps.cpp-cache.outputs.cache-hit != 'true'
         run: |
-          sudo apt-get update && sudo apt-get install -y libboost-dev libyaml-cpp-dev libboost-filesystem-dev libboost-program-options-dev
-          cd tests/upstream
-          cmake -B build -DCMAKE_BUILD_TYPE=Release
-          cmake --build build -j$(nproc)
+          sudo apt-get update
+          sudo apt-get install -y libboost-dev libyaml-cpp-dev libboost-filesystem-dev libboost-program-options-dev
 
       - name: Generate upstream parity baseline
+        env:
+          AUTO_BUILD_CPP: ${{ steps.cpp-cache.outputs.cache-hit == 'true' && '0' || '1' }}
         run: |
           cargo xtask parity generate-baseline
 
