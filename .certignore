@@ -10,3 +10,15 @@
 # Default exclusions are built-in and do not need to be listed here:
 # - tests/certs/
 # - *.md
+
+# CI workflow files do not change verifier behavior or test expectations.
+.github/workflows/
+
+# Assistant/editor metadata is not a test input.
+.claude/
+
+# License-checker tooling input only.
+.check-license.ignore
+
+# Container image recipe does not affect local test execution.
+Dockerfile
