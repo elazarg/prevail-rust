@@ -68,7 +68,7 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
 }
 
 fn serialize_inst_bytes(insts: &[EbpfInst]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(insts.len() * std::mem::size_of::<EbpfInst>());
+    let mut out = Vec::with_capacity(std::mem::size_of_val(insts));
     for inst in insts {
         out.push(inst.opcode);
         out.push(inst.dst_src);
