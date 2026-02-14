@@ -437,19 +437,8 @@ fn parse_maps_section_linux(
     // Copy map definitions from the ELF section into a local list.
     let mut mapdefs = Vec::with_capacity(count);
     for i in 0..count {
-        let mut def = BpfLoadMapDef::default();
         let src_offset = i * record_size;
-        let copy_len = record_size.min(std::mem::size_of::<BpfLoadMapDef>());
-        // SAFETY: We are copying from a byte slice into a repr(C) struct of
-        // plain u32 fields.  The copy length is bounded by both the source
-        // record size and the struct size.
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                data[src_offset..].as_ptr(),
-                &mut def as *mut BpfLoadMapDef as *mut u8,
-                copy_len,
-            );
-        }
+        let def = parse_map_def_record(&data[src_offset..], record_size);
         mapdefs.push(def);
     }
 
@@ -475,6 +464,26 @@ fn parse_maps_section_linux(
             // resolve_inner_map_references pass.
             inner_map_fd: s.inner_map_idx as i32,
         });
+    }
+}
+
+fn parse_map_def_record(record: &[u8], record_size: usize) -> BpfLoadMapDef {
+    let mut padded = [0u8; std::mem::size_of::<BpfLoadMapDef>()];
+    let copy_len = record_size.min(padded.len()).min(record.len());
+    padded[..copy_len].copy_from_slice(&record[..copy_len]);
+
+    let mut fields = [0u32; 7];
+    for (idx, chunk) in padded.chunks_exact(4).take(7).enumerate() {
+        fields[idx] = u32::from_ne_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+    }
+    BpfLoadMapDef {
+        map_type: fields[0],
+        key_size: fields[1],
+        value_size: fields[2],
+        max_entries: fields[3],
+        map_flags: fields[4],
+        inner_map_idx: fields[5],
+        numa_node: fields[6],
     }
 }
 
@@ -536,6 +545,7 @@ fn create_map_linux(
             map_flags: u32,
         }
 
+        // SAFETY: FFI declaration for the platform syscall entry point.
         unsafe extern "C" {
             fn syscall(num: i64, ...) -> i64;
         }
@@ -552,6 +562,8 @@ fn create_map_linux(
             },
         };
 
+        // SAFETY: We pass a valid pointer to a properly initialized repr(C) attr
+        // buffer and its exact size, matching the expected kernel syscall ABI.
         let map_fd = unsafe {
             syscall(
                 SYS_BPF,
@@ -654,7 +666,7 @@ impl EbpfPlatform for LinuxPlatform {
     }
 
     fn is_helper_usable(&self, n: i32) -> bool {
-        unsafe { spec_prototypes::is_helper_usable(n, self.context_descriptor) }
+        spec_prototypes::is_helper_usable_ptr(n, self.context_descriptor)
     }
 
     fn map_record_size(&self) -> usize {

@@ -109,7 +109,7 @@ fn read_struct<T: Copy>(
             "Invalid .BTF section — offset out of range".into(),
         ));
     }
-    // Safety: we checked bounds above, and T is Copy (plain data).
+    // SAFETY: Bounds are validated above, and T: Copy is plain-data read.
     let val = unsafe { std::ptr::read_unaligned(data.as_ptr().add(*offset) as *const T) };
     *offset += size;
     Ok(val)

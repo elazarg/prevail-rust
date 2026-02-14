@@ -130,6 +130,9 @@ impl<F: Fn(i32, i32) -> bool> Heap<F> {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
     use super::*;
 
     #[test]
@@ -153,22 +156,24 @@ mod tests {
     #[test]
     fn test_decrease_key() {
         // Use an external array to define custom ordering.
-        let mut keys = [10, 20, 30, 40, 50];
-        let h_ptr = keys.as_ptr();
-        // SAFETY: keys lives for the duration of the heap usage.
-        let mut h = Heap::new(move |a: i32, b: i32| unsafe {
-            *h_ptr.add(a as usize) < *h_ptr.add(b as usize)
+        let keys = [
+            Cell::new(10),
+            Cell::new(20),
+            Cell::new(30),
+            Cell::new(40),
+            Cell::new(50),
+        ];
+        let keys = Rc::new(keys);
+        let keys_cmp = Rc::clone(&keys);
+        let mut h = Heap::new(move |a: i32, b: i32| {
+            keys_cmp[a as usize].get() < keys_cmp[b as usize].get()
         });
         h.insert(0); // key 10
         h.insert(1); // key 20
         h.insert(2); // key 30
 
         // Decrease key for element 2 to 5 (now smallest)
-        // Note: modification is observed through raw pointer in closure
-        #[expect(unused_assignments)]
-        {
-            keys[2] = 5;
-        }
+        keys[2].set(5);
         h.decrease(2);
         assert_eq!(h.remove_min(), 2);
         assert_eq!(h.remove_min(), 0);

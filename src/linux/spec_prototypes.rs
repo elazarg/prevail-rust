@@ -1286,11 +1286,7 @@ pub fn get_helper_prototype(n: i32) -> &'static HelperPrototype {
 /// `program_context` is the context descriptor of the program type being
 /// verified.  If null, context-dependent helpers are rejected.
 ///
-/// # Safety
-///
-/// `program_context` must be either null or a valid pointer to an
-/// `EbpfContextDescriptor`.
-pub unsafe fn is_helper_usable(n: i32, program_context: *const EbpfContextDescriptor) -> bool {
+pub fn is_helper_usable(n: i32, program_context: Option<&EbpfContextDescriptor>) -> bool {
     if n < 0 || n >= PROTOTYPES.len() as i32 {
         return false;
     }
@@ -1303,10 +1299,9 @@ pub unsafe fn is_helper_usable(n: i32, program_context: *const EbpfContextDescri
 
     // If the helper requires a specific context, it must match.
     if let Some(required_ctx) = proto.context_descriptor
-        && !program_context.is_null()
+        && let Some(prog_ctx) = program_context
     {
         // Compare by pointer identity first, then by value.
-        let prog_ctx = unsafe { &*program_context };
         if !std::ptr::eq(required_ctx, prog_ctx) && *required_ctx != *prog_ctx {
             return false;
         }
@@ -1315,6 +1310,18 @@ pub unsafe fn is_helper_usable(n: i32, program_context: *const EbpfContextDescri
     }
 
     true
+}
+
+/// Pointer-based convenience wrapper for call sites that still carry raw
+/// context descriptor pointers.
+pub fn is_helper_usable_ptr(n: i32, program_context: *const EbpfContextDescriptor) -> bool {
+    let ctx = if program_context.is_null() {
+        None
+    } else {
+        // SAFETY: callers pass pointers originating from static descriptor tables.
+        Some(unsafe { &*program_context })
+    };
+    is_helper_usable(n, ctx)
 }
 
 // ── Tests ──────────────────────────────────────────────────────────
@@ -1403,39 +1410,31 @@ mod tests {
 
     #[test]
     fn test_is_helper_usable_out_of_range() {
-        unsafe {
-            assert!(!is_helper_usable(-1, std::ptr::null()));
-            assert!(!is_helper_usable(212, std::ptr::null()));
-            assert!(!is_helper_usable(i32::MAX, std::ptr::null()));
-        }
+        assert!(!is_helper_usable(-1, None));
+        assert!(!is_helper_usable(212, None));
+        assert!(!is_helper_usable(i32::MAX, None));
     }
 
     #[test]
     fn test_is_helper_usable_unsupported() {
         // dynptr_from_mem (197) is explicitly unsupported
-        unsafe {
-            assert!(!is_helper_usable(197, std::ptr::null()));
-        }
+        assert!(!is_helper_usable(197, None));
     }
 
     #[test]
     fn test_is_helper_usable_no_context_required() {
         // get_prandom_u32 (7) has no context requirement, should be usable
-        unsafe {
-            assert!(is_helper_usable(7, std::ptr::null()));
-        }
+        assert!(is_helper_usable(7, None));
     }
 
     #[test]
     fn test_is_helper_usable_context_match() {
-        unsafe {
-            // skb_store_bytes (9) requires SK_BUFF context
-            assert!(is_helper_usable(9, &SK_BUFF));
-            // Should fail with XDP context
-            assert!(!is_helper_usable(9, &XDP_MD));
-            // Should fail with null context
-            assert!(!is_helper_usable(9, std::ptr::null()));
-        }
+        // skb_store_bytes (9) requires SK_BUFF context
+        assert!(is_helper_usable(9, Some(&SK_BUFF)));
+        // Should fail with XDP context
+        assert!(!is_helper_usable(9, Some(&XDP_MD)));
+        // Should fail with null context
+        assert!(!is_helper_usable(9, None));
     }
 
     #[test]
@@ -1447,9 +1446,7 @@ mod tests {
             end: 20 * 4,
             meta: 35 * 4,
         };
-        unsafe {
-            assert!(is_helper_usable(9, &matching_ctx));
-        }
+        assert!(is_helper_usable(9, Some(&matching_ctx)));
     }
 
     #[test]

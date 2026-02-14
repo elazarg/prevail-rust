@@ -26,6 +26,7 @@ pub fn bpf_verify_program(prog_type: u32, raw_prog: &[u8], print_failures: bool)
         prog_flags: u32,
     }
 
+    // SAFETY: FFI declaration for the platform syscall entry point.
     unsafe extern "C" {
         fn syscall(num: i64, ...) -> i64;
     }
@@ -57,6 +58,8 @@ pub fn bpf_verify_program(prog_type: u32, raw_prog: &[u8], print_failures: bool)
     };
 
     let begin = Instant::now();
+    // SAFETY: We pass a valid pointer to a properly initialized repr(C) attr
+    // buffer and its exact size, matching the expected kernel syscall ABI.
     let res = unsafe {
         syscall(
             SYS_BPF,

@@ -67,6 +67,17 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
     h
 }
 
+fn serialize_inst_bytes(insts: &[EbpfInst]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(insts.len() * std::mem::size_of::<EbpfInst>());
+    for inst in insts {
+        out.push(inst.opcode);
+        out.push(inst.dst_src);
+        out.extend_from_slice(&inst.offset.to_ne_bytes());
+        out.extend_from_slice(&inst.imm.to_ne_bytes());
+    }
+    out
+}
+
 // ── CLI definition ──────────────────────────────────────────────────────────
 
 // Valid conformance group names for CLI validation.
@@ -398,16 +409,11 @@ fn main() -> ExitCode {
     // ── Linux domain: run kernel verifier ────────────────────────────────
 
     if cli.domain == "linux" {
-        let raw_bytes = unsafe {
-            std::slice::from_raw_parts(
-                insts.as_ptr() as *const u8,
-                insts.len() * std::mem::size_of::<EbpfInst>(),
-            )
-        };
+        let raw_bytes = serialize_inst_bytes(insts);
         let prog_type = info.program_type.platform_specific_data as u32;
         let (res, seconds) = linux_verifier::bpf_verify_program(
             prog_type,
-            raw_bytes,
+            &raw_bytes,
             opts.verbosity_opts.print_failures,
         );
         let mem_kb = memsize::resident_set_size_kb();
@@ -483,13 +489,8 @@ fn main() -> ExitCode {
         }
 
         // Hash the raw bytes of the program.
-        let raw_bytes = unsafe {
-            std::slice::from_raw_parts(
-                insts.as_ptr() as *const u8,
-                insts.len() * std::mem::size_of::<EbpfInst>(),
-            )
-        };
-        let hash = fnv1a64(raw_bytes);
+        let raw_bytes = serialize_inst_bytes(insts);
+        let hash = fnv1a64(&raw_bytes);
         let inst_count = inst_seq.len();
         print!("{hash:x},{inst_count}");
 

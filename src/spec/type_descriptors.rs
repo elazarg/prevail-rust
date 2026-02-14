@@ -68,9 +68,18 @@ impl Default for EbpfProgramType {
     }
 }
 
-// SAFETY: context_descriptor always points to static global data.
-unsafe impl Send for EbpfProgramType {}
-unsafe impl Sync for EbpfProgramType {}
+impl EbpfProgramType {
+    /// Safe view of the optional context descriptor.
+    ///
+    /// The pointer originates from static descriptor tables in platform modules.
+    pub fn context_descriptor_ref(&self) -> Option<&EbpfContextDescriptor> {
+        if self.context_descriptor.is_null() {
+            return None;
+        }
+        // SAFETY: pointer is expected to refer to static descriptor tables.
+        Some(unsafe { &*self.context_descriptor })
+    }
+}
 
 /// Key characteristics that determine equivalence between eBPF maps.
 /// Used to cache and compare map configurations.

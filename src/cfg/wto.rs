@@ -18,6 +18,7 @@
 //!
 //! results in the WTO: `1 2 (3 4 (5 6) 7) 8`
 
+use std::cell::OnceCell;
 use std::collections::HashMap;
 use std::fmt;
 use std::rc::{Rc, Weak};
@@ -43,7 +44,7 @@ pub struct WtoCycle {
     /// Sub-components in reverse order.
     components: WtoPartition,
     /// The cycle containing this cycle, or None if top-level.
-    containing_cycle: Option<Weak<WtoCycle>>,
+    containing_cycle: OnceCell<Weak<WtoCycle>>,
 }
 
 impl WtoCycle {
@@ -170,7 +171,7 @@ impl Wto {
             return Some(first.clone());
         }
         // This label is already the head of a cycle, so get the cycle's parent.
-        let parent = cycle.containing_cycle.as_ref()?.upgrade()?;
+        let parent = cycle.containing_cycle.get()?.upgrade()?;
         Some(parent.head().clone())
     }
 
@@ -508,27 +509,19 @@ impl WtoBuilder {
             }
             rc_cycles[i] = Some(Rc::new(WtoCycle {
                 components,
-                containing_cycle: None, // filled in pass 2
+                containing_cycle: OnceCell::new(), // filled in pass 2
             }));
         }
 
         // Pass 2: Set up containing_cycle (parent) Weak pointers.
-        // Safety: We need to mutate each Rc<WtoCycle>'s `containing_cycle` field.
-        // At this point the Rc's may have multiple strong references (from being
-        // cloned into other cycles' components). We use unsafe to write the field
-        // because WtoCycle is effectively immutable after construction — we only
-        // set `containing_cycle` once and never again.
+        // This uses OnceCell so the parent link is initialized exactly once.
         for i in 0..num_cycles {
             if let Some(parent_idx) = self.cycles[i].parent_cycle_idx {
                 let weak_parent = Rc::downgrade(rc_cycles[parent_idx].as_ref().unwrap());
                 let rc = rc_cycles[i].as_ref().unwrap();
-                // Safety: No other code is reading containing_cycle yet (we haven't
-                // returned the Wto). The field is Option<Weak<WtoCycle>> and we're
-                // writing it exactly once from None to Some.
-                let ptr = rc.as_ref() as *const WtoCycle as *mut WtoCycle;
-                unsafe {
-                    (*ptr).containing_cycle = Some(weak_parent);
-                }
+                rc.containing_cycle
+                    .set(weak_parent)
+                    .expect("containing_cycle initialized exactly once");
             }
         }
 

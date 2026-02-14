@@ -485,7 +485,11 @@ fn do_load_ctx(
         return;
     }
 
-    let desc = unsafe { &*ctx.program_info.program_type.context_descriptor };
+    let desc = ctx
+        .program_info
+        .program_type
+        .context_descriptor_ref()
+        .expect("missing program context descriptor");
     let target = reg_pack(target_reg, registry);
 
     if desc.end < 0 {

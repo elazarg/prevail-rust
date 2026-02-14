@@ -135,7 +135,13 @@ impl<'a> EbpfChecker<'a> {
         ub: LinearExpression,
     ) -> Result<(), VerificationError> {
         // Safe context descriptor access
-        let desc_size = unsafe { (*self.ctx.program_info.program_type.context_descriptor).size };
+        let desc_size = self
+            .ctx
+            .program_info
+            .program_type
+            .context_descriptor_ref()
+            .expect("missing program context descriptor")
+            .size;
 
         self.require_value(
             geq(lb.clone(), LinearExpression::from(0)),

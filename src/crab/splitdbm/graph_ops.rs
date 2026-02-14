@@ -39,7 +39,11 @@ const BF_QUEUED: i32 = 2;
 /// where the heap captures `const std::vector<Weight>& dists`.
 fn make_heap(dists: &[Weight]) -> Heap<impl Fn(i32, i32) -> bool + use<>> {
     let ptr = dists.as_ptr();
-    Heap::new(move |x: i32, y: i32| unsafe { *ptr.add(x as usize) < *ptr.add(y as usize) })
+    Heap::new(move |x: i32, y: i32| {
+        // SAFETY: x/y are heap-managed vertex indices, and ptr points to dists
+        // storage that outlives the heap comparator closure.
+        unsafe { *ptr.add(x as usize) < *ptr.add(y as usize) }
+    })
 }
 
 // =============================================================================
