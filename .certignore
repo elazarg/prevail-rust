@@ -22,3 +22,6 @@
 
 # Container image recipe does not affect local test execution.
 Dockerfile
+
+# Fuzz targets are not part of the certified test suite.
+fuzz/

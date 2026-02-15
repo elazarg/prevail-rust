@@ -3,14 +3,14 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use prevail_rs::crab::ebpf_domain::DomainContext;
-use prevail_rs::crab::var_registry::VariableRegistry;
-use prevail_rs::elf_loader::read_elf;
-use prevail_rs::fwd_analyzer;
-use prevail_rs::ir::program::Program;
-use prevail_rs::ir::unmarshal;
-use prevail_rs::linux::linux_platform::LinuxPlatform;
-use prevail_rs::spec::config::EbpfVerifierOptions;
+use prevail::crab::ebpf_domain::DomainContext;
+use prevail::crab::var_registry::VariableRegistry;
+use prevail::elf_loader::read_elf;
+use prevail::fwd_analyzer;
+use prevail::ir::program::Program;
+use prevail::ir::unmarshal;
+use prevail::linux::linux_platform::LinuxPlatform;
+use prevail::spec::config::EbpfVerifierOptions;
 
 fuzz_target!(|data: &[u8]| {
     if data.len() > 512_000 {
@@ -23,7 +23,7 @@ fuzz_target!(|data: &[u8]| {
         ..EbpfVerifierOptions::default()
     };
 
-    let raw_progs = match read_elf(data, "fuzz.o", "", "", &opts, &platform) {
+    let raw_progs = match read_elf(data, "fuzz.o", "", "", &opts, &mut platform) {
         Ok(progs) => progs,
         Err(_) => return,
     };
