@@ -4,12 +4,12 @@
 
 use arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
-use prevail_rs::ir::unmarshal::unmarshal;
-use prevail_rs::linux::linux_platform::LinuxPlatform;
-use prevail_rs::spec::config::EbpfVerifierOptions;
-use prevail_rs::spec::ebpf_base::EbpfContextDescriptor;
-use prevail_rs::spec::type_descriptors::ProgramInfo;
-use prevail_rs::spec::vm_isa::EbpfInst;
+use prevail::ir::unmarshal::unmarshal;
+use prevail::linux::linux_platform::LinuxPlatform;
+use prevail::spec::config::EbpfVerifierOptions;
+use prevail::spec::ebpf_base::EbpfContextDescriptor;
+use prevail::spec::type_descriptors::ProgramInfo;
+use prevail::spec::vm_isa::EbpfInst;
 
 #[derive(Debug, Arbitrary)]
 struct FuzzInput {

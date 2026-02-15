@@ -13,3 +13,4 @@ fuzz/artifacts/
 fuzz/target/
 benchmark_report.txt
 lcov.info
+.idea/

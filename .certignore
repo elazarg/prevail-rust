@@ -16,6 +16,7 @@
 
 # Assistant/editor metadata is not a test input.
 .claude/
+.idea/
 
 # License-checker tooling input only.
 .check-license.ignore

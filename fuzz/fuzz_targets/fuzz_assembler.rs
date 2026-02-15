@@ -3,7 +3,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use prevail_rs::ir::assembler::bpf_assemble;
+use prevail::ir::assembler::bpf_assemble;
 
 fuzz_target!(|data: &[u8]| {
     if data.len() > 4096 {
