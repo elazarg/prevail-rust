@@ -275,18 +275,13 @@ impl Interval {
                 Interval::from_i64(0)
             };
         }
-        if x.contains(&Number::from(0i64)) {
-            let l = Interval::new(x.lb, Bound::Finite(Number::from(-1i64)));
-            let u = Interval::new(Bound::Finite(Number::from(1i64)), x.ub);
-            return self
-                .div(&l)
-                .join(&self.div(&u))
-                .join(&Interval::from_i64(0));
+        let zero = Interval::from_i64(0);
+        let op = |a: &Interval, b: &Interval| a.div(b);
+        if let Some(r) = try_split_divisor_at_zero(self, x, &op, &zero) {
+            return r;
         }
-        if self.contains(&Number::from(0i64)) {
-            let l = Interval::new(self.lb, Bound::Finite(Number::from(-1i64)));
-            let u = Interval::new(Bound::Finite(Number::from(1i64)), self.ub);
-            return l.div(x).join(&u.div(x)).join(&Interval::from_i64(0));
+        if let Some(r) = try_split_dividend_at_zero(self, x, &op, &zero) {
+            return r;
         }
         // Neither contains 0
         let a = make_dividend_when_both_nonzero(self, x);
@@ -313,18 +308,13 @@ impl Interval {
                 Interval::from_i64(0)
             };
         }
-        if x.contains(&Number::from(0i64)) {
-            let l = Interval::new(x.lb, Bound::Finite(Number::from(-1i64)));
-            let u = Interval::new(Bound::Finite(Number::from(1i64)), x.ub);
-            return self
-                .sdiv(&l)
-                .join(&self.sdiv(&u))
-                .join(&Interval::from_i64(0));
+        let zero = Interval::from_i64(0);
+        let op = |a: &Interval, b: &Interval| a.sdiv(b);
+        if let Some(r) = try_split_divisor_at_zero(self, x, &op, &zero) {
+            return r;
         }
-        if self.contains(&Number::from(0i64)) {
-            let l = Interval::new(self.lb, Bound::Finite(Number::from(-1i64)));
-            let u = Interval::new(Bound::Finite(Number::from(1i64)), self.ub);
-            return l.sdiv(x).join(&u.sdiv(x)).join(&Interval::from_i64(0));
+        if let Some(r) = try_split_dividend_at_zero(self, x, &op, &zero) {
+            return r;
         }
         let a = make_dividend_when_both_nonzero(self, x);
         let divs = [a.lb / x.lb, a.lb / x.ub, a.ub / x.lb, a.ub / x.ub];
@@ -356,18 +346,13 @@ impl Interval {
                 Interval::from_i64(0)
             };
         }
-        if x.contains(&Number::from(0i64)) {
-            let l = Interval::new(x.lb, Bound::Finite(Number::from(-1i64)));
-            let u = Interval::new(Bound::Finite(Number::from(1i64)), x.ub);
-            return self
-                .udiv(&l)
-                .join(&self.udiv(&u))
-                .join(&Interval::from_i64(0));
+        let zero = Interval::from_i64(0);
+        let op = |a: &Interval, b: &Interval| a.udiv(b);
+        if let Some(r) = try_split_divisor_at_zero(self, x, &op, &zero) {
+            return r;
         }
-        if self.contains(&Number::from(0i64)) {
-            let l = Interval::new(self.lb, Bound::Finite(Number::from(-1i64)));
-            let u = Interval::new(Bound::Finite(Number::from(1i64)), self.ub);
-            return l.udiv(x).join(&u.udiv(x)).join(&Interval::from_i64(0));
+        if let Some(r) = try_split_dividend_at_zero(self, x, &op, &zero) {
+            return r;
         }
         let a = make_dividend_when_both_nonzero(self, x);
         let divs = [
@@ -394,10 +379,8 @@ impl Interval {
             }
             return Interval::from_number(dividend % divisor);
         }
-        if x.contains(&Number::from(0i64)) {
-            let l = Interval::new(x.lb, Bound::Finite(Number::from(-1i64)));
-            let u = Interval::new(Bound::Finite(Number::from(1i64)), x.ub);
-            return self.srem(&l).join(&self.srem(&u)).join(self);
+        if let Some(r) = try_split_divisor_at_zero(self, x, &|a, b| a.srem(b), self) {
+            return r;
         }
         if x.ub.is_finite() && x.lb.is_finite() {
             let (xlb, xub) = x.pair_number();
@@ -453,15 +436,12 @@ impl Interval {
                 return Interval::from_u64(dv % ds);
             }
         }
-        if x.contains(&Number::from(0i64)) {
-            let l = Interval::new(x.lb, Bound::Finite(Number::from(-1i64)));
-            let u = Interval::new(Bound::Finite(Number::from(1i64)), x.ub);
-            return self.urem(&l).join(&self.urem(&u)).join(self);
+        let op = |a: &Interval, b: &Interval| a.urem(b);
+        if let Some(r) = try_split_divisor_at_zero(self, x, &op, self) {
+            return r;
         }
-        if self.contains(&Number::from(0i64)) {
-            let l = Interval::new(self.lb, Bound::Finite(Number::from(-1i64)));
-            let u = Interval::new(Bound::Finite(Number::from(1i64)), self.ub);
-            return l.urem(x).join(&u.urem(x)).join(self);
+        if let Some(r) = try_split_dividend_at_zero(self, x, &op, self) {
+            return r;
         }
         // Neither contains 0
         if x.lb.is_infinite() || x.ub.is_infinite() {
@@ -736,7 +716,7 @@ impl Interval {
 }
 
 // ============================================================================
-// Helper function
+// Helper functions
 // ============================================================================
 
 fn make_dividend_when_both_nonzero(dividend: &Interval, divisor: &Interval) -> Interval {
@@ -748,6 +728,44 @@ fn make_dividend_when_both_nonzero(dividend: &Interval, divisor: &Interval) -> I
         return dividend.add(divisor).add(&Interval::from_i64(1));
     }
     dividend.add(&Interval::from_i64(1)).sub(divisor)
+}
+
+/// Split an interval around zero into [-∞, -1] and [1, +∞] halves.
+fn halves_excluding_zero(x: &Interval) -> (Interval, Interval) {
+    (
+        Interval::new(x.lb, Bound::Finite(Number::from(-1i64))),
+        Interval::new(Bound::Finite(Number::from(1i64)), x.ub),
+    )
+}
+
+/// If the divisor contains zero, split it into negative/positive halves,
+/// apply `op` to each, and join the results with `zero_join`.
+fn try_split_divisor_at_zero(
+    dividend: &Interval,
+    divisor: &Interval,
+    op: &impl Fn(&Interval, &Interval) -> Interval,
+    zero_join: &Interval,
+) -> Option<Interval> {
+    if !divisor.contains(&Number::from(0i64)) {
+        return None;
+    }
+    let (lo, hi) = halves_excluding_zero(divisor);
+    Some(op(dividend, &lo).join(&op(dividend, &hi)).join(zero_join))
+}
+
+/// If the dividend contains zero, split it into negative/positive halves,
+/// apply `op` to each, and join the results with `zero_join`.
+fn try_split_dividend_at_zero(
+    dividend: &Interval,
+    divisor: &Interval,
+    op: &impl Fn(&Interval, &Interval) -> Interval,
+    zero_join: &Interval,
+) -> Option<Interval> {
+    if !dividend.contains(&Number::from(0i64)) {
+        return None;
+    }
+    let (lo, hi) = halves_excluding_zero(dividend);
+    Some(op(&lo, divisor).join(&op(&hi, divisor)).join(zero_join))
 }
 
 // ============================================================================

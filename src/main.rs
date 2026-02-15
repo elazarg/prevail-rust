@@ -23,38 +23,7 @@ use prevail::spec::config::{EbpfVerifierOptions, PrepareCfgOptions, VerbosityOpt
 use prevail::spec::type_descriptors::RawProgram;
 use prevail::spec::vm_isa::EbpfInst;
 
-// ── Conformance group constants (mirrors bpf_conformance_groups_t) ──────────
-
-mod conformance {
-    pub const BASE32: u32 = 0x01;
-    pub const BASE64: u32 = 0x02;
-    pub const ATOMIC32: u32 = 0x04;
-    pub const ATOMIC64: u32 = 0x08;
-    pub const DIVMUL32: u32 = 0x10;
-    pub const DIVMUL64: u32 = 0x20;
-    pub const PACKET: u32 = 0x40;
-    pub const CALLX: u32 = 0x80;
-    pub const DEFAULT_GROUPS: u32 = BASE32 | BASE64 | ATOMIC32 | ATOMIC64 | DIVMUL32 | DIVMUL64;
-
-    pub fn group_by_name(name: &str) -> Option<u32> {
-        GROUPS.iter().find(|&&(n, _)| n == name).map(|&(_, v)| v)
-    }
-
-    pub const GROUPS: &[(&str, u32)] = &[
-        ("atomic32", ATOMIC32),
-        ("atomic64", ATOMIC64),
-        ("base32", BASE32),
-        ("base64", BASE64),
-        ("callx", CALLX),
-        ("divmul32", DIVMUL32),
-        ("divmul64", DIVMUL64),
-        ("packet", PACKET),
-    ];
-
-    pub fn all_group_names() -> Vec<&'static str> {
-        GROUPS.iter().map(|&(n, _)| n).collect()
-    }
-}
+use prevail::linux::linux_platform::conformance_groups as conformance;
 
 // ── FNV-1a hash ─────────────────────────────────────────────────────────────
 
@@ -81,9 +50,20 @@ fn serialize_inst_bytes(insts: &[EbpfInst]) -> Vec<u8> {
 // ── CLI definition ──────────────────────────────────────────────────────────
 
 // Valid conformance group names for CLI validation.
-const GROUP_NAMES: [&str; 8] = [
-    "atomic32", "atomic64", "base32", "base64", "callx", "divmul32", "divmul64", "packet",
-];
+const GROUP_NAMES: [&str; 8] = {
+    // Build a fixed array from the shared GROUPS table.
+    let groups = conformance::GROUPS;
+    [
+        groups[0].0,
+        groups[1].0,
+        groups[2].0,
+        groups[3].0,
+        groups[4].0,
+        groups[5].0,
+        groups[6].0,
+        groups[7].0,
+    ]
+};
 
 #[derive(Parser)]
 #[command(

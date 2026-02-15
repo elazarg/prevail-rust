@@ -110,40 +110,25 @@ impl ExtendedNumber {
     }
 
     pub fn udiv(&self, rhs: &ExtendedNumber) -> ExtendedNumber {
-        self.abs_div(rhs, |a, b| {
-            let a_val = if !a.is_negative() {
-                *a
-            } else {
-                a.cast_to_unsigned_width(64)
-            };
-            let b_val = if !b.is_negative() {
-                *b
-            } else {
-                b.cast_to_unsigned_width(64)
-            };
-            Finite(a_val / b_val)
-        })
+        self.abs_div(rhs, |a, b| Finite(to_unsigned(a) / to_unsigned(b)))
     }
 
     pub fn urem(&self, rhs: &ExtendedNumber) -> ExtendedNumber {
-        self.abs_div(rhs, |a, b| {
-            let a_val = if !a.is_negative() {
-                *a
-            } else {
-                a.cast_to_unsigned_width(64)
-            };
-            let b_val = if !b.is_negative() {
-                *b
-            } else {
-                b.cast_to_unsigned_width(64)
-            };
-            Finite(a_val % b_val)
-        })
+        self.abs_div(rhs, |a, b| Finite(to_unsigned(a) % to_unsigned(b)))
     }
 
     /// True if the value is positive (> 0, including +infinity).
     fn is_positive(&self) -> bool {
         *self > Finite(Number::default())
+    }
+}
+
+/// Reinterpret a number as unsigned 64-bit (two's complement bit cast for negatives).
+fn to_unsigned(n: &Number) -> Number {
+    if !n.is_negative() {
+        *n
+    } else {
+        n.cast_to_unsigned_width(64)
     }
 }
 

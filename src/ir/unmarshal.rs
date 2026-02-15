@@ -17,17 +17,7 @@ use crate::spec::config::EbpfVerifierOptions;
 use crate::spec::type_descriptors::ProgramInfo;
 use crate::spec::vm_isa::*;
 
-/// Conformance groups constants (mirrors bpf_conformance_groups_t in linux_platform).
-pub mod conformance_groups {
-    pub const BASE32: u32 = 0x01;
-    pub const BASE64: u32 = 0x02;
-    pub const ATOMIC32: u32 = 0x04;
-    pub const ATOMIC64: u32 = 0x08;
-    pub const DIVMUL32: u32 = 0x10;
-    pub const DIVMUL64: u32 = 0x20;
-    pub const PACKET: u32 = 0x40;
-    pub const CALLX: u32 = 0x80;
-}
+pub use crate::linux::linux_platform::conformance_groups;
 
 /// Returns true if the opcode class is a load (LD/LDX), false for store (ST/STX).
 fn get_mem_is_load(opcode: u8) -> bool {

@@ -519,29 +519,22 @@ impl SplitDBM {
             }
         }
 
-        for &s in &lb_up {
-            let left_lb = gx.edge_val(s, 0);
-            let right_lb = gy.edge_val(s, 0);
-            for &d in &ub_up {
-                if s != d {
-                    let left_val = left_lb + gx.edge_val(0, d);
-                    let right_val = right_lb + gy.edge_val(0, d);
-                    result_g.update_edge(s, std::cmp::max(left_val, right_val), d);
+        // Reapply independent relations via vertex 0 for each (lb, ub) pair.
+        let apply_lb_ub = |sources: &[VertId], dests: &[VertId], result: &mut Graph| {
+            for &s in sources {
+                let left_lb = gx.edge_val(s, 0);
+                let right_lb = gy.edge_val(s, 0);
+                for &d in dests {
+                    if s != d {
+                        let left_val = left_lb + gx.edge_val(0, d);
+                        let right_val = right_lb + gy.edge_val(0, d);
+                        result.update_edge(s, std::cmp::max(left_val, right_val), d);
+                    }
                 }
             }
-        }
-
-        for &s in &lb_down {
-            let left_lb = gx.edge_val(s, 0);
-            let right_lb = gy.edge_val(s, 0);
-            for &d in &ub_down {
-                if s != d {
-                    let left_val = left_lb + gx.edge_val(0, d);
-                    let right_val = right_lb + gy.edge_val(0, d);
-                    result_g.update_edge(s, std::cmp::max(left_val, right_val), d);
-                }
-            }
-        }
+        };
+        apply_lb_ub(&lb_up, &ub_up, &mut result_g);
+        apply_lb_ub(&lb_down, &ub_down, &mut result_g);
 
         SplitDBM {
             g: result_g,

@@ -24,7 +24,7 @@ use crate::ir::syntax::Reg;
 use crate::platform::EbpfPlatform;
 use crate::spec::config::EbpfVerifierOptions;
 use crate::spec::ebpf_base::*;
-use crate::spec::type_descriptors::ProgramInfo;
+use crate::spec::type_descriptors::{EbpfMapDescriptor, ProgramInfo};
 use crate::spec::vm_isa::*;
 
 // ============================================================================
@@ -296,12 +296,13 @@ impl EbpfDomain {
         result
     }
 
-    /// Get the range of key sizes across all possible map fds.
-    pub fn get_map_key_size(
+    /// Get the range of a numeric map field across all possible map fds.
+    fn get_map_field_range(
         &self,
         map_fd_reg: &Reg,
         ctx: &DomainContext,
         registry: &mut VariableRegistry,
+        field: impl Fn(&EbpfMapDescriptor) -> i64,
     ) -> Interval {
         let Some((start_fd, end_fd)) = self.get_map_fd_range(map_fd_reg, registry) else {
             return Interval::top();
@@ -309,12 +310,22 @@ impl EbpfDomain {
         let mut result = Interval::bottom();
         for map_fd in start_fd..=end_fd {
             if let Some(map) = ctx.platform.get_map_descriptor(map_fd) {
-                result = result.join(&Interval::from_i64(map.key_size as i64));
+                result = result.join(&Interval::from_i64(field(map)));
             } else {
                 return Interval::top();
             }
         }
         result
+    }
+
+    /// Get the range of key sizes across all possible map fds.
+    pub fn get_map_key_size(
+        &self,
+        map_fd_reg: &Reg,
+        ctx: &DomainContext,
+        registry: &mut VariableRegistry,
+    ) -> Interval {
+        self.get_map_field_range(map_fd_reg, ctx, registry, |m| m.key_size as i64)
     }
 
     /// Get the range of value sizes across all possible map fds.
@@ -324,18 +335,7 @@ impl EbpfDomain {
         ctx: &DomainContext,
         registry: &mut VariableRegistry,
     ) -> Interval {
-        let Some((start_fd, end_fd)) = self.get_map_fd_range(map_fd_reg, registry) else {
-            return Interval::top();
-        };
-        let mut result = Interval::bottom();
-        for map_fd in start_fd..=end_fd {
-            if let Some(map) = ctx.platform.get_map_descriptor(map_fd) {
-                result = result.join(&Interval::from_i64(map.value_size as i64));
-            } else {
-                return Interval::top();
-            }
-        }
-        result
+        self.get_map_field_range(map_fd_reg, ctx, registry, |m| m.value_size as i64)
     }
 
     /// Get the range of max_entries across all possible map fds.
@@ -345,18 +345,7 @@ impl EbpfDomain {
         ctx: &DomainContext,
         registry: &mut VariableRegistry,
     ) -> Interval {
-        let Some((start_fd, end_fd)) = self.get_map_fd_range(map_fd_reg, registry) else {
-            return Interval::top();
-        };
-        let mut result = Interval::bottom();
-        for map_fd in start_fd..=end_fd {
-            if let Some(map) = ctx.platform.get_map_descriptor(map_fd) {
-                result = result.join(&Interval::from_i64(map.max_entries as i64));
-            } else {
-                return Interval::top();
-            }
-        }
-        result
+        self.get_map_field_range(map_fd_reg, ctx, registry, |m| m.max_entries as i64)
     }
 
     // ========================================================================

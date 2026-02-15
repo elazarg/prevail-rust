@@ -76,7 +76,7 @@ mod bpf_map_type {
 
 // ── Conformance-group bitmask (mirrors bpf_conformance_groups_t) ───
 
-mod conformance_groups {
+pub mod conformance_groups {
     pub const BASE32: u32 = 0x01;
     pub const BASE64: u32 = 0x02;
     pub const ATOMIC32: u32 = 0x04;
@@ -84,10 +84,28 @@ mod conformance_groups {
     pub const DIVMUL32: u32 = 0x10;
     pub const DIVMUL64: u32 = 0x20;
     pub const PACKET: u32 = 0x40;
-    #[expect(dead_code)]
     pub const CALLX: u32 = 0x80;
 
     pub const DEFAULT_GROUPS: u32 = BASE32 | BASE64 | ATOMIC32 | ATOMIC64 | DIVMUL32 | DIVMUL64;
+
+    pub const GROUPS: &[(&str, u32)] = &[
+        ("atomic32", ATOMIC32),
+        ("atomic64", ATOMIC64),
+        ("base32", BASE32),
+        ("base64", BASE64),
+        ("callx", CALLX),
+        ("divmul32", DIVMUL32),
+        ("divmul64", DIVMUL64),
+        ("packet", PACKET),
+    ];
+
+    pub fn group_by_name(name: &str) -> Option<u32> {
+        GROUPS.iter().find(|&&(n, _)| n == name).map(|&(_, v)| v)
+    }
+
+    pub fn all_group_names() -> Vec<&'static str> {
+        GROUPS.iter().map(|&(n, _)| n).collect()
+    }
 }
 
 // ── BpfLoadMapDef ──────────────────────────────────────────────────
