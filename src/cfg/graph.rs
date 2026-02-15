@@ -90,8 +90,9 @@ impl Cfg {
     /// Panics if the label does not have exactly one child.
     pub fn get_child(&self, label: &Label) -> Label {
         let node = self.get_node(label);
-        assert!(
-            node.children.len() == 1,
+        assert_eq!(
+            node.children.len(),
+            1,
             "Label {} does not have a single child",
             label
         );
@@ -103,8 +104,9 @@ impl Cfg {
     /// Panics if the label does not have exactly one parent.
     pub fn get_parent(&self, label: &Label) -> Label {
         let node = self.get_node(label);
-        assert!(
-            node.parents.len() == 1,
+        assert_eq!(
+            node.parents.len(),
+            1,
             "Label {} does not have a single parent",
             label
         );

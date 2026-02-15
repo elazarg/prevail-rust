@@ -4,7 +4,7 @@
 //! Prevail eBPF verifier — Rust implementation.
 
 pub(crate) mod arith;
-pub(crate) mod btf;
+pub mod btf;
 pub mod cfg;
 pub mod crab;
 pub mod elf_loader;

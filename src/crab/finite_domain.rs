@@ -414,19 +414,19 @@ impl FiniteDomain {
                     let _lb = lb.wrapping_sub(0x1_0000_0000i64);
                 }
 
-                if (lb_match as u64) <= (ub_match as u64) {
-                    return vec![
+                return if (lb_match as u64) <= (ub_match as u64) {
+                    vec![
                         geq(left_svalue.into(), lb_match.into()),
                         leq(left_svalue.into(), ub_match.into()),
                         geq(left_uvalue.into(), Number::from(lb_match as u64).into()),
                         leq(left_uvalue.into(), Number::from(ub_match as u64).into()),
-                    ];
+                    ]
                 } else {
-                    return vec![
+                    vec![
                         geq(left_svalue.into(), lb_match.into()),
                         leq(left_svalue.into(), ub_match.into()),
-                    ];
-                }
+                    ]
+                };
             }
         }
         vec![]

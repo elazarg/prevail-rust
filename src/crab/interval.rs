@@ -264,16 +264,16 @@ impl Interval {
         }
         if let Some(n) = x.singleton() {
             let c = *n;
-            if c == 1i64 {
-                return *self;
+            return if c == 1i64 {
+                *self
             } else if c > 0i64 {
-                return Interval::new(self.lb / Bound::Finite(c), self.ub / Bound::Finite(c));
+                Interval::new(self.lb / Bound::Finite(c), self.ub / Bound::Finite(c))
             } else if c < 0i64 {
-                return Interval::new(self.ub / Bound::Finite(c), self.lb / Bound::Finite(c));
+                Interval::new(self.ub / Bound::Finite(c), self.lb / Bound::Finite(c))
             } else {
                 // Division by 0 yields 0 in eBPF
-                return Interval::from_i64(0);
-            }
+                Interval::from_i64(0)
+            };
         }
         if x.contains(&Number::from(0i64)) {
             let l = Interval::new(x.lb, Bound::Finite(Number::from(-1i64)));
@@ -305,13 +305,13 @@ impl Interval {
             && n.to_i64().is_some()
         {
             let c = Number::from(n.narrow_to_i64());
-            if c == 1i64 {
-                return *self;
+            return if c == 1i64 {
+                *self
             } else if c != 0i64 {
-                return Interval::new(self.lb / Bound::Finite(c), self.ub / Bound::Finite(c));
+                Interval::new(self.lb / Bound::Finite(c), self.ub / Bound::Finite(c))
             } else {
-                return Interval::from_i64(0);
-            }
+                Interval::from_i64(0)
+            };
         }
         if x.contains(&Number::from(0i64)) {
             let l = Interval::new(x.lb, Bound::Finite(Number::from(-1i64)));
@@ -345,16 +345,16 @@ impl Interval {
             // negative values as unsigned (two's complement). We must do
             // the same rather than panicking on negative numbers.
             let c = n.cast_to_unsigned_width(64);
-            if c == 1i64 {
-                return *self;
+            return if c == 1i64 {
+                *self
             } else if c > 0i64 {
-                return Interval::new(
+                Interval::new(
                     self.lb.udiv(&Bound::Finite(c)),
                     self.ub.udiv(&Bound::Finite(c)),
-                );
+                )
             } else {
-                return Interval::from_i64(0);
-            }
+                Interval::from_i64(0)
+            };
         }
         if x.contains(&Number::from(0i64)) {
             let l = Interval::new(x.lb, Bound::Finite(Number::from(-1i64)));
@@ -415,17 +415,14 @@ impl Interval {
 
             let max_d_minus_1 = max_divisor - Number::from(1i64);
             if self.lb < Bound::Finite(Number::from(0i64)) {
-                if self.ub > Bound::Finite(Number::from(0i64)) {
-                    return Interval::new(
-                        Bound::Finite(-max_d_minus_1),
-                        Bound::Finite(max_d_minus_1),
-                    );
+                return if self.ub > Bound::Finite(Number::from(0i64)) {
+                    Interval::new(Bound::Finite(-max_d_minus_1), Bound::Finite(max_d_minus_1))
                 } else {
-                    return Interval::new(
+                    Interval::new(
                         Bound::Finite(-max_d_minus_1),
                         Bound::Finite(Number::from(0i64)),
-                    );
-                }
+                    )
+                };
             }
             return Interval::new(
                 Bound::Finite(Number::from(0i64)),

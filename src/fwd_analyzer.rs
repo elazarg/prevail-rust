@@ -223,8 +223,9 @@ impl<'a, P: Program> FwdFixpointIterator<'a, P> {
             Instruction::IncrementLoopCounter(_)
         ) {
             let assertions = prog.assertions_at(label);
-            assert!(
-                assertions.len() == 1,
+            assert_eq!(
+                assertions.len(),
+                1,
                 "Expected exactly 1 assertion for IncrementLoopCounter"
             );
             return ebpf_domain_check(pre, &assertions[0], label, ctx, registry);

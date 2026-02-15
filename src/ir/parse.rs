@@ -151,7 +151,7 @@ fn to_int(s: &str) -> i32 {
     if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
         i32::from_str_radix(hex, 16).unwrap()
     } else if let Some(hex) = s.strip_prefix("-0x").or_else(|| s.strip_prefix("-0X")) {
-        -(i32::from_str_radix(hex, 16).unwrap())
+        -i32::from_str_radix(hex, 16).unwrap()
     } else if let Some(hex) = s.strip_prefix("+0x").or_else(|| s.strip_prefix("+0X")) {
         i32::from_str_radix(hex, 16).unwrap()
     } else {
@@ -175,7 +175,7 @@ fn parse_i64(s: &str) -> i64 {
     if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
         i64::from_str_radix(hex, 16).unwrap()
     } else if let Some(hex) = s.strip_prefix("-0x").or_else(|| s.strip_prefix("-0X")) {
-        -(i64::from_str_radix(hex, 16).unwrap())
+        -i64::from_str_radix(hex, 16).unwrap()
     } else if let Some(hex) = s.strip_prefix("+0x").or_else(|| s.strip_prefix("+0X")) {
         i64::from_str_radix(hex, 16).unwrap()
     } else {

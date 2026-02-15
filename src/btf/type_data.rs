@@ -125,7 +125,7 @@ impl BtfTypeData {
         }
         let kind = self.get_kind(id)?;
         let result = match kind {
-            BtfKind::Ptr { .. } => std::mem::size_of::<*const ()>() as u32,
+            BtfKind::Ptr { .. } => size_of::<*const ()>() as u32,
             BtfKind::Int { size_in_bytes, .. } => *size_in_bytes,
             BtfKind::Struct { size_in_bytes, .. } => *size_in_bytes,
             BtfKind::Union { size_in_bytes, .. } => *size_in_bytes,
