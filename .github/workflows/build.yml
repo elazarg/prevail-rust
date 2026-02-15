@@ -64,7 +64,15 @@ jobs:
         id: upstream
         run: echo "hash=$(git rev-parse HEAD:tests/upstream)" >> "$GITHUB_OUTPUT"
 
+      - name: Cache upstream parity baseline
+        id: baseline-cache
+        uses: actions/cache@v4
+        with:
+          path: target/xtask/upstream_parity/${{ steps.upstream.outputs.hash }}
+          key: upstream-parity-baseline-${{ steps.upstream.outputs.hash }}
+
       - name: Cache upstream C++ binary
+        if: steps.baseline-cache.outputs.cache-hit != 'true'
         id: cpp-cache
         uses: actions/cache@v4
         with:
@@ -72,12 +80,13 @@ jobs:
           key: upstream-cpp-${{ steps.upstream.outputs.hash }}
 
       - name: Install upstream C++ dependencies
-        if: steps.cpp-cache.outputs.cache-hit != 'true'
+        if: steps.baseline-cache.outputs.cache-hit != 'true' && steps.cpp-cache.outputs.cache-hit != 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y libboost-dev libyaml-cpp-dev libboost-filesystem-dev libboost-program-options-dev
 
       - name: Generate upstream parity baseline
+        if: steps.baseline-cache.outputs.cache-hit != 'true'
         env:
           AUTO_BUILD_CPP: ${{ steps.cpp-cache.outputs.cache-hit == 'true' && '0' || '1' }}
         run: |
