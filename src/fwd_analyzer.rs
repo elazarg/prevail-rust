@@ -280,6 +280,17 @@ impl<'a, P: Program> FwdFixpointIterator<'a, P> {
     // WTO visitor dispatch
     // ========================================================================
 
+    /// Visit all components of a cycle except the head.
+    fn visit_cycle_body(&mut self, cycle: &Rc<WtoCycle>, head: &Label) {
+        let components: Vec<_> = cycle.iter().collect();
+        for component in &components {
+            let is_head = matches!(component, CycleOrLabel::Label(l) if *l == *head);
+            if !is_head {
+                self.visit_component(component);
+            }
+        }
+    }
+
     /// Dispatch on a WTO component: either a single label or a cycle.
     fn visit_component(&mut self, component: &CycleOrLabel) {
         match component {
@@ -344,15 +355,7 @@ impl<'a, P: Program> FwdFixpointIterator<'a, P> {
         for iteration in 1u32.. {
             self.set_pre(&head, invariant.clone());
             self.transform_to_post(&head, invariant.clone());
-
-            // Process all cycle components except the head.
-            let components: Vec<_> = cycle.iter().collect();
-            for component in &components {
-                let is_head = matches!(component, CycleOrLabel::Label(l) if *l == head);
-                if !is_head {
-                    self.visit_component(component);
-                }
-            }
+            self.visit_cycle_body(cycle, &head);
 
             let new_pre = self.join_all_prevs(&head);
             if new_pre.is_included_in(&invariant, self.registry) {
@@ -368,14 +371,7 @@ impl<'a, P: Program> FwdFixpointIterator<'a, P> {
         // Descending iteration with narrowing.
         for iteration in 1u32.. {
             self.transform_to_post(&head, invariant.clone());
-
-            let components: Vec<_> = cycle.iter().collect();
-            for component in &components {
-                let is_head = matches!(component, CycleOrLabel::Label(l) if *l == head);
-                if !is_head {
-                    self.visit_component(component);
-                }
-            }
+            self.visit_cycle_body(cycle, &head);
 
             let new_pre = self.join_all_prevs(&head);
             if invariant.is_included_in(&new_pre, self.registry) {

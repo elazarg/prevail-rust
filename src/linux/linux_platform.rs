@@ -132,13 +132,7 @@ fn ptype(
     native_type: u64,
     prefixes: &[&str],
 ) -> EbpfProgramType {
-    EbpfProgramType {
-        name: name.to_owned(),
-        context_descriptor: descr,
-        platform_specific_data: native_type,
-        section_prefixes: prefixes.iter().map(|s| (*s).to_owned()).collect(),
-        is_privileged: false,
-    }
+    ptype_with_privilege(name, descr, native_type, prefixes, false)
 }
 
 fn ptype_privileged(
@@ -147,12 +141,22 @@ fn ptype_privileged(
     native_type: u64,
     prefixes: &[&str],
 ) -> EbpfProgramType {
+    ptype_with_privilege(name, descr, native_type, prefixes, true)
+}
+
+fn ptype_with_privilege(
+    name: &str,
+    descr: *const EbpfContextDescriptor,
+    native_type: u64,
+    prefixes: &[&str],
+    is_privileged: bool,
+) -> EbpfProgramType {
     EbpfProgramType {
         name: name.to_owned(),
         context_descriptor: descr,
         platform_specific_data: native_type,
         section_prefixes: prefixes.iter().map(|s| (*s).to_owned()).collect(),
-        is_privileged: true,
+        is_privileged,
     }
 }
 

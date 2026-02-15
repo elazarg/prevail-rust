@@ -560,20 +560,8 @@ impl Interval {
         if self.is_bottom() || x.is_bottom() {
             return Interval::bottom();
         }
-        if let Some(shift) = x.singleton() {
-            let k = *shift;
-            if k < 0i64 {
-                return Interval::top();
-            }
-            if k <= 128i64 {
-                let mut factor = Number::from(1i64);
-                let mut i = Number::from(0i64);
-                while k > i {
-                    factor *= Number::from(2i64);
-                    i += Number::from(1i64);
-                }
-                return self.mul(&Interval::from_number(factor));
-            }
+        if let Some(factor) = shift_to_power_of_two(x) {
+            return self.mul(&Interval::from_number(factor));
         }
         Interval::top()
     }
@@ -598,20 +586,8 @@ impl Interval {
         if self.is_bottom() || x.is_bottom() {
             return Interval::bottom();
         }
-        if let Some(shift) = x.singleton() {
-            let k = *shift;
-            if k < 0i64 {
-                return Interval::top();
-            }
-            if k <= 128i64 {
-                let mut factor = Number::from(1i64);
-                let mut i = Number::from(0i64);
-                while k > i {
-                    factor *= Number::from(2i64);
-                    i += Number::from(1i64);
-                }
-                return self.div(&Interval::from_number(factor));
-            }
+        if let Some(factor) = shift_to_power_of_two(x) {
+            return self.div(&Interval::from_number(factor));
         }
         Interval::top()
     }
@@ -728,6 +704,25 @@ fn make_dividend_when_both_nonzero(dividend: &Interval, divisor: &Interval) -> I
         return dividend.add(divisor).add(&Interval::from_i64(1));
     }
     dividend.add(&Interval::from_i64(1)).sub(divisor)
+}
+
+/// Convert a singleton shift interval to 2^shift, or `None` if out of range.
+fn shift_to_power_of_two(x: &Interval) -> Option<Number> {
+    let shift = x.singleton()?;
+    let k = *shift;
+    if k < 0i64 {
+        return None;
+    }
+    if k > 128i64 {
+        return None;
+    }
+    let mut factor = Number::from(1i64);
+    let mut i = Number::from(0i64);
+    while k > i {
+        factor *= Number::from(2i64);
+        i += Number::from(1i64);
+    }
+    Some(factor)
 }
 
 /// Split an interval around zero into [-∞, -1] and [1, +∞] halves.

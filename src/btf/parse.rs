@@ -211,6 +211,37 @@ fn find_string(
         .ok_or_else(|| UnmarshalError("Invalid .BTF section — invalid string offset".into()))
 }
 
+/// Parse struct/union member records from a BTF type.
+fn parse_members(
+    raw: &BtfRawType,
+    data: &[u8],
+    pos: &mut usize,
+    type_start: usize,
+    type_end: usize,
+    swap_endian: bool,
+    string_table: &BTreeMap<usize, String>,
+) -> Result<Vec<BtfStructMember>, UnmarshalError> {
+    let member_count = btf_type_info_vlen(raw.info);
+    let mut members = Vec::with_capacity(member_count as usize);
+    for _ in 0..member_count {
+        let mut m = read_struct::<BtfRawMember>(data, pos, type_start, type_end)?;
+        if swap_endian {
+            swap_raw_member(&mut m);
+        }
+        let mname = if m.name_off != 0 {
+            Some(find_string(string_table, m.name_off as usize)?)
+        } else {
+            None
+        };
+        members.push(BtfStructMember {
+            name: mname,
+            type_id: m.type_id,
+            offset_from_start_in_bits: m.offset,
+        });
+    }
+    Ok(members)
+}
+
 // ── Type parsing ─────────────────────────────────────────────────────
 
 /// Parse all BTF type records from a `.BTF` section.
@@ -304,24 +335,15 @@ pub fn parse_types(
             }
 
             BtfKindIndex::Struct => {
-                let member_count = btf_type_info_vlen(raw.info);
-                let mut members = Vec::with_capacity(member_count as usize);
-                for _ in 0..member_count {
-                    let mut m = read_struct::<BtfRawMember>(data, &mut pos, type_start, type_end)?;
-                    if swap_endian {
-                        swap_raw_member(&mut m);
-                    }
-                    let mname = if m.name_off != 0 {
-                        Some(find_string(&string_table, m.name_off as usize)?)
-                    } else {
-                        None
-                    };
-                    members.push(BtfStructMember {
-                        name: mname,
-                        type_id: m.type_id,
-                        offset_from_start_in_bits: m.offset,
-                    });
-                }
+                let members = parse_members(
+                    &raw,
+                    data,
+                    &mut pos,
+                    type_start,
+                    type_end,
+                    swap_endian,
+                    &string_table,
+                )?;
                 BtfKind::Struct {
                     name: name.clone(),
                     members,
@@ -330,24 +352,15 @@ pub fn parse_types(
             }
 
             BtfKindIndex::Union => {
-                let member_count = btf_type_info_vlen(raw.info);
-                let mut members = Vec::with_capacity(member_count as usize);
-                for _ in 0..member_count {
-                    let mut m = read_struct::<BtfRawMember>(data, &mut pos, type_start, type_end)?;
-                    if swap_endian {
-                        swap_raw_member(&mut m);
-                    }
-                    let mname = if m.name_off != 0 {
-                        Some(find_string(&string_table, m.name_off as usize)?)
-                    } else {
-                        None
-                    };
-                    members.push(BtfStructMember {
-                        name: mname,
-                        type_id: m.type_id,
-                        offset_from_start_in_bits: m.offset,
-                    });
-                }
+                let members = parse_members(
+                    &raw,
+                    data,
+                    &mut pos,
+                    type_start,
+                    type_end,
+                    swap_endian,
+                    &string_table,
+                )?;
                 BtfKind::Union {
                     name: name.clone(),
                     members,

@@ -91,30 +91,13 @@ impl BitsetDomain {
         }
 
         let mut result = BTreeSet::new();
-        let mut i: i32 = -(STACK_SIZE as i32);
-        while i < 0 {
-            let idx = (STACK_SIZE as i32 + i) as usize;
-            if self.get_bit(idx) {
-                i += 1;
-                continue;
-            }
-            let start = idx;
-            let mut j = i + 1;
-            while j < 0 {
-                let jdx = (STACK_SIZE as i32 + j) as usize;
-                if self.get_bit(jdx) {
-                    break;
-                }
-                j += 1;
-            }
-            let end = (STACK_SIZE as i32 + j - 1) as usize;
+        for (start, end) in self.numerical_ranges() {
             let mut value = format!("s[{start}");
             if end > start {
                 value += &format!("...{end}");
             }
             value += "].type=number";
             result.insert(value);
-            i = j;
         }
         StringInvariant::from_set(result)
     }
@@ -216,6 +199,35 @@ impl BitsetDomain {
         }
     }
 
+    /// Iterate over contiguous ranges of numerical (non-set) bytes.
+    ///
+    /// Each yielded pair `(start, end)` represents a maximal run of indices
+    /// `[start..=end]` where no bit is set (i.e., all bytes are numerical).
+    fn numerical_ranges(&self) -> Vec<(usize, usize)> {
+        let mut ranges = Vec::new();
+        let mut i: i32 = -(STACK_SIZE as i32);
+        while i < 0 {
+            let idx = (STACK_SIZE as i32 + i) as usize;
+            if self.get_bit(idx) {
+                i += 1;
+                continue;
+            }
+            let start = idx;
+            let mut j = i + 1;
+            while j < 0 {
+                let jdx = (STACK_SIZE as i32 + j) as usize;
+                if self.get_bit(jdx) {
+                    break;
+                }
+                j += 1;
+            }
+            let end = (STACK_SIZE as i32 + j - 1) as usize;
+            ranges.push((start, end));
+            i = j;
+        }
+        ranges
+    }
+
     /// Test whether all values in the range [lb, ub) are numerical.
     pub fn all_num(&self, lb: i32, ub: i32) -> bool {
         if lb == ub {
@@ -251,32 +263,16 @@ impl fmt::Display for BitsetDomain {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Numbers -> {{")?;
         let mut first = true;
-        let mut i: i32 = -(STACK_SIZE as i32);
-        while i < 0 {
-            let idx = (STACK_SIZE as i32 + i) as usize;
-            if self.get_bit(idx) {
-                i += 1;
-                continue;
-            }
+        for (start, end) in self.numerical_ranges() {
             if !first {
                 write!(f, ", ")?;
             }
             first = false;
-            write!(f, "[{idx}")?;
-            let mut j = i + 1;
-            while j < 0 {
-                let jdx = (STACK_SIZE as i32 + j) as usize;
-                if self.get_bit(jdx) {
-                    break;
-                }
-                j += 1;
-            }
-            let end = (STACK_SIZE as i32 + j - 1) as usize;
-            if end > idx {
+            write!(f, "[{start}")?;
+            if end > start {
                 write!(f, "...{end}")?;
             }
             write!(f, "]")?;
-            i = j;
         }
         write!(f, "}}")
     }

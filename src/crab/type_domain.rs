@@ -13,10 +13,22 @@ use crate::arith::linear_expression::LinearExpression;
 use crate::arith::number::Number;
 use crate::arith::variable::Variable;
 use crate::crab::add_bottom::NumAbsDomain;
+use crate::crab::interval::Interval;
 use crate::crab::string_constraints::StringInvariant;
 use crate::crab::type_encoding::*;
 use crate::crab::var_registry::VariableRegistry;
 use crate::ir::syntax::Reg;
+
+/// Extract a `TypeEncoding` from an interval's singleton value, or `T_UNINIT` if
+/// the interval is not a singleton or the value doesn't map to a valid type.
+fn singleton_to_type(interval: Interval) -> TypeEncoding {
+    match interval.singleton().cloned() {
+        Some(n) => {
+            int_to_type_encoding(n.to_i64().unwrap_or(T_UNINIT as i64) as i32).unwrap_or(T_UNINIT)
+        }
+        None => T_UNINIT,
+    }
+}
 
 // ============================================================================
 // Free functions for type constraints
@@ -247,23 +259,13 @@ impl TypeDomain {
         v: &LinearExpression,
         registry: &mut VariableRegistry,
     ) -> TypeEncoding {
-        let res = self.inv.eval_interval(v, registry).singleton().cloned();
-        match res {
-            Some(n) => int_to_type_encoding(n.to_i64().unwrap_or(T_UNINIT as i64) as i32)
-                .unwrap_or(T_UNINIT),
-            None => T_UNINIT,
-        }
+        singleton_to_type(self.inv.eval_interval(v, registry))
     }
 
     /// Get the singleton type of a register, or T_UNINIT if unknown.
     pub fn get_type(&self, r: &Reg, registry: &mut VariableRegistry) -> TypeEncoding {
         let v = reg_type(r, registry);
-        let res = self.inv.eval_interval_var(v, registry).singleton().cloned();
-        match res {
-            Some(n) => int_to_type_encoding(n.to_i64().unwrap_or(T_UNINIT as i64) as i32)
-                .unwrap_or(T_UNINIT),
-            None => T_UNINIT,
-        }
+        singleton_to_type(self.inv.eval_interval_var(v, registry))
     }
 
     /// Check whether the type invariant implies a conclusion under a premise.

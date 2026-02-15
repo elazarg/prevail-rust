@@ -67,11 +67,19 @@ impl WtoCycle {
 
     /// Visit the heads of all nested loops in this cycle.
     pub fn for_each_loop_head(&self, f: &mut dyn FnMut(&Label)) {
-        for component in self.iter() {
-            if let CycleOrLabel::Cycle(cycle) = component {
-                f(cycle.head());
-                cycle.for_each_loop_head(f);
-            }
+        visit_loop_heads(self.iter(), f);
+    }
+}
+
+/// Visit the heads of all loops in a sequence of WTO components.
+fn visit_loop_heads<'a>(
+    components: impl Iterator<Item = &'a CycleOrLabel>,
+    f: &mut dyn FnMut(&Label),
+) {
+    for component in components {
+        if let CycleOrLabel::Cycle(cycle) = component {
+            f(cycle.head());
+            cycle.for_each_loop_head(f);
         }
     }
 }
@@ -195,12 +203,7 @@ impl Wto {
 
     /// Visit the heads of all loops in the WTO.
     pub fn for_each_loop_head(&self, f: &mut dyn FnMut(&Label)) {
-        for component in self.iter() {
-            if let CycleOrLabel::Cycle(cycle) = component {
-                f(cycle.head());
-                cycle.for_each_loop_head(f);
-            }
-        }
+        visit_loop_heads(self.iter(), f);
     }
 }
 

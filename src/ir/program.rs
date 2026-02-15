@@ -322,6 +322,42 @@ fn un_requires_base64(un: &Un) -> bool {
     matches!(un.op, UnOp::BE64 | UnOp::LE64 | UnOp::SWAP64)
 }
 
+/// Check that a conformance group pair (64-bit and 32-bit variants) is supported,
+/// selecting the variant based on `need_64`. Returns a rejection reason if not supported.
+fn require_group_pair(
+    groups: u32,
+    need_64: bool,
+    group_64: u32,
+    name_64: &str,
+    group_32: u32,
+    name_32: &str,
+) -> Option<RejectionReason> {
+    let (group, name) = if need_64 {
+        (group_64, name_64)
+    } else {
+        (group_32, name_32)
+    };
+    if !supports(groups, group) {
+        Some(RejectionReason {
+            kind: RejectKind::Capability,
+            detail: format!("requires conformance group {name}"),
+        })
+    } else {
+        None
+    }
+}
+
+fn require_base(groups: u32, need_64: bool) -> Option<RejectionReason> {
+    require_group_pair(
+        groups,
+        need_64,
+        conformance_groups::BASE64,
+        "base64",
+        conformance_groups::BASE32,
+        "base32",
+    )
+}
+
 fn check_instruction_feature_support(
     ins: &Instruction,
     info: &ProgramInfo,
@@ -358,70 +394,32 @@ fn check_instruction_feature_support(
         return Some(reject_capability("requires conformance group base32"));
     }
     if let Instruction::Bin(bin) = ins {
-        if !supports(
-            groups,
-            if bin.is64 {
-                conformance_groups::BASE64
-            } else {
-                conformance_groups::BASE32
-            },
-        ) {
-            return Some(reject_capability(if bin.is64 {
-                "requires conformance group base64"
-            } else {
-                "requires conformance group base32"
-            }));
+        if let r @ Some(_) = require_base(groups, bin.is64) {
+            return r;
         }
         if matches!(
             bin.op,
             BinOp::MUL | BinOp::UDIV | BinOp::UMOD | BinOp::SDIV | BinOp::SMOD
-        ) && !supports(
+        ) && let r @ Some(_) = require_group_pair(
             groups,
-            if bin.is64 {
-                conformance_groups::DIVMUL64
-            } else {
-                conformance_groups::DIVMUL32
-            },
+            bin.is64,
+            conformance_groups::DIVMUL64,
+            "divmul64",
+            conformance_groups::DIVMUL32,
+            "divmul32",
         ) {
-            return Some(reject_capability(if bin.is64 {
-                "requires conformance group divmul64"
-            } else {
-                "requires conformance group divmul32"
-            }));
+            return r;
         }
     }
-    if let Instruction::Un(un) = ins {
-        let need_base64 = un.is64 || un_requires_base64(un);
-        if !supports(
-            groups,
-            if need_base64 {
-                conformance_groups::BASE64
-            } else {
-                conformance_groups::BASE32
-            },
-        ) {
-            return Some(reject_capability(if need_base64 {
-                "requires conformance group base64"
-            } else {
-                "requires conformance group base32"
-            }));
-        }
+    if let Instruction::Un(un) = ins
+        && let r @ Some(_) = require_base(groups, un.is64 || un_requires_base64(un))
+    {
+        return r;
     }
     if let Instruction::Jmp(jmp) = ins {
         let need_base64 = jmp.cond.as_ref().is_some_and(|c| c.is64);
-        if !supports(
-            groups,
-            if need_base64 {
-                conformance_groups::BASE64
-            } else {
-                conformance_groups::BASE32
-            },
-        ) {
-            return Some(reject_capability(if need_base64 {
-                "requires conformance group base64"
-            } else {
-                "requires conformance group base32"
-            }));
+        if let r @ Some(_) = require_base(groups, need_base64) {
+            return r;
         }
     }
     if let Instruction::LoadPseudo(lp) = ins {
@@ -444,19 +442,8 @@ fn check_instruction_feature_support(
         access, is_signed, ..
     }) = ins
     {
-        if !supports(
-            groups,
-            if access.width.bytes() == 8 {
-                conformance_groups::BASE64
-            } else {
-                conformance_groups::BASE32
-            },
-        ) {
-            return Some(reject_capability(if access.width.bytes() == 8 {
-                "requires conformance group base64"
-            } else {
-                "requires conformance group base32"
-            }));
+        if let r @ Some(_) = require_base(groups, access.width.bytes() == 8) {
+            return r;
         }
         if *is_signed && !supports(groups, conformance_groups::BASE64) {
             return Some(reject_capability("requires conformance group base64"));
@@ -465,21 +452,17 @@ fn check_instruction_feature_support(
     if matches!(ins, Instruction::Packet(_)) && !supports(groups, conformance_groups::PACKET) {
         return Some(reject_capability("requires conformance group packet"));
     }
-    if let Instruction::Atomic(atomic) = ins {
-        let group = if atomic.access.width.bytes() == 8 {
-            conformance_groups::ATOMIC64
-        } else {
-            conformance_groups::ATOMIC32
-        };
-        if !supports(groups, group) {
-            return Some(reject_capability(
-                if group == conformance_groups::ATOMIC64 {
-                    "requires conformance group atomic64"
-                } else {
-                    "requires conformance group atomic32"
-                },
-            ));
-        }
+    if let Instruction::Atomic(atomic) = ins
+        && let r @ Some(_) = require_group_pair(
+            groups,
+            atomic.access.width.bytes() == 8,
+            conformance_groups::ATOMIC64,
+            "atomic64",
+            conformance_groups::ATOMIC32,
+            "atomic32",
+        )
+    {
+        return r;
     }
     None
 }
