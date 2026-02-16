@@ -51,14 +51,17 @@ const BENCHMARKS: &[BenchDef] = &[
     },
 ];
 
-pub fn run(root: &Path, mode: &str) -> Result<()> {
+pub fn run(root: &Path, mode: &str, binary: Option<&Path>, tag: Option<&str>) -> Result<()> {
     if !process::has_command("hyperfine") {
         bail!("hyperfine not found. Install with: cargo install hyperfine");
     }
 
-    let bin = paths::rust_bin(root);
     let samples = paths::samples_dir(root);
-    let baseline_dir = paths::tmp_dir(root).join("baseline");
+    let tmp = paths::tmp_dir(root);
+    let baseline_dir = match tag {
+        Some(t) => tmp.join(format!("baseline-{t}")),
+        None => tmp.join("baseline"),
+    };
 
     let mode = match mode {
         "auto" => {
@@ -77,15 +80,28 @@ pub fn run(root: &Path, mode: &str) -> Result<()> {
         other => other,
     };
 
-    // Build release.
-    println!("Building release binary...");
-    let status = process::run_status(process::cargo(root).args(["build", "--release"]))?;
-    if !status.success() {
-        bail!("cargo build --release failed");
-    }
-    if !bin.exists() {
-        bail!("Binary not found at {}", bin.display());
-    }
+    // Resolve the binary to benchmark.
+    let default_bin;
+    let bin = match binary {
+        Some(p) => {
+            if !p.exists() {
+                bail!("Binary not found at {}", p.display());
+            }
+            p
+        }
+        None => {
+            println!("Building release binary...");
+            let status = process::run_status(process::cargo(root).args(["build", "--release"]))?;
+            if !status.success() {
+                bail!("cargo build --release failed");
+            }
+            default_bin = paths::rust_bin(root);
+            if !default_bin.exists() {
+                bail!("Binary not found at {}", default_bin.display());
+            }
+            &default_bin
+        }
+    };
 
     match mode {
         "save" => {
@@ -93,19 +109,26 @@ pub fn run(root: &Path, mode: &str) -> Result<()> {
             if baseline_dir.exists() {
                 fs::remove_dir_all(&baseline_dir)?;
             }
-            run_benchmarks(&bin, &samples, &baseline_dir)?;
+            run_benchmarks(bin, &samples, &baseline_dir)?;
             println!();
             println!("Baseline saved to {}/", baseline_dir.display());
-            println!("Make your changes, then run: cargo xtask bench before-after compare");
+            let tag_flag = tag.map_or(String::new(), |t| format!(" --tag {t}"));
+            println!(
+                "Make your changes, then run: cargo xtask bench before-after compare{tag_flag}"
+            );
         }
         "compare" => {
             if !baseline_dir.is_dir() {
-                bail!("No baseline found. Run: cargo xtask bench before-after save");
+                let tag_flag = tag.map_or(String::new(), |t| format!(" --tag {t}"));
+                bail!("No baseline found. Run: cargo xtask bench before-after save{tag_flag}");
             }
 
-            let current_dir = paths::tmp_dir(root).join("current");
+            let current_dir = match tag {
+                Some(t) => tmp.join(format!("current-{t}")),
+                None => tmp.join("current"),
+            };
             println!("=== Running Current ===");
-            run_benchmarks(&bin, &samples, &current_dir)?;
+            run_benchmarks(bin, &samples, &current_dir)?;
             println!();
 
             print_comparison(&baseline_dir, &current_dir)?;

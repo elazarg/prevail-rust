@@ -43,6 +43,7 @@ pub fn run(root: &Path) -> Result<()> {
                 &upstream_dir.to_string_lossy(),
                 "-B",
                 &build_dir.to_string_lossy(),
+                "-DCMAKE_BUILD_TYPE=Release",
             ])
             .status()
             .context("failed to run cmake")?;
@@ -50,7 +51,7 @@ pub fn run(root: &Path) -> Result<()> {
             bail!("cmake configure failed");
         }
         let status = Command::new("cmake")
-            .args(["--build", &build_dir.to_string_lossy(), "-j"])
+            .args(["--build", &build_dir.to_string_lossy(), "--parallel"])
             .status()
             .context("failed to run cmake --build")?;
         if !status.success() {

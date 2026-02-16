@@ -92,9 +92,33 @@ pub fn run(root: &Path, rust_bin: Option<&Path>, cpp_bin: Option<&Path>) -> Resu
 
     let default_rust = paths::rust_bin(root);
     let default_cpp = paths::cpp_bin(root);
+    let samples = paths::samples_dir(root);
+
+    // Build Rust release binary if using the default path.
+    if rust_bin.is_none() {
+        println!("Building Rust release binary...");
+        let status = process::run_status(process::cargo(root).args(["build", "--release"]))?;
+        if !status.success() {
+            bail!("cargo build --release failed");
+        }
+    }
+
+    // Build C++ release binary if using the default path.
+    if cpp_bin.is_none() {
+        let upstream_dir = paths::upstream_dir(root);
+        if !upstream_dir.join("CMakeLists.txt").exists() {
+            bail!(
+                "Upstream source not found at {}\n\
+                 Run: git submodule update --init --recursive",
+                upstream_dir.display()
+            );
+        }
+        println!("Building C++ release binary...");
+        process::cmake_build_upstream_release(&upstream_dir)?;
+    }
+
     let rust_bin = rust_bin.unwrap_or(&default_rust);
     let cpp_bin = cpp_bin.unwrap_or(&default_cpp);
-    let samples = paths::samples_dir(root);
 
     if !rust_bin.exists() {
         bail!(
@@ -104,6 +128,22 @@ pub fn run(root: &Path, rust_bin: Option<&Path>, cpp_bin: Option<&Path>) -> Resu
     }
     if !cpp_bin.exists() {
         bail!("C++ binary not found at {}", cpp_bin.display());
+    }
+
+    // Guard against benchmarking debug builds.
+    if process::is_debug_elf(cpp_bin) {
+        bail!(
+            "C++ binary at {} appears to be a debug build (not stripped).\n\
+             Rebuild with: cmake -B <build> -DCMAKE_BUILD_TYPE=Release",
+            cpp_bin.display()
+        );
+    }
+    if process::is_debug_elf(rust_bin) {
+        bail!(
+            "Rust binary at {} appears to be a debug build (not stripped).\n\
+             Rebuild with: cargo build --release",
+            rust_bin.display()
+        );
     }
 
     let outdir = Path::new("/tmp/prevail-bench");

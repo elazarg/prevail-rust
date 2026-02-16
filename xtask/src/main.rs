@@ -132,6 +132,12 @@ enum BenchAction {
         /// Mode: save, compare, or auto (default).
         #[arg(default_value = "auto")]
         mode: String,
+        /// Use a pre-built binary instead of building Rust from source.
+        #[arg(long)]
+        binary: Option<PathBuf>,
+        /// Tag for isolating baselines (stores in baseline-{tag}/ and current-{tag}/).
+        #[arg(long)]
+        tag: Option<String>,
     },
     /// Generate benchmark report from hyperfine JSON.
     Report,
@@ -210,7 +216,9 @@ fn run(cli: Cli) -> Result<()> {
             BenchAction::VsCpp { rust_bin, cpp_bin } => {
                 cmd::bench::run(&root, rust_bin.as_deref(), cpp_bin.as_deref())
             }
-            BenchAction::BeforeAfter { mode } => cmd::bench_before_after::run(&root, &mode),
+            BenchAction::BeforeAfter { mode, binary, tag } => {
+                cmd::bench_before_after::run(&root, &mode, binary.as_deref(), tag.as_deref())
+            }
             BenchAction::Report => cmd::bench_report::run(),
         },
         Command::Runperf { dir, domains } => {
