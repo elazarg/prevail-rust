@@ -351,6 +351,27 @@ impl WtoBuilder {
         }
     }
 
+    /// Enqueue PushSuccessors tasks for all unvisited successors of `vertex`.
+    fn enqueue_unvisited_succs(
+        &self,
+        cfg: &Cfg,
+        visit_stack: &mut Vec<VisitTask>,
+        vertex: &Label,
+        target_cycle: Option<usize>,
+        containing_cycle: Option<usize>,
+    ) {
+        for succ in cfg.children_of(vertex).iter().rev() {
+            if self.vertex_data[succ].dfn == 0 {
+                visit_stack.push(VisitTask {
+                    task_type: VisitTaskType::PushSuccessors,
+                    vertex: succ.clone(),
+                    target_cycle,
+                    containing_cycle,
+                });
+            }
+        }
+    }
+
     fn push_successors(
         &mut self,
         cfg: &Cfg,
@@ -373,16 +394,7 @@ impl WtoBuilder {
             containing_cycle,
         });
 
-        for succ in cfg.children_of(vertex).iter().rev() {
-            if self.vertex_data[succ].dfn == 0 {
-                visit_stack.push(VisitTask {
-                    task_type: VisitTaskType::PushSuccessors,
-                    vertex: succ.clone(),
-                    target_cycle,
-                    containing_cycle,
-                });
-            }
-        }
+        self.enqueue_unvisited_succs(cfg, visit_stack, vertex, target_cycle, containing_cycle);
     }
 
     fn start_visit(
@@ -437,16 +449,13 @@ impl WtoBuilder {
                 });
 
                 // Walk successors for the Component() function.
-                for succ in cfg.children_of(vertex).iter().rev() {
-                    if self.vertex_data[succ].dfn == 0 {
-                        visit_stack.push(VisitTask {
-                            task_type: VisitTaskType::PushSuccessors,
-                            vertex: succ.clone(),
-                            target_cycle: Some(cycle_idx),
-                            containing_cycle: Some(cycle_idx),
-                        });
-                    }
-                }
+                self.enqueue_unvisited_succs(
+                    cfg,
+                    visit_stack,
+                    vertex,
+                    Some(cycle_idx),
+                    Some(cycle_idx),
+                );
                 return;
             }
 
@@ -577,10 +586,9 @@ mod tests {
         Label::new(n)
     }
 
-    /// Port of test_wto.cpp: "wto figure 1"
-    #[test]
-    fn wto_figure_1() {
-        let wto = Wto::new(&cfg_from_adjacency_list(&[
+    /// The example graph from Section 3.1 of Bourdoncle (1993), used by multiple tests.
+    fn figure_1_wto() -> Wto {
+        Wto::new(&cfg_from_adjacency_list(&[
             (Label::entry(), vec![l(1)]),
             (l(1), vec![l(2)]),
             (l(2), vec![l(3)]),
@@ -590,7 +598,13 @@ mod tests {
             (l(6), vec![l(5), l(7)]),
             (l(7), vec![l(3), l(8)]),
             (l(8), vec![Label::exit()]),
-        ]));
+        ]))
+    }
+
+    /// Port of test_wto.cpp: "wto figure 1"
+    #[test]
+    fn wto_figure_1() {
+        let wto = figure_1_wto();
         assert_eq!(format!("{}", wto), "entry 1 2 ( 3 4 ( 5 6 ) 7 ) 8 exit \n");
     }
 
@@ -623,17 +637,7 @@ mod tests {
 
     #[test]
     fn wto_nesting_figure_1() {
-        let wto = Wto::new(&cfg_from_adjacency_list(&[
-            (Label::entry(), vec![l(1)]),
-            (l(1), vec![l(2)]),
-            (l(2), vec![l(3)]),
-            (l(3), vec![l(4)]),
-            (l(4), vec![l(5), l(7)]),
-            (l(5), vec![l(6)]),
-            (l(6), vec![l(5), l(7)]),
-            (l(7), vec![l(3), l(8)]),
-            (l(8), vec![Label::exit()]),
-        ]));
+        let wto = figure_1_wto();
 
         // Node 1 is not in any cycle.
         assert_eq!(format!("{}", wto.nesting(&l(1))), "");
@@ -659,17 +663,7 @@ mod tests {
 
     #[test]
     fn wto_for_each_loop_head() {
-        let wto = Wto::new(&cfg_from_adjacency_list(&[
-            (Label::entry(), vec![l(1)]),
-            (l(1), vec![l(2)]),
-            (l(2), vec![l(3)]),
-            (l(3), vec![l(4)]),
-            (l(4), vec![l(5), l(7)]),
-            (l(5), vec![l(6)]),
-            (l(6), vec![l(5), l(7)]),
-            (l(7), vec![l(3), l(8)]),
-            (l(8), vec![Label::exit()]),
-        ]));
+        let wto = figure_1_wto();
         let mut heads = Vec::new();
         wto.for_each_loop_head(&mut |label| heads.push(label.clone()));
         // Should find heads 3 and 5.

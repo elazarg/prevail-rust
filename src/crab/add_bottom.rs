@@ -89,13 +89,7 @@ impl AddBottom {
     }
 
     pub fn join(&self, other: &AddBottom) -> AddBottom {
-        match (&self.dom, &other.dom) {
-            (None, _) => other.clone(),
-            (_, None) => self.clone(),
-            (Some(a), Some(b)) => AddBottom {
-                dom: Some(a.join(b)),
-            },
-        }
+        self.lift_binary(other, |a, b| a.join(b))
     }
 
     pub fn join_assign(&mut self, other: &AddBottom) {
@@ -111,11 +105,20 @@ impl AddBottom {
     }
 
     pub fn widen(&self, other: &AddBottom) -> AddBottom {
+        self.lift_binary(other, |a, b| a.widen(b))
+    }
+
+    /// Apply a binary operation over non-bottom domains; bottom absorbs as identity.
+    fn lift_binary(
+        &self,
+        other: &AddBottom,
+        op: impl FnOnce(&FiniteDomain, &FiniteDomain) -> FiniteDomain,
+    ) -> AddBottom {
         match (&self.dom, &other.dom) {
             (None, _) => other.clone(),
             (_, None) => self.clone(),
             (Some(a), Some(b)) => AddBottom {
-                dom: Some(a.widen(b)),
+                dom: Some(op(a, b)),
             },
         }
     }

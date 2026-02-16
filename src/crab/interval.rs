@@ -275,20 +275,7 @@ impl Interval {
                 Interval::from_i64(0)
             };
         }
-        let zero = Interval::from_i64(0);
-        let op = |a: &Interval, b: &Interval| a.div(b);
-        if let Some(r) = try_split_divisor_at_zero(self, x, &op, &zero) {
-            return r;
-        }
-        if let Some(r) = try_split_dividend_at_zero(self, x, &op, &zero) {
-            return r;
-        }
-        // Neither contains 0
-        let a = make_dividend_when_both_nonzero(self, x);
-        let divs = [a.lb / x.lb, a.lb / x.ub, a.ub / x.lb, a.ub / x.ub];
-        let clb = *divs.iter().min().unwrap();
-        let cub = *divs.iter().max().unwrap();
-        Interval::new(clb, cub)
+        self.signed_div_tail(x, &|a, b| a.div(b), &Interval::from_i64(0))
     }
 
     /// Signed division for eBPF sdiv instruction.
@@ -308,12 +295,21 @@ impl Interval {
                 Interval::from_i64(0)
             };
         }
-        let zero = Interval::from_i64(0);
-        let op = |a: &Interval, b: &Interval| a.sdiv(b);
-        if let Some(r) = try_split_divisor_at_zero(self, x, &op, &zero) {
+        self.signed_div_tail(x, &|a, b| a.sdiv(b), &Interval::from_i64(0))
+    }
+
+    /// Common tail for signed division operations (div, sdiv): try splitting at
+    /// zero, then compute min/max over all corner combinations.
+    fn signed_div_tail(
+        &self,
+        x: &Interval,
+        op: &impl Fn(&Interval, &Interval) -> Interval,
+        zero_join: &Interval,
+    ) -> Interval {
+        if let Some(r) = try_split_divisor_at_zero(self, x, op, zero_join) {
             return r;
         }
-        if let Some(r) = try_split_dividend_at_zero(self, x, &op, &zero) {
+        if let Some(r) = try_split_dividend_at_zero(self, x, op, zero_join) {
             return r;
         }
         let a = make_dividend_when_both_nonzero(self, x);

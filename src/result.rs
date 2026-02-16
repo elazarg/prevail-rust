@@ -238,16 +238,14 @@ impl AnalysisResult {
         registry: &mut VariableRegistry,
         array_map: &mut crate::crab::array_domain::ArrayMap,
     ) -> bool {
-        self.check_observation_at_label(
+        self.is_consistent_at(
             label,
             InvariantPoint::Pre,
             observation,
-            ObservationCheckMode::Consistent,
             ctx,
             registry,
             array_map,
         )
-        .ok
     }
 
     /// Convenience: is the observation consistent with the post-invariant at `label`?
@@ -259,9 +257,28 @@ impl AnalysisResult {
         registry: &mut VariableRegistry,
         array_map: &mut crate::crab::array_domain::ArrayMap,
     ) -> bool {
-        self.check_observation_at_label(
+        self.is_consistent_at(
             label,
             InvariantPoint::Post,
+            observation,
+            ctx,
+            registry,
+            array_map,
+        )
+    }
+
+    fn is_consistent_at(
+        &self,
+        label: &Label,
+        point: InvariantPoint,
+        observation: &StringInvariant,
+        ctx: &crate::crab::ebpf_domain::DomainContext,
+        registry: &mut VariableRegistry,
+        array_map: &mut crate::crab::array_domain::ArrayMap,
+    ) -> bool {
+        self.check_observation_at_label(
+            label,
+            point,
             observation,
             ObservationCheckMode::Consistent,
             ctx,

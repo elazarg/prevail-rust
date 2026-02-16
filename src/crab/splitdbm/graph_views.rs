@@ -99,6 +99,57 @@ impl<'a> GraphPerm<'a> {
     }
 }
 
+impl GraphPerm<'_> {
+    /// Map a vertex through the permutation, returning empty if invalid.
+    fn perm_vert(&self, v: VertId) -> Option<VertId> {
+        let pv = self.perm[v as usize];
+        if pv == INVALID_VERT { None } else { Some(pv) }
+    }
+
+    /// Translate a vertex-iterator through the inverse permutation, skipping invalid mappings.
+    fn map_verts<'s>(
+        &'s self,
+        v: VertId,
+        iter_fn: impl FnOnce(&'s dyn ReadableGraph, VertId) -> Box<dyn Iterator<Item = VertId> + 's>,
+    ) -> Box<dyn Iterator<Item = VertId> + 's> {
+        let Some(pv) = self.perm_vert(v) else {
+            return Box::new(std::iter::empty());
+        };
+        let inv = &self.inv;
+        Box::new(iter_fn(self.g, pv).filter_map(move |d| {
+            let mapped = inv[d as usize];
+            if mapped == INVALID_VERT {
+                None
+            } else {
+                Some(mapped)
+            }
+        }))
+    }
+
+    /// Translate an edge-iterator through the inverse permutation, skipping invalid mappings.
+    fn map_edges<'s>(
+        &'s self,
+        v: VertId,
+        iter_fn: impl FnOnce(&'s dyn ReadableGraph, VertId) -> Box<dyn Iterator<Item = EdgeRef> + 's>,
+    ) -> Box<dyn Iterator<Item = EdgeRef> + 's> {
+        let Some(pv) = self.perm_vert(v) else {
+            return Box::new(std::iter::empty());
+        };
+        let inv = &self.inv;
+        Box::new(iter_fn(self.g, pv).filter_map(move |e| {
+            let mapped = inv[e.vert as usize];
+            if mapped == INVALID_VERT {
+                None
+            } else {
+                Some(EdgeRef {
+                    vert: mapped,
+                    val: e.val,
+                })
+            }
+        }))
+    }
+}
+
 impl<'a> ReadableGraph for GraphPerm<'a> {
     fn size(&self) -> usize {
         self.perm.len()
@@ -132,73 +183,19 @@ impl<'a> ReadableGraph for GraphPerm<'a> {
     }
 
     fn succs(&self, v: VertId) -> Box<dyn Iterator<Item = VertId> + '_> {
-        let pv = self.perm[v as usize];
-        if pv == INVALID_VERT {
-            return Box::new(std::iter::empty());
-        }
-        let inv = &self.inv;
-        Box::new(self.g.succs(pv).filter_map(move |d| {
-            let mapped = inv[d as usize];
-            if mapped == INVALID_VERT {
-                None
-            } else {
-                Some(mapped)
-            }
-        }))
+        self.map_verts(v, |g, pv| g.succs(pv))
     }
 
     fn preds(&self, v: VertId) -> Box<dyn Iterator<Item = VertId> + '_> {
-        let pv = self.perm[v as usize];
-        if pv == INVALID_VERT {
-            return Box::new(std::iter::empty());
-        }
-        let inv = &self.inv;
-        Box::new(self.g.preds(pv).filter_map(move |s| {
-            let mapped = inv[s as usize];
-            if mapped == INVALID_VERT {
-                None
-            } else {
-                Some(mapped)
-            }
-        }))
+        self.map_verts(v, |g, pv| g.preds(pv))
     }
 
     fn e_succs(&self, v: VertId) -> Box<dyn Iterator<Item = EdgeRef> + '_> {
-        let pv = self.perm[v as usize];
-        if pv == INVALID_VERT {
-            return Box::new(std::iter::empty());
-        }
-        let inv = &self.inv;
-        Box::new(self.g.e_succs(pv).filter_map(move |e| {
-            let mapped = inv[e.vert as usize];
-            if mapped == INVALID_VERT {
-                None
-            } else {
-                Some(EdgeRef {
-                    vert: mapped,
-                    val: e.val,
-                })
-            }
-        }))
+        self.map_edges(v, |g, pv| g.e_succs(pv))
     }
 
     fn e_preds(&self, v: VertId) -> Box<dyn Iterator<Item = EdgeRef> + '_> {
-        let pv = self.perm[v as usize];
-        if pv == INVALID_VERT {
-            return Box::new(std::iter::empty());
-        }
-        let inv = &self.inv;
-        Box::new(self.g.e_preds(pv).filter_map(move |e| {
-            let mapped = inv[e.vert as usize];
-            if mapped == INVALID_VERT {
-                None
-            } else {
-                Some(EdgeRef {
-                    vert: mapped,
-                    val: e.val,
-                })
-            }
-        }))
+        self.map_edges(v, |g, pv| g.e_preds(pv))
     }
 }
 
