@@ -339,6 +339,48 @@ fn compute_sccs(scratch: &mut ScratchSpace, g: &dyn ReadableGraph, out_scc: &mut
     }
 }
 
+/// Initialize Dijkstra state: grow scratch, advance timestamp, set source distance,
+/// collect initial successors, compute their reduced costs, and build the priority queue.
+/// The caller must set `scratch.vert_marks` for each successor after this returns.
+fn dijkstra_init(
+    scratch: &mut ScratchSpace,
+    g: &dyn ReadableGraph,
+    p: PotentialFunction,
+    src: VertId,
+) -> Vec<(VertId, Weight)> {
+    scratch.grow(g.size());
+
+    // Reset via timestamp
+    scratch.dist_ts[scratch.ts_idx] = scratch.ts;
+    scratch.ts += 1;
+    scratch.ts_idx = (scratch.ts_idx + 1) % scratch.dists.len();
+
+    scratch.dists[src as usize] = Number::from(0);
+    scratch.dist_ts[src as usize] = scratch.ts;
+
+    // Collect initial successors and compute reduced costs
+    let init_succs: Vec<(VertId, Weight)> = g.e_succs(src).map(|e| (e.vert, e.val)).collect();
+
+    for (dest, eval) in &init_succs {
+        scratch.dists[*dest as usize] = p(src) + eval - p(*dest);
+        scratch.dist_ts[*dest as usize] = scratch.ts;
+    }
+
+    init_succs
+}
+
+/// Build a min-heap from init_succs and the current scratch dists.
+fn dijkstra_build_heap(
+    scratch: &ScratchSpace,
+    init_succs: &[(VertId, Weight)],
+) -> Heap<impl Fn(i32, i32) -> bool + use<>> {
+    let mut heap = make_heap(&scratch.dists);
+    for (dest, _) in init_succs {
+        heap.insert(*dest as i32);
+    }
+    heap
+}
+
 /// Chromatic Dijkstra for `close_after_meet`.
 fn chrome_dijkstra(
     scratch: &mut ScratchSpace,
@@ -352,30 +394,12 @@ fn chrome_dijkstra(
     if sz == 0 {
         return;
     }
-    scratch.grow(sz);
-
-    // Reset via timestamp
-    scratch.dist_ts[scratch.ts_idx] = scratch.ts;
-    scratch.ts += 1;
-    scratch.ts_idx = (scratch.ts_idx + 1) % scratch.dists.len();
-
-    scratch.dists[src as usize] = Number::from(0);
-    scratch.dist_ts[src as usize] = scratch.ts;
-
-    // Collect initial successors before creating heap
-    let init_succs: Vec<(VertId, Weight)> = g.e_succs(src).map(|e| (e.vert, e.val)).collect();
-
-    for (dest, eval) in &init_succs {
-        scratch.dists[*dest as usize] = p(src) + eval - p(*dest);
-        scratch.dist_ts[*dest as usize] = scratch.ts;
+    let init_succs = dijkstra_init(scratch, g, p, src);
+    for (dest, _) in &init_succs {
         scratch.vert_marks[*dest as usize] =
             scratch.edge_marks[sz * src as usize + *dest as usize] as i32;
     }
-
-    let mut heap = make_heap(&scratch.dists);
-    for (dest, _) in &init_succs {
-        heap.insert(*dest as i32);
-    }
+    let mut heap = dijkstra_build_heap(scratch, &init_succs);
 
     while !heap.empty() {
         let es = heap.remove_min();
@@ -427,36 +451,18 @@ fn dijkstra_recover(
     src: VertId,
     delta: &mut EdgeVector,
 ) {
-    let sz = g.size();
-    if sz == 0 {
+    if g.size() == 0 {
         return;
     }
     if is_stable[src as usize] != 0 {
         return;
     }
 
-    scratch.grow(sz);
-
-    scratch.dist_ts[scratch.ts_idx] = scratch.ts;
-    scratch.ts += 1;
-    scratch.ts_idx = (scratch.ts_idx + 1) % scratch.dists.len();
-
-    scratch.dists[src as usize] = Number::from(0);
-    scratch.dist_ts[src as usize] = scratch.ts;
-
-    // Collect initial successors before creating heap
-    let init_succs: Vec<(VertId, Weight)> = g.e_succs(src).map(|e| (e.vert, e.val)).collect();
-
-    for (dest, eval) in &init_succs {
-        scratch.dists[*dest as usize] = p(src) + eval - p(*dest);
-        scratch.dist_ts[*dest as usize] = scratch.ts;
+    let init_succs = dijkstra_init(scratch, g, p, src);
+    for (dest, _) in &init_succs {
         scratch.vert_marks[*dest as usize] = V_UNSTABLE;
     }
-
-    let mut heap = make_heap(&scratch.dists);
-    for (dest, _) in &init_succs {
-        heap.insert(*dest as i32);
-    }
+    let mut heap = dijkstra_build_heap(scratch, &init_succs);
 
     while !heap.empty() {
         let es = heap.remove_min();

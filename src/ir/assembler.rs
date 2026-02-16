@@ -266,24 +266,23 @@ impl BpfAssembler {
         let mut inst = EbpfInst::new(0, 0, 0, 0, 0);
 
         // be<N>, le<N>, swap<N>, bswap<N> — endianness conversion
-        // Note: check "bswap" before "be" since "bswap" also starts with "b"
-        if let Some(suffix) = mnemonic.strip_prefix("bswap") {
-            inst.opcode = INST_CLS_ALU64 | INST_SRC_IMM | INST_ALU_OP_END;
-            inst.set_dst(Self::decode_register(operands[0])?);
-            inst.imm = Self::decode_imm32(suffix)? as i32;
-            return Ok(EncodeResult::Single(inst));
-        } else if let Some(suffix) = mnemonic.strip_prefix("be") {
-            inst.opcode = INST_CLS_ALU | INST_SRC_REG | INST_ALU_OP_END;
-            inst.set_dst(Self::decode_register(operands[0])?);
-            inst.imm = Self::decode_imm32(suffix)? as i32;
-            return Ok(EncodeResult::Single(inst));
-        } else if let Some(suffix) = mnemonic.strip_prefix("le") {
-            inst.opcode = INST_CLS_ALU | INST_SRC_IMM | INST_ALU_OP_END;
-            inst.set_dst(Self::decode_register(operands[0])?);
-            inst.imm = Self::decode_imm32(suffix)? as i32;
-            return Ok(EncodeResult::Single(inst));
-        } else if let Some(suffix) = mnemonic.strip_prefix("swap") {
-            inst.opcode = INST_CLS_ALU64 | INST_SRC_IMM | INST_ALU_OP_END;
+        // Note: check "bswap"/"swap" before "be" since "bswap" starts with "b"
+        let endian = mnemonic
+            .strip_prefix("bswap")
+            .or_else(|| mnemonic.strip_prefix("swap"))
+            .map(|s| (INST_CLS_ALU64 | INST_SRC_IMM | INST_ALU_OP_END, s))
+            .or_else(|| {
+                mnemonic
+                    .strip_prefix("be")
+                    .map(|s| (INST_CLS_ALU | INST_SRC_REG | INST_ALU_OP_END, s))
+            })
+            .or_else(|| {
+                mnemonic
+                    .strip_prefix("le")
+                    .map(|s| (INST_CLS_ALU | INST_SRC_IMM | INST_ALU_OP_END, s))
+            });
+        if let Some((opcode, suffix)) = endian {
+            inst.opcode = opcode;
             inst.set_dst(Self::decode_register(operands[0])?);
             inst.imm = Self::decode_imm32(suffix)? as i32;
             return Ok(EncodeResult::Single(inst));
@@ -322,16 +321,22 @@ impl BpfAssembler {
         inst.set_dst(Self::decode_register(operands[0])?);
 
         if operands.len() == 2 {
-            if operands[1].starts_with('%') {
-                inst.opcode |= INST_SRC_REG;
-                inst.set_src(Self::decode_register(operands[1])?);
-            } else {
-                inst.opcode |= INST_SRC_IMM;
-                inst.imm = Self::decode_imm32(operands[1])? as i32;
-            }
+            Self::encode_src_operand(&mut inst, operands[1])?;
         }
 
         Ok(EncodeResult::Single(inst))
+    }
+
+    /// Encode a register-or-immediate source operand into `inst`.
+    fn encode_src_operand(inst: &mut EbpfInst, operand: &str) -> Result<(), String> {
+        if operand.starts_with('%') {
+            inst.opcode |= INST_SRC_REG;
+            inst.set_src(Self::decode_register(operand)?);
+        } else {
+            inst.opcode |= INST_SRC_IMM;
+            inst.imm = Self::decode_imm32(operand)? as i32;
+        }
+        Ok(())
     }
 
     fn encode_jmp(&mut self, mnemonic: &str, operands: &[&str]) -> Result<EncodeResult, String> {
@@ -381,13 +386,7 @@ impl BpfAssembler {
                 inst.opcode |= jmp_code << 4;
             }
             inst.set_dst(Self::decode_register(operands[0])?);
-            if operands[1].starts_with('%') {
-                inst.opcode |= INST_SRC_REG;
-                inst.set_src(Self::decode_register(operands[1])?);
-            } else {
-                inst.opcode |= INST_SRC_IMM;
-                inst.imm = Self::decode_imm32(operands[1])? as i32;
-            }
+            Self::encode_src_operand(&mut inst, operands[1])?;
             inst.offset = self.decode_jump_target(operands[2])?;
         }
         Ok(EncodeResult::Single(inst))
