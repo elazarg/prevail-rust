@@ -5,6 +5,8 @@
 //!
 //! Ported from `graph_ops.hpp`.
 
+use std::cell::Cell;
+
 use super::graph::Graph;
 use super::graph_views::{GraphRev, ReadableGraph};
 use super::heap::WeightHeap;
@@ -42,7 +44,9 @@ pub struct ScratchSpace {
     vert_marks: Vec<i32>,
     scratch_sz: usize,
 
-    dists: Vec<Weight>,
+    /// Distance array — uses `Cell` for interior mutability so that
+    /// `WeightHeap` can hold a shared reference while values are updated.
+    dists: Vec<Cell<Weight>>,
     dists_alt: Vec<Weight>,
     dist_ts: Vec<u32>,
     ts: u32,
@@ -82,7 +86,8 @@ impl ScratchSpace {
         self.vert_marks.resize(new_sz, 0);
         self.scratch_sz = new_sz;
 
-        self.dists.resize(self.scratch_sz, Weight::default());
+        self.dists
+            .resize(self.scratch_sz, Cell::new(Weight::default()));
         self.dists_alt.resize(self.scratch_sz, Weight::default());
         self.dist_ts
             .resize(self.scratch_sz, self.ts.wrapping_sub(1));
@@ -340,14 +345,14 @@ fn dijkstra_init(
     scratch.ts += 1;
     scratch.ts_idx = (scratch.ts_idx + 1) % scratch.dists.len();
 
-    scratch.dists[src as usize] = Number::from(0);
+    scratch.dists[src as usize].set(Number::from(0));
     scratch.dist_ts[src as usize] = scratch.ts;
 
     // Collect initial successors and compute reduced costs
     let init_succs: Vec<(VertId, Weight)> = g.e_succs(src).map(|e| (e.vert, e.val)).collect();
 
     for (dest, eval) in &init_succs {
-        scratch.dists[*dest as usize] = p(src) + eval - p(*dest);
+        scratch.dists[*dest as usize].set(p(src) + eval - p(*dest));
         scratch.dist_ts[*dest as usize] = scratch.ts;
     }
 
@@ -355,10 +360,13 @@ fn dijkstra_init(
 }
 
 /// Build a min-heap from init_succs and the current scratch dists.
-fn dijkstra_build_heap(scratch: &ScratchSpace, init_succs: &[(VertId, Weight)]) -> WeightHeap {
-    let mut heap = WeightHeap::new();
+fn dijkstra_build_heap<'a>(
+    dists: &'a [Cell<Weight>],
+    init_succs: &[(VertId, Weight)],
+) -> WeightHeap<'a> {
+    let mut heap = WeightHeap::new(dists);
     for (dest, _) in init_succs {
-        heap.insert(*dest as i32, &scratch.dists);
+        heap.insert(*dest as i32);
     }
     heap
 }
@@ -381,11 +389,11 @@ fn chrome_dijkstra(
         scratch.vert_marks[*dest as usize] =
             scratch.edge_marks[sz * src as usize + *dest as usize] as i32;
     }
-    let mut heap = dijkstra_build_heap(scratch, &init_succs);
+    let mut heap = dijkstra_build_heap(&scratch.dists, &init_succs);
 
     while !heap.empty() {
-        let es = heap.remove_min(&scratch.dists);
-        let es_cost = scratch.dists[es as usize] + p(es as VertId);
+        let es = heap.remove_min();
+        let es_cost = scratch.dists[es as usize].get() + p(es as VertId);
         {
             let es_val = es_cost - p(src);
             let w = g.lookup(src, es as VertId);
@@ -405,18 +413,18 @@ fn chrome_dijkstra(
         };
         for &ed in es_succs {
             let v = es_cost + g.edge_val(es as VertId, ed) - p(ed);
-            if scratch.dist_ts[ed as usize] != scratch.ts || v < scratch.dists[ed as usize] {
-                scratch.dists[ed as usize] = v;
+            if scratch.dist_ts[ed as usize] != scratch.ts || v < scratch.dists[ed as usize].get() {
+                scratch.dists[ed as usize].set(v);
                 scratch.dist_ts[ed as usize] = scratch.ts;
                 scratch.vert_marks[ed as usize] =
                     scratch.edge_marks[sz * es as usize + ed as usize] as i32;
 
                 if heap.in_heap(ed as i32) {
-                    heap.decrease(ed as i32, &scratch.dists);
+                    heap.decrease(ed as i32);
                 } else {
-                    heap.insert(ed as i32, &scratch.dists);
+                    heap.insert(ed as i32);
                 }
-            } else if v == scratch.dists[ed as usize] {
+            } else if v == scratch.dists[ed as usize].get() {
                 scratch.vert_marks[ed as usize] |=
                     scratch.edge_marks[sz * es as usize + ed as usize] as i32;
             }
@@ -444,11 +452,11 @@ fn dijkstra_recover(
     for (dest, _) in &init_succs {
         scratch.vert_marks[*dest as usize] = V_UNSTABLE;
     }
-    let mut heap = dijkstra_build_heap(scratch, &init_succs);
+    let mut heap = dijkstra_build_heap(&scratch.dists, &init_succs);
 
     while !heap.empty() {
-        let es = heap.remove_min(&scratch.dists);
-        let es_cost = scratch.dists[es as usize] + p(es as VertId);
+        let es = heap.remove_min();
+        let es_cost = scratch.dists[es as usize].get() + p(es as VertId);
         {
             let es_val = es_cost - p(src);
             let w = g.lookup(src, es as VertId);
@@ -468,18 +476,19 @@ fn dijkstra_recover(
 
         for e in g.e_succs(es as VertId) {
             let v = es_cost + e.val - p(e.vert);
-            if scratch.dist_ts[e.vert as usize] != scratch.ts || v < scratch.dists[e.vert as usize]
+            if scratch.dist_ts[e.vert as usize] != scratch.ts
+                || v < scratch.dists[e.vert as usize].get()
             {
-                scratch.dists[e.vert as usize] = v;
+                scratch.dists[e.vert as usize].set(v);
                 scratch.dist_ts[e.vert as usize] = scratch.ts;
                 scratch.vert_marks[e.vert as usize] = es_mark;
 
                 if heap.in_heap(e.vert as i32) {
-                    heap.decrease(e.vert as i32, &scratch.dists);
+                    heap.decrease(e.vert as i32);
                 } else {
-                    heap.insert(e.vert as i32, &scratch.dists);
+                    heap.insert(e.vert as i32);
                 }
-            } else if v == scratch.dists[e.vert as usize] {
+            } else if v == scratch.dists[e.vert as usize].get() {
                 scratch.vert_marks[e.vert as usize] |= es_mark;
             }
         }
@@ -499,41 +508,41 @@ fn close_after_assign_fwd(
     }
 
     scratch.vert_marks[v as usize] = BF_QUEUED;
-    scratch.dists[v as usize] = Number::from(0);
+    scratch.dists[v as usize].set(Number::from(0));
 
     let mut queue: Vec<VertId> = Vec::new();
     for e in g.e_succs(v) {
         let d = e.vert;
         scratch.vert_marks[d as usize] = BF_QUEUED;
-        scratch.dists[d as usize] = e.val;
+        scratch.dists[d as usize].set(e.val);
         queue.push(d);
     }
 
     // Sort by increasing slack
     queue.sort_by(|&d1, &d2| {
-        let s1 = scratch.dists[d1 as usize] - p(d1);
-        let s2 = scratch.dists[d2 as usize] - p(d2);
+        let s1 = scratch.dists[d1 as usize].get() - p(d1);
+        let s2 = scratch.dists[d2 as usize].get() - p(d2);
         s1.cmp(&s2)
     });
 
     let mut reach: Vec<VertId> = Vec::new();
     for &d in &queue {
-        let d_wt = scratch.dists[d as usize];
+        let d_wt = scratch.dists[d as usize].get();
         for e in g.e_succs(d) {
             let e_wt = d_wt + e.val;
             if scratch.vert_marks[e.vert as usize] == 0 {
-                scratch.dists[e.vert as usize] = e_wt;
+                scratch.dists[e.vert as usize].set(e_wt);
                 scratch.vert_marks[e.vert as usize] = BF_QUEUED;
                 reach.push(e.vert);
-            } else if e_wt < scratch.dists[e.vert as usize] {
-                scratch.dists[e.vert as usize] = e_wt;
+            } else if e_wt < scratch.dists[e.vert as usize].get() {
+                scratch.dists[e.vert as usize].set(e_wt);
             }
         }
     }
 
     // Collect all reachable adjacencies
     for &d in queue.iter().chain(reach.iter()) {
-        aux.push((d, scratch.dists[d as usize]));
+        aux.push((d, scratch.dists[d as usize].get()));
         scratch.vert_marks[d as usize] = 0;
     }
 }
@@ -756,39 +765,39 @@ pub fn repair_potential(
 
     let verts: Vec<VertId> = g.verts().collect();
     for &vi in &verts {
-        scratch.dists[vi as usize] = zero;
+        scratch.dists[vi as usize].set(zero);
         scratch.dists_alt[vi as usize] = p[vi as usize];
     }
-    scratch.dists[jj as usize] = p[ii as usize] + g.edge_val(ii, jj) - p[jj as usize];
+    scratch.dists[jj as usize].set(p[ii as usize] + g.edge_val(ii, jj) - p[jj as usize]);
 
-    if scratch.dists[jj as usize] >= zero {
+    if scratch.dists[jj as usize].get() >= zero {
         return true;
     }
 
-    let mut heap = WeightHeap::new();
-    heap.insert(jj as i32, &scratch.dists);
+    let mut heap = WeightHeap::new(&scratch.dists);
+    heap.insert(jj as i32);
 
     while !heap.empty() {
-        let es = heap.remove_min(&scratch.dists);
-        scratch.dists_alt[es as usize] = p[es as usize] + scratch.dists[es as usize];
+        let es = heap.remove_min();
+        scratch.dists_alt[es as usize] = p[es as usize] + scratch.dists[es as usize].get();
 
         for e in g.e_succs(es as VertId) {
             if scratch.dists_alt[e.vert as usize] == p[e.vert as usize] {
                 let gnext_ed =
                     scratch.dists_alt[es as usize] + e.val - scratch.dists_alt[e.vert as usize];
-                if gnext_ed < scratch.dists[e.vert as usize] {
-                    scratch.dists[e.vert as usize] = gnext_ed;
+                if gnext_ed < scratch.dists[e.vert as usize].get() {
+                    scratch.dists[e.vert as usize].set(gnext_ed);
                     if heap.in_heap(e.vert as i32) {
-                        heap.decrease(e.vert as i32, &scratch.dists);
+                        heap.decrease(e.vert as i32);
                     } else {
-                        heap.insert(e.vert as i32, &scratch.dists);
+                        heap.insert(e.vert as i32);
                     }
                 }
             }
         }
     }
 
-    if scratch.dists[ii as usize] < zero {
+    if scratch.dists[ii as usize].get() < zero {
         return false;
     }
 

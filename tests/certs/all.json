@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "suite": "all",
-  "basis_hash": "1a3c8ca469703816",
+  "basis_hash": "12fb9c697d58ca86",
   "depends_mode": "all_tracked_at_head_except_default_and_certignore_exclusions",
   "command": [
     "cargo",
@@ -39,7 +39,7 @@
     "tests_upstream_clean_except_tests_certs"
   ],
   "result": "pass",
-  "timestamp_unix_utc": 1771205448,
+  "timestamp_unix_utc": 1771239234,
   "toolchain": "rustc 1.93.1 (01f6ddf75 2026-02-11)",
   "runner_version": "0.1.0"
 }
