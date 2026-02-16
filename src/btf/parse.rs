@@ -703,37 +703,21 @@ pub fn read_btf_string(btf_data: &[u8], string_offset: u32) -> Result<String, Un
 mod tests {
     use super::*;
 
+    const BTF_TEST_ELF: &str = "tests/upstream/ebpf-samples/build/byteswap.o";
+
     #[test]
     fn parse_btf_from_elf_file() {
-        let path = "tests/upstream/ebpf-samples/build/byteswap.o";
-        let data = match std::fs::read(path) {
-            Ok(d) => d,
-            Err(_) => {
-                eprintln!("Skipping test: {path} not found");
-                return;
-            }
+        let Some(btf_data) = super::super::load_btf_section_from_elf(BTF_TEST_ELF) else {
+            return;
         };
-
-        // Find .BTF section using the object crate
-        use object::Object;
-        use object::ObjectSection;
-        let elf = object::File::parse(&*data).unwrap();
-        let btf_section = match elf.section_by_name(".BTF") {
-            Some(s) => s,
-            None => {
-                eprintln!("Skipping test: no .BTF section in {path}");
-                return;
-            }
-        };
-        let btf_data = btf_section.data().unwrap();
 
         // Parse string table
-        let (string_table, swap_endian) = parse_string_table(btf_data).unwrap();
+        let (string_table, swap_endian) = parse_string_table(&btf_data).unwrap();
         assert!(!string_table.is_empty(), "String table should not be empty");
         assert!(!swap_endian, "x86 ELF should be little-endian");
 
         // Parse types
-        let types = parse_types(btf_data).unwrap();
+        let types = parse_types(&btf_data).unwrap();
         assert!(types.len() > 1, "Should have at least void + other types");
         // First entry is always void
         assert_eq!(types[0].0, 0);
@@ -742,29 +726,20 @@ mod tests {
 
     #[test]
     fn parse_line_info_from_elf_file() {
-        let path = "tests/upstream/ebpf-samples/build/byteswap.o";
-        let data = match std::fs::read(path) {
-            Ok(d) => d,
-            Err(_) => {
-                eprintln!("Skipping test: {path} not found");
-                return;
-            }
+        let Some(data) = super::super::read_test_elf(BTF_TEST_ELF) else {
+            return;
         };
-
         use object::Object;
         use object::ObjectSection;
         let elf = object::File::parse(&*data).unwrap();
-        let btf_section = match elf.section_by_name(".BTF") {
-            Some(s) => s,
-            None => {
-                eprintln!("Skipping test: no .BTF section in {path}");
-                return;
-            }
+        let Some(btf_section) = elf.section_by_name(".BTF") else {
+            eprintln!("Skipping test: no .BTF section in {BTF_TEST_ELF}");
+            return;
         };
         let btf_ext_section = match elf.section_by_name(".BTF.ext") {
             Some(s) => s,
             None => {
-                eprintln!("Skipping test: no .BTF.ext section in {path}");
+                eprintln!("Skipping test: no .BTF.ext section in {BTF_TEST_ELF}");
                 return;
             }
         };

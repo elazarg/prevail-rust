@@ -11,6 +11,35 @@ pub mod map;
 pub mod parse;
 pub mod type_data;
 
+/// Read a test ELF file, returning `None` (with a skip message) if not found.
+#[cfg(test)]
+pub(crate) fn read_test_elf(path: &str) -> Option<Vec<u8>> {
+    match std::fs::read(path) {
+        Ok(d) => Some(d),
+        Err(_) => {
+            eprintln!("Skipping test: {path} not found");
+            None
+        }
+    }
+}
+
+/// Load a `.BTF` section from an ELF file, returning `None` if the file or section is missing.
+#[cfg(test)]
+pub(crate) fn load_btf_section_from_elf(path: &str) -> Option<Vec<u8>> {
+    let data = read_test_elf(path)?;
+    use object::Object;
+    use object::ObjectSection;
+    let elf = object::File::parse(&*data).unwrap();
+    let btf_section = match elf.section_by_name(".BTF") {
+        Some(s) => s,
+        None => {
+            eprintln!("Skipping test: no .BTF section in {path}");
+            return None;
+        }
+    };
+    Some(btf_section.data().unwrap().to_vec())
+}
+
 use crate::elf_loader::UnmarshalError;
 
 /// BTF type identifier (0 = void).

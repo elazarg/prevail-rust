@@ -163,28 +163,13 @@ mod tests {
 
     #[test]
     fn type_data_from_elf() {
-        let path = "tests/upstream/ebpf-samples/build/byteswap.o";
-        let data = match std::fs::read(path) {
-            Ok(d) => d,
-            Err(_) => {
-                eprintln!("Skipping test: {path} not found");
-                return;
-            }
+        let Some(btf_data) =
+            super::super::load_btf_section_from_elf("tests/upstream/ebpf-samples/build/byteswap.o")
+        else {
+            return;
         };
 
-        use object::Object;
-        use object::ObjectSection;
-        let elf = object::File::parse(&*data).unwrap();
-        let btf_section = match elf.section_by_name(".BTF") {
-            Some(s) => s,
-            None => {
-                eprintln!("Skipping test: no .BTF section in {path}");
-                return;
-            }
-        };
-        let btf_data = btf_section.data().unwrap();
-
-        let td = BtfTypeData::new(btf_data).unwrap();
+        let td = BtfTypeData::new(&btf_data).unwrap();
 
         // void is always present
         let void_kind = td.get_kind(0).unwrap();
