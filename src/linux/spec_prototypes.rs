@@ -1312,25 +1312,6 @@ pub fn is_helper_usable(n: i32, program_context: Option<&EbpfContextDescriptor>)
     true
 }
 
-/// Pointer-based convenience wrapper for call sites that still carry raw
-/// context descriptor pointers.
-///
-/// # Safety
-/// `program_context` must either be null or point to a valid
-/// `EbpfContextDescriptor` for the duration of this call.
-pub(crate) unsafe fn is_helper_usable_ptr(
-    n: i32,
-    program_context: *const EbpfContextDescriptor,
-) -> bool {
-    let ctx = if program_context.is_null() {
-        None
-    } else {
-        // SAFETY: required by this function's contract.
-        Some(unsafe { &*program_context })
-    };
-    is_helper_usable(n, ctx)
-}
-
 // ── Tests ──────────────────────────────────────────────────────────
 
 #[cfg(test)]

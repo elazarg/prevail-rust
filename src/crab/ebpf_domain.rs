@@ -457,7 +457,7 @@ impl EbpfDomain {
         let desc = ctx
             .program_info
             .program_type
-            .context_descriptor_ref()
+            .context_descriptor
             .expect("missing program context descriptor");
         if desc.meta >= 0 {
             self.add_value_constraint(&leq(registry.meta_offset().into(), 0i64.into()), registry);

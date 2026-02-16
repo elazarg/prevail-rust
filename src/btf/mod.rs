@@ -7,6 +7,8 @@
 // Many BTF types and fields exist for spec completeness even if not yet used.
 #![allow(dead_code)]
 
+use zerocopy::FromBytes;
+
 pub mod map;
 pub mod parse;
 pub mod type_data;
@@ -60,7 +62,7 @@ pub const BTF_INT_BOOL: u32 = 1 << 2;
 
 /// BTF header (`.BTF` section).
 #[repr(C)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, FromBytes)]
 pub struct BtfHeader {
     pub magic: u16,
     pub version: u8,
@@ -74,7 +76,7 @@ pub struct BtfHeader {
 
 /// BTF.ext header (`.BTF.ext` section).
 #[repr(C)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, FromBytes)]
 pub struct BtfExtHeader {
     pub magic: u16,
     pub version: u8,
@@ -88,7 +90,7 @@ pub struct BtfExtHeader {
 
 /// Raw BTF type record (on-disk).
 #[repr(C)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, FromBytes)]
 pub struct BtfRawType {
     pub name_off: u32,
     pub info: u32,
@@ -97,7 +99,7 @@ pub struct BtfRawType {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, FromBytes)]
 pub struct BtfRawArray {
     pub element_type: u32,
     pub index_type: u32,
@@ -105,20 +107,20 @@ pub struct BtfRawArray {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, FromBytes)]
 pub struct BtfRawParam {
     pub name_off: u32,
     pub type_id: u32,
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, FromBytes)]
 pub struct BtfRawVar {
     pub linkage: u32,
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, FromBytes)]
 pub struct BtfRawVarSecInfo {
     pub type_id: u32,
     pub offset: u32,
@@ -126,13 +128,13 @@ pub struct BtfRawVarSecInfo {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, FromBytes)]
 pub struct BtfRawDeclTag {
     pub component_idx: u32,
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, FromBytes)]
 pub struct BtfRawMember {
     pub name_off: u32,
     pub type_id: u32,
@@ -140,14 +142,14 @@ pub struct BtfRawMember {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, FromBytes)]
 pub struct BtfRawEnum {
     pub name_off: u32,
     pub val: u32,
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, FromBytes)]
 pub struct BtfRawEnum64 {
     pub name_off: u32,
     pub val_lo32: u32,
@@ -156,14 +158,14 @@ pub struct BtfRawEnum64 {
 
 /// BTF.ext info section header (variable-length, followed by records).
 #[repr(C)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, FromBytes)]
 pub struct BtfExtInfoSec {
     pub sec_name_off: u32,
     pub num_info: u32,
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, FromBytes)]
 pub struct BpfLineInfo {
     pub insn_off: u32,
     pub file_name_off: u32,
@@ -172,7 +174,7 @@ pub struct BpfLineInfo {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, FromBytes)]
 pub struct BpfFuncInfo {
     pub insn_off: u32,
     pub type_id: u32,

@@ -237,16 +237,17 @@ fn run_conformance_test_case(data_file: &Path) -> ConformanceTestResult {
     };
 
     // Build conformance context descriptor: {size: 64, data: -1, end: -1, meta: -1}
-    let context_descriptor = Box::new(EbpfContextDescriptor {
-        size: 64,
-        data: -1,
-        end: -1,
-        meta: -1,
-    });
+    let context_descriptor: &'static EbpfContextDescriptor =
+        Box::leak(Box::new(EbpfContextDescriptor {
+            size: 64,
+            data: -1,
+            end: -1,
+            meta: -1,
+        }));
 
     let program_type = EbpfProgramType {
         name: "conformance_check".to_string(),
-        context_descriptor: &*context_descriptor as *const _,
+        context_descriptor: Some(context_descriptor),
         platform_specific_data: 0,
         section_prefixes: vec![],
         is_privileged: false,

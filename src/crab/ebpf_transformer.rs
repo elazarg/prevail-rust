@@ -488,7 +488,7 @@ fn do_load_ctx(
     let desc = ctx
         .program_info
         .program_type
-        .context_descriptor_ref()
+        .context_descriptor
         .expect("missing program context descriptor");
     let target = reg_pack(target_reg, registry);
 

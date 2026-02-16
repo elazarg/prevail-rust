@@ -27,6 +27,7 @@ path = "src/lib.rs"
 object = { version = "0.36", default-features = false, features = ["read", "elf"] }
 regex = "1"
 clap = { version = "4", features = ["derive"] }
+zerocopy = { version = "0.8.39", features = ["derive"] }
 
 [[bin]]
 name = "prevail"

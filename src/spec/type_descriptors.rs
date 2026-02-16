@@ -43,42 +43,16 @@ pub struct EbpfMapType {
 /// Describes an eBPF program type.
 /// Mirrors C++ `EbpfProgramType`.
 ///
-/// `context_descriptor` is a raw pointer because C++ platform functions return
-/// pointers to static global descriptors (e.g. `&g_socket_filter_descr`), and
-/// the verifier relies on pointer identity.  The pointed-to data is always
-/// `'static`, so `Send`/`Sync` are safe.
-#[derive(Clone, Debug)]
+/// `context_descriptor` references a static descriptor from platform modules
+/// (e.g. `&SK_BUFF_DESCR`). The verifier can compare descriptors by pointer
+/// identity via `std::ptr::eq` on the references.
+#[derive(Clone, Debug, Default)]
 pub struct EbpfProgramType {
     pub name: String,
-    pub context_descriptor: *const EbpfContextDescriptor,
+    pub context_descriptor: Option<&'static EbpfContextDescriptor>,
     pub platform_specific_data: u64,
     pub section_prefixes: Vec<String>,
     pub is_privileged: bool,
-}
-
-impl Default for EbpfProgramType {
-    fn default() -> Self {
-        Self {
-            name: String::new(),
-            context_descriptor: std::ptr::null(),
-            platform_specific_data: 0,
-            section_prefixes: Vec::new(),
-            is_privileged: false,
-        }
-    }
-}
-
-impl EbpfProgramType {
-    /// Safe view of the optional context descriptor.
-    ///
-    /// The pointer originates from static descriptor tables in platform modules.
-    pub fn context_descriptor_ref(&self) -> Option<&EbpfContextDescriptor> {
-        if self.context_descriptor.is_null() {
-            return None;
-        }
-        // SAFETY: pointer is expected to refer to static descriptor tables.
-        Some(unsafe { &*self.context_descriptor })
-    }
 }
 
 /// Key characteristics that determine equivalence between eBPF maps.

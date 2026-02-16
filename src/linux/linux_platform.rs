@@ -128,7 +128,7 @@ pub struct BpfLoadMapDef {
 
 fn ptype(
     name: &str,
-    descr: *const EbpfContextDescriptor,
+    descr: Option<&'static EbpfContextDescriptor>,
     native_type: u64,
     prefixes: &[&str],
 ) -> EbpfProgramType {
@@ -137,7 +137,7 @@ fn ptype(
 
 fn ptype_privileged(
     name: &str,
-    descr: *const EbpfContextDescriptor,
+    descr: Option<&'static EbpfContextDescriptor>,
     native_type: u64,
     prefixes: &[&str],
 ) -> EbpfProgramType {
@@ -146,7 +146,7 @@ fn ptype_privileged(
 
 fn ptype_with_privilege(
     name: &str,
-    descr: *const EbpfContextDescriptor,
+    descr: Option<&'static EbpfContextDescriptor>,
     native_type: u64,
     prefixes: &[&str],
     is_privileged: bool,
@@ -165,97 +165,102 @@ fn ptype_with_privilege(
 fn linux_socket_filter_program_type() -> EbpfProgramType {
     ptype(
         "socket_filter",
-        SOCKET_FILTER_DESCR,
+        Some(SOCKET_FILTER_DESCR),
         bpf_prog_type::SOCKET_FILTER,
         &["socket"],
     )
 }
 
 fn linux_xdp_program_type() -> EbpfProgramType {
-    ptype("xdp", XDP_DESCR, bpf_prog_type::XDP, &["xdp"])
+    ptype("xdp", Some(XDP_DESCR), bpf_prog_type::XDP, &["xdp"])
 }
 
 fn cilium_lxc_program_type() -> EbpfProgramType {
-    ptype("lxc", SCHED_DESCR, bpf_prog_type::SOCKET_FILTER, &[])
+    ptype("lxc", Some(SCHED_DESCR), bpf_prog_type::SOCKET_FILTER, &[])
 }
 
 // ── linux_program_types table ──────────────────────────────────────
 
 fn linux_program_types() -> Vec<EbpfProgramType> {
     vec![
-        ptype("unspec", &UNSPEC_DESCR, bpf_prog_type::UNSPEC, &[]),
+        ptype("unspec", Some(&UNSPEC_DESCR), bpf_prog_type::UNSPEC, &[]),
         linux_socket_filter_program_type(),
         linux_xdp_program_type(),
         ptype(
             "cgroup_device",
-            &CGROUP_DEV_DESCR,
+            Some(&CGROUP_DEV_DESCR),
             bpf_prog_type::CGROUP_DEVICE,
             &["cgroup/dev"],
         ),
         ptype(
             "cgroup_skb",
-            SOCKET_FILTER_DESCR,
+            Some(SOCKET_FILTER_DESCR),
             bpf_prog_type::CGROUP_SKB,
             &["cgroup/skb"],
         ),
         ptype(
             "cgroup_sock",
-            &CGROUP_SOCK_DESCR,
+            Some(&CGROUP_SOCK_DESCR),
             bpf_prog_type::CGROUP_SOCK,
             &["cgroup/sock"],
         ),
         ptype_privileged(
             "kprobe",
-            &KPROBE_DESCR,
+            Some(&KPROBE_DESCR),
             bpf_prog_type::KPROBE,
             &["kprobe/", "kretprobe/"],
         ),
         ptype(
             "lwt_in",
-            LWT_INOUT_DESCR,
+            Some(LWT_INOUT_DESCR),
             bpf_prog_type::LWT_IN,
             &["lwt_in"],
         ),
         ptype(
             "lwt_out",
-            LWT_INOUT_DESCR,
+            Some(LWT_INOUT_DESCR),
             bpf_prog_type::LWT_OUT,
             &["lwt_out"],
         ),
         ptype(
             "lwt_xmit",
-            LWT_XMIT_DESCR,
+            Some(LWT_XMIT_DESCR),
             bpf_prog_type::LWT_XMIT,
             &["lwt_xmit"],
         ),
         ptype(
             "perf_event",
-            &PERF_EVENT_DESCR,
+            Some(&PERF_EVENT_DESCR),
             bpf_prog_type::PERF_EVENT,
             &["perf_section", "perf_event"],
         ),
         ptype(
             "sched_act",
-            SCHED_DESCR,
+            Some(SCHED_DESCR),
             bpf_prog_type::SCHED_ACT,
             &["action"],
         ),
         ptype(
             "sched_cls",
-            SCHED_DESCR,
+            Some(SCHED_DESCR),
             bpf_prog_type::SCHED_CLS,
             &["classifier"],
         ),
-        ptype("sk_skb", SK_SKB_DESCR, bpf_prog_type::SK_SKB, &["sk_skb"]),
+        ptype(
+            "sk_skb",
+            Some(SK_SKB_DESCR),
+            bpf_prog_type::SK_SKB,
+            &["sk_skb"],
+        ),
         ptype(
             "sock_ops",
-            &SOCK_OPS_DESCR,
+            Some(&SOCK_OPS_DESCR),
             bpf_prog_type::SOCK_OPS,
             &["sockops"],
         ),
         ptype(
             "tracepoint",
-            &TRACEPOINT_DESCR,
+            Some(&TRACEPOINT_DESCR),
             bpf_prog_type::TRACEPOINT,
             &["tracepoint/"],
         ),
@@ -264,31 +269,31 @@ fn linux_program_types() -> Vec<EbpfProgramType> {
         // value.
         ptype(
             "sk_msg",
-            &SK_MSG_MD,
+            Some(&SK_MSG_MD),
             bpf_prog_type::SOCKET_FILTER,
             &["sk_msg"],
         ),
         ptype(
             "raw_tracepoint",
-            &TRACEPOINT_DESCR,
+            Some(&TRACEPOINT_DESCR),
             bpf_prog_type::SOCKET_FILTER,
             &["raw_tracepoint/"],
         ),
         ptype(
             "cgroup_sock_addr",
-            &CGROUP_SOCK_DESCR,
+            Some(&CGROUP_SOCK_DESCR),
             bpf_prog_type::SOCKET_FILTER,
             &[],
         ),
         ptype(
             "lwt_seg6local",
-            LWT_XMIT_DESCR,
+            Some(LWT_XMIT_DESCR),
             bpf_prog_type::SOCKET_FILTER,
             &["lwt_seg6local"],
         ),
         ptype(
             "lirc_mode2",
-            &SK_MSG_MD,
+            Some(&SK_MSG_MD),
             bpf_prog_type::SOCKET_FILTER,
             &["lirc_mode2"],
         ),
@@ -552,59 +557,25 @@ fn create_map_linux(
 
     #[cfg(target_os = "linux")]
     {
-        // Real Linux BPF map creation via syscall.
-        const SYS_BPF: i64 = 321;
-        const BPF_MAP_CREATE: i32 = 0;
         const BPF_MAP_TYPE_HASH: u32 = 1;
         const BPF_F_NO_PREALLOC: u32 = 1;
 
-        #[repr(C)]
-        struct BpfAttrMapCreate {
-            map_type: u32,
-            key_size: u32,
-            value_size: u32,
-            max_entries: u32,
-            map_flags: u32,
-        }
-
-        // SAFETY: FFI declaration for the platform syscall entry point.
-        unsafe extern "C" {
-            fn syscall(num: i64, ...) -> i64;
-        }
-
-        let mut attr = BpfAttrMapCreate {
-            map_type: map_type_id,
-            key_size,
-            value_size,
-            max_entries: 20,
-            map_flags: if map_type_id == BPF_MAP_TYPE_HASH {
-                BPF_F_NO_PREALLOC
-            } else {
-                0
-            },
+        let map_flags = if map_type_id == BPF_MAP_TYPE_HASH {
+            BPF_F_NO_PREALLOC
+        } else {
+            0
         };
 
-        // SAFETY: We pass a valid pointer to a properly initialized repr(C) attr
-        // buffer and its exact size, matching the expected kernel syscall ABI.
-        let map_fd = unsafe {
-            syscall(
-                SYS_BPF,
-                BPF_MAP_CREATE,
-                &mut attr as *mut BpfAttrMapCreate,
-                std::mem::size_of::<BpfAttrMapCreate>(),
-            )
-        };
-
-        if map_fd < 0 {
-            let err = std::io::Error::last_os_error();
-            eprintln!("Failed to create map, {}", err);
-            eprintln!(
-                "Map:\n map_type = {}\n key_size = {}\n value_size = {}\n max_entries = {}\n map_flags = {}",
-                attr.map_type, attr.key_size, attr.value_size, attr.max_entries, attr.map_flags
-            );
-            std::process::exit(2);
+        match super::sys_bpf::bpf_map_create(map_type_id, key_size, value_size, 20, map_flags) {
+            Ok(fd) => fd,
+            Err(err) => {
+                eprintln!("Failed to create map, {err}");
+                eprintln!(
+                    "Map:\n map_type = {map_type_id}\n key_size = {key_size}\n value_size = {value_size}\n max_entries = 20\n map_flags = {map_flags}"
+                );
+                std::process::exit(2);
+            }
         }
-        map_fd as i32
     }
 
     #[cfg(not(target_os = "linux"))]
@@ -658,7 +629,7 @@ pub struct LinuxPlatform {
     pub conformance_groups: u32,
     /// Context descriptor for the current program type.
     /// Set from `ProgramInfo.program_type.context_descriptor` before analysis.
-    pub context_descriptor: *const EbpfContextDescriptor,
+    pub context_descriptor: Option<&'static EbpfContextDescriptor>,
 }
 
 impl LinuxPlatform {
@@ -667,7 +638,7 @@ impl LinuxPlatform {
             map_descriptors: Vec::new(),
             cache: std::collections::BTreeMap::new(),
             conformance_groups: conformance_groups::DEFAULT_GROUPS | conformance_groups::PACKET,
-            context_descriptor: std::ptr::null(),
+            context_descriptor: None,
         }
     }
 }
@@ -688,8 +659,7 @@ impl EbpfPlatform for LinuxPlatform {
     }
 
     fn is_helper_usable(&self, n: i32) -> bool {
-        // SAFETY: `context_descriptor` is selected from static descriptor tables.
-        unsafe { spec_prototypes::is_helper_usable_ptr(n, self.context_descriptor) }
+        spec_prototypes::is_helper_usable(n, self.context_descriptor)
     }
 
     fn map_record_size(&self) -> usize {

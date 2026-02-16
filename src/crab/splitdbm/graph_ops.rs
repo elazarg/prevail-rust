@@ -7,7 +7,7 @@
 
 use super::graph::Graph;
 use super::graph_views::{GraphRev, ReadableGraph};
-use super::heap::Heap;
+use super::heap::WeightHeap;
 use super::{VertId, VertSet, Weight};
 
 use crate::arith::number::Number;
@@ -30,21 +30,6 @@ const V_STABLE: i32 = 1;
 const BF_NONE: i32 = 0;
 const BF_SCC: i32 = 1;
 const BF_QUEUED: i32 = 2;
-
-/// Create a min-heap ordered by `dists[x] < dists[y]`.
-///
-/// SAFETY: The returned heap's comparison function reads from `dists` via a raw
-/// pointer. The caller must ensure `dists` lives for the lifetime of the heap
-/// and that elements inserted are valid indices.  This mirrors the C++ pattern
-/// where the heap captures `const std::vector<Weight>& dists`.
-fn make_heap(dists: &[Weight]) -> Heap<impl Fn(i32, i32) -> bool + use<>> {
-    let ptr = dists.as_ptr();
-    Heap::new(move |x: i32, y: i32| {
-        // SAFETY: x/y are heap-managed vertex indices, and ptr points to dists
-        // storage that outlives the heap comparator closure.
-        unsafe { *ptr.add(x as usize) < *ptr.add(y as usize) }
-    })
-}
 
 // =============================================================================
 // Scratch space
@@ -370,13 +355,10 @@ fn dijkstra_init(
 }
 
 /// Build a min-heap from init_succs and the current scratch dists.
-fn dijkstra_build_heap(
-    scratch: &ScratchSpace,
-    init_succs: &[(VertId, Weight)],
-) -> Heap<impl Fn(i32, i32) -> bool + use<>> {
-    let mut heap = make_heap(&scratch.dists);
+fn dijkstra_build_heap(scratch: &ScratchSpace, init_succs: &[(VertId, Weight)]) -> WeightHeap {
+    let mut heap = WeightHeap::new();
     for (dest, _) in init_succs {
-        heap.insert(*dest as i32);
+        heap.insert(*dest as i32, &scratch.dists);
     }
     heap
 }
@@ -402,7 +384,7 @@ fn chrome_dijkstra(
     let mut heap = dijkstra_build_heap(scratch, &init_succs);
 
     while !heap.empty() {
-        let es = heap.remove_min();
+        let es = heap.remove_min(&scratch.dists);
         let es_cost = scratch.dists[es as usize] + p(es as VertId);
         {
             let es_val = es_cost - p(src);
@@ -430,9 +412,9 @@ fn chrome_dijkstra(
                     scratch.edge_marks[sz * es as usize + ed as usize] as i32;
 
                 if heap.in_heap(ed as i32) {
-                    heap.decrease(ed as i32);
+                    heap.decrease(ed as i32, &scratch.dists);
                 } else {
-                    heap.insert(ed as i32);
+                    heap.insert(ed as i32, &scratch.dists);
                 }
             } else if v == scratch.dists[ed as usize] {
                 scratch.vert_marks[ed as usize] |=
@@ -465,7 +447,7 @@ fn dijkstra_recover(
     let mut heap = dijkstra_build_heap(scratch, &init_succs);
 
     while !heap.empty() {
-        let es = heap.remove_min();
+        let es = heap.remove_min(&scratch.dists);
         let es_cost = scratch.dists[es as usize] + p(es as VertId);
         {
             let es_val = es_cost - p(src);
@@ -493,9 +475,9 @@ fn dijkstra_recover(
                 scratch.vert_marks[e.vert as usize] = es_mark;
 
                 if heap.in_heap(e.vert as i32) {
-                    heap.decrease(e.vert as i32);
+                    heap.decrease(e.vert as i32, &scratch.dists);
                 } else {
-                    heap.insert(e.vert as i32);
+                    heap.insert(e.vert as i32, &scratch.dists);
                 }
             } else if v == scratch.dists[e.vert as usize] {
                 scratch.vert_marks[e.vert as usize] |= es_mark;
@@ -783,11 +765,11 @@ pub fn repair_potential(
         return true;
     }
 
-    let mut heap = make_heap(&scratch.dists);
-    heap.insert(jj as i32);
+    let mut heap = WeightHeap::new();
+    heap.insert(jj as i32, &scratch.dists);
 
     while !heap.empty() {
-        let es = heap.remove_min();
+        let es = heap.remove_min(&scratch.dists);
         scratch.dists_alt[es as usize] = p[es as usize] + scratch.dists[es as usize];
 
         for e in g.e_succs(es as VertId) {
@@ -797,9 +779,9 @@ pub fn repair_potential(
                 if gnext_ed < scratch.dists[e.vert as usize] {
                     scratch.dists[e.vert as usize] = gnext_ed;
                     if heap.in_heap(e.vert as i32) {
-                        heap.decrease(e.vert as i32);
+                        heap.decrease(e.vert as i32, &scratch.dists);
                     } else {
-                        heap.insert(e.vert as i32);
+                        heap.insert(e.vert as i32, &scratch.dists);
                     }
                 }
             }

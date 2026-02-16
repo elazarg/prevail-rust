@@ -3,28 +3,29 @@
 //
 // Based on MiniSat heap (MIT License, MiniSat authors).
 
-//! Min-heap with decrease-key support.
+//! Min-heap with decrease-key support, keyed by an external weight array.
 //!
 //! Ported from the MiniSat heap used in the C++ splitdbm module.
-//! Elements are non-negative `i32` values; the comparison function `F`
-//! determines ordering (return `true` when the first argument should
-//! appear *before* the second in the heap).
+//! Elements are non-negative `i32` vertex ids; ordering is determined by
+//! an external `&[Weight]` slice passed to each method that needs comparison.
 
-/// A min-heap of `i32` values with O(log n) insert, remove-min, and
-/// decrease-key.
-pub struct Heap<F> {
-    /// Comparison: `lt(a, b)` returns true if `a` should come before `b`.
-    lt: F,
+use super::Weight;
+
+/// A min-heap of vertex ids ordered by an external `&[Weight]` slice.
+///
+/// The caller passes `&[Weight]` to each method that needs comparison,
+/// avoiding the aliasing-unsafe pattern where a raw pointer to `dists` was
+/// captured while `dists` was mutated between heap operations.
+pub struct WeightHeap {
     /// The heap array.
     heap: Vec<i32>,
     /// Maps element value → index in `heap` (–1 if not present).
     indices: Vec<i32>,
 }
 
-impl<F: Fn(i32, i32) -> bool> Heap<F> {
-    pub fn new(lt: F) -> Self {
-        Heap {
-            lt,
+impl WeightHeap {
+    pub fn new() -> Self {
+        WeightHeap {
             heap: Vec::new(),
             indices: Vec::new(),
         }
@@ -44,9 +45,9 @@ impl<F: Fn(i32, i32) -> bool> Heap<F> {
 
     // ----- percolation -----
 
-    fn percolate_up(&mut self, mut i: usize) {
+    fn percolate_up(&mut self, mut i: usize, dists: &[Weight]) {
         let x = self.heap[i];
-        while i != 0 && (self.lt)(x, self.heap[Self::parent(i)]) {
+        while i != 0 && dists[x as usize] < dists[self.heap[Self::parent(i)] as usize] {
             let v = self.heap[Self::parent(i)];
             self.heap[i] = v;
             self.indices[v as usize] = i as i32;
@@ -56,19 +57,20 @@ impl<F: Fn(i32, i32) -> bool> Heap<F> {
         self.indices[x as usize] = i as i32;
     }
 
-    fn percolate_down(&mut self) {
+    fn percolate_down(&mut self, dists: &[Weight]) {
         let mut i: usize = 0;
         let x = self.heap[i];
         let size = self.heap.len();
         while Self::left(i) < size {
             let ri = Self::right(i);
             let li = Self::left(i);
-            let child = if ri < size && (self.lt)(self.heap[ri], self.heap[li]) {
-                ri
-            } else {
-                li
-            };
-            if !(self.lt)(self.heap[child], x) {
+            let child =
+                if ri < size && dists[self.heap[ri] as usize] < dists[self.heap[li] as usize] {
+                    ri
+                } else {
+                    li
+                };
+            if dists[self.heap[child] as usize] >= dists[x as usize] {
                 break;
             }
             let v = self.heap[child];
@@ -82,7 +84,7 @@ impl<F: Fn(i32, i32) -> bool> Heap<F> {
 
     // ----- public API -----
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn size(&self) -> usize {
         self.heap.len()
     }
@@ -95,20 +97,19 @@ impl<F: Fn(i32, i32) -> bool> Heap<F> {
         (n as usize) < self.indices.len() && self.indices[n as usize] >= 0
     }
 
-    pub fn insert(&mut self, n: i32) {
+    pub fn insert(&mut self, n: i32, dists: &[Weight]) {
         debug_assert!(n >= 0);
         let nu = n as usize;
         if nu >= self.indices.len() {
             self.indices.resize(nu + 1, -1);
         }
         debug_assert!(!self.in_heap(n));
-
         self.indices[nu] = self.heap.len() as i32;
         self.heap.push(n);
-        self.percolate_up(self.indices[nu] as usize);
+        self.percolate_up(self.indices[nu] as usize, dists);
     }
 
-    pub fn remove_min(&mut self) -> i32 {
+    pub fn remove_min(&mut self, dists: &[Weight]) -> i32 {
         let x = self.heap[0];
         let last = *self.heap.last().unwrap();
         self.heap[0] = last;
@@ -116,86 +117,81 @@ impl<F: Fn(i32, i32) -> bool> Heap<F> {
         self.indices[x as usize] = -1;
         self.heap.pop();
         if self.heap.len() > 1 {
-            self.percolate_down();
+            self.percolate_down(dists);
         }
         x
     }
 
-    pub fn decrease(&mut self, n: i32) {
+    pub fn decrease(&mut self, n: i32, dists: &[Weight]) {
         debug_assert!(self.in_heap(n));
         let idx = self.indices[n as usize] as usize;
-        self.percolate_up(idx);
+        self.percolate_up(idx, dists);
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
-    use std::rc::Rc;
-
     use super::*;
+    use crate::arith::number::Number;
 
     #[test]
     fn test_insert_remove_ordering() {
-        let mut h = Heap::new(|a: i32, b: i32| a < b);
-        h.insert(5);
-        h.insert(3);
-        h.insert(7);
-        h.insert(1);
-        h.insert(9);
+        let dists: Vec<Weight> = vec![
+            Number::from(9),
+            Number::from(1),
+            Number::from(5),
+            Number::from(7),
+            Number::from(3),
+        ];
+        let mut h = WeightHeap::new();
+        // Insert vertices 0..5, ordered by dists
+        for i in 0..5 {
+            h.insert(i, &dists);
+        }
 
         assert_eq!(h.size(), 5);
-        assert_eq!(h.remove_min(), 1);
-        assert_eq!(h.remove_min(), 3);
-        assert_eq!(h.remove_min(), 5);
-        assert_eq!(h.remove_min(), 7);
-        assert_eq!(h.remove_min(), 9);
+        assert_eq!(h.remove_min(&dists), 1); // dists[1] = 1
+        assert_eq!(h.remove_min(&dists), 4); // dists[4] = 3
+        assert_eq!(h.remove_min(&dists), 2); // dists[2] = 5
+        assert_eq!(h.remove_min(&dists), 3); // dists[3] = 7
+        assert_eq!(h.remove_min(&dists), 0); // dists[0] = 9
         assert!(h.empty());
     }
 
     #[test]
     fn test_decrease_key() {
-        // Use an external array to define custom ordering.
-        let keys = [
-            Cell::new(10),
-            Cell::new(20),
-            Cell::new(30),
-            Cell::new(40),
-            Cell::new(50),
-        ];
-        let keys = Rc::new(keys);
-        let keys_cmp = Rc::clone(&keys);
-        let mut h = Heap::new(move |a: i32, b: i32| {
-            keys_cmp[a as usize].get() < keys_cmp[b as usize].get()
-        });
-        h.insert(0); // key 10
-        h.insert(1); // key 20
-        h.insert(2); // key 30
+        let mut dists: Vec<Weight> = vec![Number::from(10), Number::from(20), Number::from(30)];
+        let mut h = WeightHeap::new();
+        h.insert(0, &dists); // key 10
+        h.insert(1, &dists); // key 20
+        h.insert(2, &dists); // key 30
 
         // Decrease key for element 2 to 5 (now smallest)
-        keys[2].set(5);
-        h.decrease(2);
-        assert_eq!(h.remove_min(), 2);
-        assert_eq!(h.remove_min(), 0);
-        assert_eq!(h.remove_min(), 1);
+        dists[2] = Number::from(5);
+        h.decrease(2, &dists);
+        assert_eq!(h.remove_min(&dists), 2);
+        assert_eq!(h.remove_min(&dists), 0);
+        assert_eq!(h.remove_min(&dists), 1);
     }
 
     #[test]
     fn test_in_heap() {
-        let mut h = Heap::new(|a: i32, b: i32| a < b);
+        let dists: Vec<Weight> = vec![Number::from(42)];
+        let mut h = WeightHeap::new();
         assert!(!h.in_heap(0));
-        h.insert(0);
+        h.insert(0, &dists);
         assert!(h.in_heap(0));
-        h.remove_min();
+        h.remove_min(&dists);
         assert!(!h.in_heap(0));
     }
 
     #[test]
     fn test_single_element() {
-        let mut h = Heap::new(|a: i32, b: i32| a < b);
-        h.insert(42);
+        let dists: Vec<Weight> = vec![Number::from(42)];
+        let mut h = WeightHeap::new();
+        h.insert(0, &dists);
         assert_eq!(h.size(), 1);
-        assert_eq!(h.remove_min(), 42);
+        assert_eq!(h.remove_min(&dists), 0);
         assert!(h.empty());
     }
 }

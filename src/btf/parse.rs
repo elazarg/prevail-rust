@@ -97,7 +97,7 @@ fn swap_line_info(i: &mut BpfLineInfo) {
 
 /// Read a `T` from `data` at `offset`, advancing `offset` past it.
 /// Optionally byte-swap the result.
-fn read_struct<T: Copy>(
+fn read_struct<T: zerocopy::FromBytes + Copy>(
     data: &[u8],
     offset: &mut usize,
     min: usize,
@@ -109,8 +109,8 @@ fn read_struct<T: Copy>(
             "Invalid .BTF section — offset out of range".into(),
         ));
     }
-    // SAFETY: Bounds are validated above, and T: Copy is plain-data read.
-    let val = unsafe { std::ptr::read_unaligned(data.as_ptr().add(*offset) as *const T) };
+    let val = T::read_from_bytes(&data[*offset..*offset + size])
+        .map_err(|_| UnmarshalError("Invalid .BTF section — read error".into()))?;
     *offset += size;
     Ok(val)
 }

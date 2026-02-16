@@ -4,3 +4,5 @@
 pub mod linux_platform;
 pub mod spec_prototypes;
 pub(crate) mod spec_type_descriptors;
+#[cfg(target_os = "linux")]
+pub(crate) mod sys_bpf;
