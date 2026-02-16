@@ -451,9 +451,9 @@ pub fn parse_instruction_with_platform(
         }
     }
 
-    // <wreg> = map_by_idx <imm>
+    // <wreg> = map_by_idx(<imm>)
     {
-        let pat = format!("^{}{}map_by_idx\\s+{}$", WREG, ASSIGN, IMM);
+        let pat = format!(r"^{}{}map_by_idx\({}\)$", WREG, ASSIGN, IMM);
         if let Some(m) = Regex::new(&pat).unwrap().captures(text) {
             return Instruction::LoadPseudo(LoadPseudo {
                 dst: reg(m.get(1).unwrap().as_str()),
@@ -466,10 +466,10 @@ pub fn parse_instruction_with_platform(
         }
     }
 
-    // <wreg> = map_val_by_idx <imm> + <imm>
+    // <wreg> = mva(map_by_idx(<imm>)) + <imm>
     {
         let pat = format!(
-            "^{}{}map_val_by_idx\\s+{}\\s*\\+\\s*{}$",
+            r"^{}{}mva\(map_by_idx\({}\)\)\s*\+\s*{}$",
             WREG, ASSIGN, IMM, IMM
         );
         if let Some(m) = Regex::new(&pat).unwrap().captures(text) {

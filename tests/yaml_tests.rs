@@ -459,6 +459,14 @@ fn run_test_case(test_case: &TestCase, platform: &TestPlatform) -> Option<Failur
     };
     let info = ProgramInfo {
         program_type,
+        map_descriptors: vec![EbpfMapDescriptor {
+            original_fd: 0,
+            map_type: 0,
+            key_size: 4,
+            value_size: 4,
+            max_entries: 4,
+            inner_map_fd: 0,
+        }],
         ..ProgramInfo::default()
     };
 

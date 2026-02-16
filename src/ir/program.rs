@@ -15,7 +15,8 @@ use crate::cfg::wto::Wto;
 use crate::ir::assertions::get_assertions;
 use crate::ir::syntax::{
     ArgSingleKind, Assertion, Assume, BinOp, Condition, ConditionOp, IncrementLoopCounter,
-    Instruction, InstructionSeq, Mem, PseudoAddressKind, Un, UnOp, Undefined,
+    Instruction, InstructionSeq, LoadMapAddress, LoadMapFd, LoadPseudo, Mem, PseudoAddressKind, Un,
+    UnOp, Undefined,
 };
 use crate::ir::unmarshal::conformance_groups;
 use crate::spec::config::EbpfVerifierOptions;
@@ -126,7 +127,7 @@ impl Program {
         validate_instruction_feature_support(inst_seq, info)?;
 
         // Convert the instruction sequence to a deterministic control-flow graph.
-        let mut builder = instruction_seq_to_cfg(inst_seq, options.cfg_opts.must_have_exit)?;
+        let mut builder = instruction_seq_to_cfg(inst_seq, info, options.cfg_opts.must_have_exit)?;
 
         // Detect loops using Weak Topological Ordering (WTO) and insert counters
         // at loop entry points. WTO provides a hierarchical decomposition of the
@@ -426,12 +427,14 @@ fn check_instruction_feature_support(
         if !supports(groups, conformance_groups::BASE64) {
             return Some(reject_capability("requires conformance group base64"));
         }
-        return Some(match lp.addr.kind {
-            PseudoAddressKind::VariableAddr => reject_not_impl("lddw variable_addr pseudo"),
-            PseudoAddressKind::CodeAddr => reject_not_impl("lddw code_addr pseudo"),
-            PseudoAddressKind::MapByIdx => reject_not_impl("lddw map_by_idx pseudo"),
-            PseudoAddressKind::MapValueByIdx => reject_not_impl("lddw map_value_by_idx pseudo"),
-        });
+        match lp.addr.kind {
+            // MAP_BY_IDX and MAP_VALUE_BY_IDX are resolved during CFG construction.
+            PseudoAddressKind::MapByIdx | PseudoAddressKind::MapValueByIdx => {}
+            PseudoAddressKind::VariableAddr => {
+                return Some(reject_not_impl("lddw variable_addr pseudo"));
+            }
+            PseudoAddressKind::CodeAddr => return Some(reject_not_impl("lddw code_addr pseudo")),
+        }
     }
     if (matches!(ins, Instruction::LoadMapFd(_)) || matches!(ins, Instruction::LoadMapAddress(_)))
         && !supports(groups, conformance_groups::BASE64)
@@ -490,6 +493,37 @@ fn validate_instruction_feature_support(
 // instruction_seq_to_cfg
 // ---------------------------------------------------------------------------
 
+/// Resolve a `LoadPseudo` with map-by-index addressing to the concrete
+/// `LoadMapFd` or `LoadMapAddress` instruction.
+fn resolve_map_by_index(
+    pseudo: &LoadPseudo,
+    info: &ProgramInfo,
+) -> Result<Instruction, InvalidControlFlow> {
+    let descriptors = &info.map_descriptors;
+    if pseudo.addr.imm < 0 || (pseudo.addr.imm as usize) >= descriptors.len() {
+        return Err(InvalidControlFlow {
+            message: format!(
+                "invalid map index {} (have {} maps)",
+                pseudo.addr.imm,
+                descriptors.len()
+            ),
+        });
+    }
+    let mapfd = descriptors[pseudo.addr.imm as usize].original_fd;
+    match pseudo.addr.kind {
+        PseudoAddressKind::MapByIdx => Ok(Instruction::LoadMapFd(LoadMapFd {
+            dst: pseudo.dst,
+            mapfd,
+        })),
+        PseudoAddressKind::MapValueByIdx => Ok(Instruction::LoadMapAddress(LoadMapAddress {
+            dst: pseudo.dst,
+            mapfd,
+            offset: pseudo.addr.next_imm,
+        })),
+        _ => panic!("Invalid address kind: {:?}", pseudo.addr.kind),
+    }
+}
+
 /// Convert an instruction sequence to a control-flow graph (CFG).
 ///
 /// This builds the CFG in two passes:
@@ -497,6 +531,7 @@ fn validate_instruction_feature_support(
 /// 2. Inline function macros (`CallLocal` instructions).
 fn instruction_seq_to_cfg(
     insts: &InstructionSeq,
+    info: &ProgramInfo,
     must_have_exit: bool,
 ) -> Result<CfgBuilder, InvalidControlFlow> {
     let mut builder = CfgBuilder::new();
@@ -506,7 +541,12 @@ fn instruction_seq_to_cfg(
         if matches!(inst, Instruction::Undefined(_)) {
             continue;
         }
-        builder.insert(label.clone(), inst.clone());
+        // Resolve LoadPseudo MAP_BY_IDX/MAP_VALUE_BY_IDX to concrete instructions.
+        if let Instruction::LoadPseudo(pseudo) = inst {
+            builder.insert(label.clone(), resolve_map_by_index(pseudo, info)?);
+        } else {
+            builder.insert(label.clone(), inst.clone());
+        }
     }
 
     if insts.is_empty() {

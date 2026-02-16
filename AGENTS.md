@@ -69,3 +69,6 @@ upstream parity testing, performance profiling, and upstream sync workflow.
 - After each piece, run focused tests first, then parity checks.
 - If a parity mismatch appears, first suspect stale upstream artifacts and rebuild/sync before changing analyzer logic.
 - When unsure about cut points, port everything from the pinned commit up to current upstream `main`.
+- After updating the `tests/upstream` submodule, run `git submodule update --init --recursive` inside it to sync nested submodules (e.g. `external/libbtf`, `external/bpf_conformance`).
+- When `external/libbtf` is bumped, diff its changes and port any functional changes to `src/btf/`. CI-only or build-system-only libbtf changes can be skipped.
+- When upstream bumps its project version (in `CMakeLists.txt`), update `version` in `Cargo.toml` to match.

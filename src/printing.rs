@@ -340,11 +340,13 @@ impl fmt::Display for LoadPseudo {
                 write!(f, "{} = variable_addr {}", self.dst, self.addr.imm)
             }
             PseudoAddressKind::CodeAddr => write!(f, "{} = code_addr {}", self.dst, self.addr.imm),
-            PseudoAddressKind::MapByIdx => write!(f, "{} = map_by_idx {}", self.dst, self.addr.imm),
+            PseudoAddressKind::MapByIdx => {
+                write!(f, "{} = map_by_idx({})", self.dst, self.addr.imm)
+            }
             PseudoAddressKind::MapValueByIdx => {
                 write!(
                     f,
-                    "{} = map_val_by_idx {} + {}",
+                    "{} = mva(map_by_idx({})) + {}",
                     self.dst, self.addr.imm, self.addr.next_imm
                 )
             }
