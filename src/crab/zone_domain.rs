@@ -164,13 +164,13 @@ impl ZoneDomain {
         }
     }
 
-    fn eval_expression_overflow(&self, e: &LinearExpression, out: &mut Weight) -> bool {
-        *out = Weight::from(*e.constant_term());
+    fn eval_expression(&self, e: &LinearExpression) -> Weight {
+        let mut res = Weight::from(*e.constant_term());
         for (variable, coefficient) in e.variable_terms() {
-            let coef = Weight::from(*coefficient);
-            *out += (self.pot_value(*variable) - self.core.potential_at_zero()) * coef;
+            res += (self.pot_value(*variable) - self.core.potential_at_zero())
+                * Weight::from(*coefficient);
         }
-        false
+        res
     }
 
     fn compute_residual(
@@ -563,11 +563,7 @@ impl ZoneDomain {
             return;
         }
 
-        let mut e_val = Weight::from(0i64);
-        if self.eval_expression_overflow(e, &mut e_val) {
-            self.havoc(lhs);
-            return;
-        }
+        let e_val = self.eval_expression(e);
 
         let mut diffs_from: Vec<(VertId, Weight)> = Vec::new();
         let mut diffs_to: Vec<(VertId, Weight)> = Vec::new();

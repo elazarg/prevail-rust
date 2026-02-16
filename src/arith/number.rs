@@ -65,7 +65,7 @@ impl Number {
             return *self;
         }
         let w = width as u32;
-        debug_assert!(w <= 127, "zero_extend: width too large");
+        debug_assert!(w <= 64, "zero_extend: width > 64");
 
         let mask = (1i128 << w) - 1;
         Number(self.0 & mask)
