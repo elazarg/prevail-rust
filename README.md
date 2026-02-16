@@ -58,9 +58,6 @@ in mind when bumping upstream:
 - **Thread-local globals replaced by explicit context passing.**
   Rust uses `DomainContext` (thread-safe and explicit) instead of C++
   `thread_local_*` globals.
-- **`Number` uses `i128` implementation detail.**
-  Rust arithmetic uses `i128` for verifier numeric values rather than the
-  previous BigInt-style representation.
 - **BTF is ported and used natively in Rust.**
   Rust has its own `src/btf/` implementation used by ELF loading and CO-RE
   relocation handling; it is not a direct runtime link to upstream `libbtf`.
