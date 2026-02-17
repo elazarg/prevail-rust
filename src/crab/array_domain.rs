@@ -192,8 +192,8 @@ pub type ArrayMap = HashMap<DataKind, OffsetMap>;
 // ============================================================================
 
 /// A single OffsetMap operation, recorded for trace-driven benchmarks.
-#[cfg(feature = "map-trace")]
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug)]
+#[cfg_attr(feature = "map-trace", derive(serde::Serialize, serde::Deserialize))]
 pub enum OffsetMapOp {
     MkCell { offset: u64, size: u32 },
     GetCell { offset: u64, size: u32 },
@@ -203,8 +203,8 @@ pub enum OffsetMapOp {
 }
 
 /// A sequence of OffsetMap operations for one OffsetMap instance.
-#[cfg(feature = "map-trace")]
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug)]
+#[cfg_attr(feature = "map-trace", derive(serde::Serialize, serde::Deserialize))]
 pub struct OffsetMapTrace {
     pub ops: Vec<OffsetMapOp>,
 }

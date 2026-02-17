@@ -445,6 +445,10 @@ impl<'a, P: Program> FwdFixpointIterator<'a, P> {
             }
         }
 
+        // Flush OffsetMap traces before returning (map-trace feature).
+        #[cfg(feature = "map-trace")]
+        crate::crab::array_domain::flush_array_map_traces(&analyzer.array_map);
+
         // Compute exit value from exit post-invariant without cloning.
         let exit_value = if let Some(pair) = analyzer.result.invariants.get(&Label::exit()) {
             pair.post.get_r0(analyzer.registry)
