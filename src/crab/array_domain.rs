@@ -229,21 +229,56 @@ pub fn flush_array_map_traces(_array_map: &ArrayMap) {}
 // Helper functions
 // ============================================================================
 
-fn as_numbytes_range(index: &Interval, width: &Interval) -> (i32, i32) {
-    let combined = index.join(&(index + width));
-    let lb = combined
+/// Extract clamped (lb, ub) bounds from an interval, clamped to [0, EBPF_TOTAL_STACK_SIZE].
+fn clamped_bounds(interval: &Interval) -> (i32, i32) {
+    let lb = interval
         .lb()
         .number()
         .and_then(|n| n.to_i64())
         .map(|n| n.max(0) as i32)
         .unwrap_or(0);
-    let ub = combined
+    let ub = interval
         .ub()
         .number()
         .and_then(|n| n.to_i64())
         .map(|n| n.min(EBPF_TOTAL_STACK_SIZE as i64) as i32)
         .unwrap_or(EBPF_TOTAL_STACK_SIZE);
     (lb, ub)
+}
+
+fn as_numbytes_range(index: &Interval, width: &Interval) -> (i32, i32) {
+    clamped_bounds(&index.join(&(index + width)))
+}
+
+/// Find overlapping cells and remove them from the offset map.
+/// Returns (offset, size) if both index and width are constant singletons.
+fn find_and_remove_overlap(
+    kind: DataKind,
+    ii: &Interval,
+    elem_size: &Interval,
+    array_map: &mut ArrayMap,
+) -> (Option<(u64, u32)>, Vec<Cell>) {
+    let mut res: Option<(u64, u32)> = None;
+    let cells;
+
+    if let Some(n) = ii.singleton()
+        && let Some(nb) = elem_size.singleton()
+    {
+        let offset = n.to_i64().unwrap_or(0) as u64;
+        let size = nb.to_i64().unwrap_or(0) as u32;
+        let om = array_map.entry(kind).or_default();
+        cells = om.get_overlap_cells(offset, size);
+        res = Some((offset, size));
+    } else {
+        let range = ii.join(&(ii + elem_size));
+        let om = array_map.entry(kind).or_default();
+        cells = om.get_overlap_cells_symbolic(&range);
+    }
+    if !cells.is_empty() {
+        let om = array_map.entry(kind).or_default();
+        om.remove_cells(&cells);
+    }
+    (res, cells)
 }
 
 /// Kill overlapping cells and return the (offset, size) if constant.
@@ -255,38 +290,31 @@ fn kill_and_find_var(
     registry: &mut VariableRegistry,
     array_map: &mut ArrayMap,
 ) -> Option<(u64, u32)> {
-    let mut res: Option<(u64, u32)> = None;
-    let mut cells = Vec::new();
-
-    if let Some(n) = ii.singleton()
-        && let Some(nb) = elem_size.singleton()
-    {
-        let offset = n.to_i64().unwrap_or(0) as u64;
-        let size = nb.to_i64().unwrap_or(0) as u32;
-        let om = array_map.entry(kind).or_default();
-        cells = om.get_overlap_cells(offset, size);
-        res = Some((offset, size));
-    }
-    if res.is_none() {
-        let range = ii.join(&(ii + elem_size));
-        let om = array_map.entry(kind).or_default();
-        cells = om.get_overlap_cells_symbolic(&range);
-    }
-    if !cells.is_empty() {
-        for c in &cells {
-            let scalar = c.get_scalar(kind, registry);
-            inv.havoc(scalar);
-            // Forget signed and unsigned values together.
-            if kind == DataKind::Svalues {
-                let uv = c.get_scalar(DataKind::Uvalues, registry);
-                inv.havoc(uv);
-            } else if kind == DataKind::Uvalues {
-                let sv = c.get_scalar(DataKind::Svalues, registry);
-                inv.havoc(sv);
-            }
+    let (res, cells) = find_and_remove_overlap(kind, ii, elem_size, array_map);
+    for c in &cells {
+        let scalar = c.get_scalar(kind, registry);
+        inv.havoc(scalar);
+        // Forget signed and unsigned values together.
+        if kind == DataKind::Svalues {
+            inv.havoc(c.get_scalar(DataKind::Uvalues, registry));
+        } else if kind == DataKind::Uvalues {
+            inv.havoc(c.get_scalar(DataKind::Svalues, registry));
         }
-        let om = array_map.entry(kind).or_default();
-        om.remove_cells(&cells);
+    }
+    res
+}
+
+/// Kill overlapping type cells and return the (offset, size) if constant.
+fn kill_and_find_type_var(
+    inv: &mut TypeDomain,
+    ii: &Interval,
+    elem_size: &Interval,
+    registry: &mut VariableRegistry,
+    array_map: &mut ArrayMap,
+) -> Option<(u64, u32)> {
+    let (res, cells) = find_and_remove_overlap(DataKind::Types, ii, elem_size, array_map);
+    for c in &cells {
+        inv.havoc_type_var(c.get_scalar(DataKind::Types, registry));
     }
     res
 }
@@ -400,19 +428,7 @@ impl ArrayDomain {
 
     /// Check whether all bytes in [lb, ub] are numerical.
     pub fn all_num_lb_ub(&self, lb: &Interval, ub: &Interval) -> bool {
-        let combined = lb.join(ub);
-        let min_lb = combined
-            .lb()
-            .number()
-            .and_then(|n| n.to_i64())
-            .map(|n| n.max(0) as i32)
-            .unwrap_or(0);
-        let max_ub = combined
-            .ub()
-            .number()
-            .and_then(|n| n.to_i64())
-            .map(|n| n.min(EBPF_TOTAL_STACK_SIZE as i64) as i32)
-            .unwrap_or(EBPF_TOTAL_STACK_SIZE);
+        let (min_lb, max_ub) = clamped_bounds(&lb.join(ub));
         if min_lb > max_ub {
             return false;
         }
@@ -560,55 +576,31 @@ impl ArrayDomain {
             result_buffer[i as usize] = byte?;
         }
         // Convert bytes back to a number using the program's endianness
+        let bytes = &result_buffer[..size as usize];
         let val = match size {
-            1 => result_buffer[0] as u64,
+            1 => bytes[0] as u64,
             2 => {
-                if big_endian {
-                    u16::from_be_bytes([result_buffer[0], result_buffer[1]]) as u64
+                let b: [u8; 2] = bytes.try_into().unwrap();
+                (if big_endian {
+                    u16::from_be_bytes(b)
                 } else {
-                    u16::from_le_bytes([result_buffer[0], result_buffer[1]]) as u64
-                }
+                    u16::from_le_bytes(b)
+                }) as u64
             }
             4 => {
-                if big_endian {
-                    u32::from_be_bytes([
-                        result_buffer[0],
-                        result_buffer[1],
-                        result_buffer[2],
-                        result_buffer[3],
-                    ]) as u64
+                let b: [u8; 4] = bytes.try_into().unwrap();
+                (if big_endian {
+                    u32::from_be_bytes(b)
                 } else {
-                    u32::from_le_bytes([
-                        result_buffer[0],
-                        result_buffer[1],
-                        result_buffer[2],
-                        result_buffer[3],
-                    ]) as u64
-                }
+                    u32::from_le_bytes(b)
+                }) as u64
             }
             8 => {
+                let b: [u8; 8] = bytes.try_into().unwrap();
                 if big_endian {
-                    u64::from_be_bytes([
-                        result_buffer[0],
-                        result_buffer[1],
-                        result_buffer[2],
-                        result_buffer[3],
-                        result_buffer[4],
-                        result_buffer[5],
-                        result_buffer[6],
-                        result_buffer[7],
-                    ])
+                    u64::from_be_bytes(b)
                 } else {
-                    u64::from_le_bytes([
-                        result_buffer[0],
-                        result_buffer[1],
-                        result_buffer[2],
-                        result_buffer[3],
-                        result_buffer[4],
-                        result_buffer[5],
-                        result_buffer[6],
-                        result_buffer[7],
-                    ])
+                    u64::from_le_bytes(b)
                 }
             }
             _ => return None,
@@ -709,20 +701,11 @@ impl ArrayDomain {
         width: &Interval,
         is_num: bool,
         registry: &mut VariableRegistry,
-        big_endian: bool,
+        _big_endian: bool,
         array_map: &mut ArrayMap,
     ) -> Option<Variable> {
         let kind = DataKind::Types;
-        if let Some((offset, size)) = split_and_find_var(
-            self,
-            &mut inv.inv,
-            kind,
-            idx,
-            width,
-            registry,
-            big_endian,
-            array_map,
-        ) {
+        if let Some((offset, size)) = kill_and_find_type_var(inv, idx, width, registry, array_map) {
             if is_num {
                 self.num_bytes.reset(offset as usize, size as i32);
             } else {
@@ -762,20 +745,12 @@ impl ArrayDomain {
         idx: &Interval,
         elem_size: &Interval,
         registry: &mut VariableRegistry,
-        big_endian: bool,
+        _big_endian: bool,
         array_map: &mut ArrayMap,
     ) {
-        let kind = DataKind::Types;
-        if let Some((offset, size)) = split_and_find_var(
-            self,
-            &mut inv.inv,
-            kind,
-            idx,
-            elem_size,
-            registry,
-            big_endian,
-            array_map,
-        ) {
+        if let Some((offset, size)) =
+            kill_and_find_type_var(inv, idx, elem_size, registry, array_map)
+        {
             self.num_bytes.havoc(offset as usize, size as i32);
         }
     }

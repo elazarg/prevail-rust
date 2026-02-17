@@ -4,6 +4,7 @@
 pub(crate) mod add_bottom;
 pub mod array_domain;
 pub(crate) mod bitset_domain;
+pub(crate) mod dsu;
 pub(crate) mod ebpf_checker;
 pub mod ebpf_domain;
 pub(crate) mod ebpf_transformer;

@@ -96,7 +96,7 @@ impl<'a> EbpfChecker<'a> {
     }
 
     fn require_type(&mut self, cst: LinearConstraint, msg: &str) -> Result<(), VerificationError> {
-        if !self.dom.rcp.types.inv.entail(&cst, self.registry) {
+        if !self.dom.rcp.types.entail_constraint(&cst) {
             self.throw_fail(msg)
         } else {
             Ok(())
@@ -236,7 +236,6 @@ impl<'a> EbpfChecker<'a> {
             // Same type. If both are numbers, that's okay. Otherwise:
             let mut non_number_types = self.dom.rcp.types.clone();
             non_number_types
-                .inv
                 .add_constraint(&type_is_not_number_cst(&s.r2, self.registry), self.registry);
 
             // We must check that they belong to a singleton region:
@@ -321,7 +320,7 @@ impl<'a> EbpfChecker<'a> {
             let v = if s.is_signed { r.svalue } else { r.uvalue };
 
             let intv = self.dom.rcp.values.eval_interval_var(v, self.registry);
-            if intv.contains(&crate::arith::number::Number::from(0)) {
+            if intv.contains(&Number::from(0)) {
                 return self.throw_fail("Possible division by zero");
             }
         }
@@ -531,7 +530,7 @@ impl<'a> EbpfChecker<'a> {
                                     let key_value = self.registry.cell_var(
                                         DataKind::Svalues,
                                         offset_val,
-                                        &Number::from(std::mem::size_of::<u32>() as i64),
+                                        &Number::from(size_of::<u32>() as i64),
                                     );
                                     if let Some(max_entries) = self
                                         .dom

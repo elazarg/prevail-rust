@@ -417,7 +417,7 @@ impl TypeToNumDomain {
     /// Add a type constraint and set values to bottom if types become bottom.
     pub fn assume_type(&mut self, cst: &LinearConstraint, registry: &mut VariableRegistry) {
         self.types.add_constraint(cst, registry);
-        if self.types.inv.is_bottom() {
+        if self.types.is_bottom() {
             self.values.set_to_bottom();
         }
     }

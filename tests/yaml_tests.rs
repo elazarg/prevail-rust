@@ -667,6 +667,7 @@ yaml_test_suite!(yaml_loop);
 yaml_test_suite!(yaml_map);
 yaml_test_suite!(yaml_movsx);
 yaml_test_suite!(yaml_muldiv);
+yaml_test_suite!(yaml_nonconvex);
 yaml_test_suite!(yaml_observe);
 yaml_test_suite!(yaml_packet);
 yaml_test_suite!(yaml_parse);
