@@ -452,23 +452,26 @@ parity_test!(
     "s[3908...3909].svalue=2660"
 );
 
+// Updated after upstream PR #1008 fixed the backward scan bug in
+// get_overlap_cells. The old properties were artifacts of the buggy
+// early-termination; the new C++ no longer produces them.
 parity_test!(
     parity_bpf_overlay_from_overlay,
     "bpf_cilium_test/bpf_overlay.o",
     "from-overlay",
-    "s[3984...3991].svalue=0"
+    "s[3984...3991].svalue=1"
 );
 
 parity_test!(
     parity_build_bpf2bpf_test,
     "build/bpf2bpf.o",
     "test",
-    "s[3064...3071].stack_numeric_size=8"
+    "s[4012...4015].svalue=7"
 );
 
 parity_test!(
     parity_linux_xdp_tx_iptunnel,
     "linux/xdp_tx_iptunnel_kern.o",
     "xdp_tx_iptunnel",
-    "s[4084...4087].svalue=0"
+    "s[4064...4071].svalue=0"
 );
