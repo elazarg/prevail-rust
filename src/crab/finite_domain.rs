@@ -111,6 +111,21 @@ fn assume_bit_cst_interval(
     }]
 }
 
+/// Build a strict or non-strict comparison constraint.
+fn strict_cmp(
+    strict: bool,
+    is_lt: bool,
+    left: LinearExpression,
+    right: LinearExpression,
+) -> LinearConstraint {
+    match (is_lt, strict) {
+        (true, true) => lt(left, right),
+        (true, false) => leq(left, right),
+        (false, true) => gt(left, right),
+        (false, false) => geq(left, right),
+    }
+}
+
 fn dump_unsigned_trace(
     op: ConditionOp,
     is64: bool,
@@ -444,40 +459,25 @@ impl FiniteDomain {
         right_interval: &Interval,
     ) -> Vec<LinearConstraint> {
         if right_interval.is_included_in(&Interval::negative(64)) {
-            let cmp_s = if strict {
-                lt(left_svalue.into(), right_svalue.clone())
-            } else {
-                leq(left_svalue.into(), right_svalue.clone())
-            };
-            let cmp_u = if strict {
-                lt(left_uvalue.into(), right_uvalue.clone())
-            } else {
-                leq(left_uvalue.into(), right_uvalue.clone())
-            };
+            let cmp_s = strict_cmp(strict, true, left_svalue.into(), right_svalue.clone());
+            let cmp_u = strict_cmp(strict, true, left_uvalue.into(), right_uvalue.clone());
             return vec![cmp_s, geq(left_uvalue.into(), 0i64.into()), cmp_u];
         }
         let combined = left_interval_negative | left_interval_positive;
         if combined.is_included_in(&Interval::nonnegative(64))
             && right_interval.is_included_in(&Interval::nonnegative(64))
         {
-            let cmp_s = if strict {
-                lt(left_svalue.into(), right_svalue.clone())
-            } else {
-                leq(left_svalue.into(), right_svalue.clone())
-            };
-            let cmp_u = if strict {
-                lt(left_uvalue.into(), right_uvalue.clone())
-            } else {
-                leq(left_uvalue.into(), right_uvalue.clone())
-            };
+            let cmp_s = strict_cmp(strict, true, left_svalue.into(), right_svalue.clone());
+            let cmp_u = strict_cmp(strict, true, left_uvalue.into(), right_uvalue.clone());
             return vec![cmp_s, geq(left_uvalue.into(), 0i64.into()), cmp_u];
         }
         // Interval can only be represented as an svalue.
-        vec![if strict {
-            lt(left_svalue.into(), right_svalue.clone())
-        } else {
-            leq(left_svalue.into(), right_svalue.clone())
-        }]
+        vec![strict_cmp(
+            strict,
+            true,
+            left_svalue.into(),
+            right_svalue.clone(),
+        )]
     }
 
     fn assume_signed_32bit_lt(
@@ -493,16 +493,8 @@ impl FiniteDomain {
         reg: &VariableRegistry,
     ) -> Vec<LinearConstraint> {
         if right_interval.is_included_in(&Interval::negative(32)) {
-            let cmp_u = if strict {
-                lt(left_uvalue.into(), right_uvalue.clone())
-            } else {
-                leq(left_uvalue.into(), right_uvalue.clone())
-            };
-            let cmp_s = if strict {
-                lt(left_svalue.into(), right_svalue.clone())
-            } else {
-                leq(left_svalue.into(), right_svalue.clone())
-            };
+            let cmp_u = strict_cmp(strict, true, left_uvalue.into(), right_uvalue.clone());
+            let cmp_s = strict_cmp(strict, true, left_svalue.into(), right_svalue.clone());
             return vec![
                 gt(left_uvalue.into(), Number::from(i32::MAX as i64).into()),
                 cmp_u,
@@ -518,16 +510,8 @@ impl FiniteDomain {
                 .ub()
                 .number()
                 .unwrap();
-            let cmp_s = if strict {
-                lt(left_svalue.into(), right_svalue.clone())
-            } else {
-                leq(left_svalue.into(), right_svalue.clone())
-            };
-            let cmp_u = if strict {
-                lt(left_uvalue.into(), right_uvalue.clone())
-            } else {
-                leq(left_uvalue.into(), right_uvalue.clone())
-            };
+            let cmp_s = strict_cmp(strict, true, left_svalue.into(), right_svalue.clone());
+            let cmp_u = strict_cmp(strict, true, left_uvalue.into(), right_uvalue.clone());
             return vec![
                 geq(left_svalue.into(), 0i64.into()),
                 cmp_s,
@@ -545,11 +529,12 @@ impl FiniteDomain {
                 .eval_interval_expr(right_svalue, reg)
                 .is_included_in(&Interval::signed_int(32))
         {
-            return vec![if strict {
-                lt(left_svalue.into(), right_svalue.clone())
-            } else {
-                leq(left_svalue.into(), right_svalue.clone())
-            }];
+            return vec![strict_cmp(
+                strict,
+                true,
+                left_svalue.into(),
+                right_svalue.clone(),
+            )];
         }
         vec![]
     }
@@ -571,16 +556,8 @@ impl FiniteDomain {
                 .ub()
                 .number()
                 .unwrap();
-            let cmp_s = if strict {
-                gt(left_svalue.into(), right_svalue.clone())
-            } else {
-                geq(left_svalue.into(), right_svalue.clone())
-            };
-            let cmp_u = if strict {
-                gt(left_uvalue.into(), right_uvalue.clone())
-            } else {
-                geq(left_uvalue.into(), right_uvalue.clone())
-            };
+            let cmp_s = strict_cmp(strict, false, left_svalue.into(), right_svalue.clone());
+            let cmp_u = strict_cmp(strict, false, left_uvalue.into(), right_uvalue.clone());
             return vec![
                 geq(left_svalue.into(), 0i64.into()),
                 cmp_s,
@@ -594,27 +571,20 @@ impl FiniteDomain {
         if (left_interval_negative | left_interval_positive).is_included_in(&Interval::negative(64))
             && right_interval.is_included_in(&Interval::negative(64))
         {
-            let cmp_u = if strict {
-                gt(left_uvalue.into(), right_uvalue.clone())
-            } else {
-                geq(left_uvalue.into(), right_uvalue.clone())
-            };
-            let cmp_s = if strict {
-                gt(left_svalue.into(), right_svalue.clone())
-            } else {
-                geq(left_svalue.into(), right_svalue.clone())
-            };
+            let cmp_u = strict_cmp(strict, false, left_uvalue.into(), right_uvalue.clone());
+            let cmp_s = strict_cmp(strict, false, left_svalue.into(), right_svalue.clone());
             return vec![
                 gt(left_uvalue.into(), Number::from(i64::MAX as u64).into()),
                 cmp_u,
                 cmp_s,
             ];
         }
-        vec![if strict {
-            gt(left_svalue.into(), right_svalue.clone())
-        } else {
-            geq(left_svalue.into(), right_svalue.clone())
-        }]
+        vec![strict_cmp(
+            strict,
+            false,
+            left_svalue.into(),
+            right_svalue.clone(),
+        )]
     }
 
     fn assume_signed_32bit_gt(
@@ -635,16 +605,8 @@ impl FiniteDomain {
                 .ub()
                 .number()
                 .unwrap();
-            let cmp_s = if strict {
-                gt(left_svalue.into(), right_svalue.clone())
-            } else {
-                geq(left_svalue.into(), right_svalue.clone())
-            };
-            let cmp_u = if strict {
-                gt(left_uvalue.into(), right_uvalue.clone())
-            } else {
-                geq(left_uvalue.into(), right_uvalue.clone())
-            };
+            let cmp_s = strict_cmp(strict, false, left_svalue.into(), right_svalue.clone());
+            let cmp_u = strict_cmp(strict, false, left_uvalue.into(), right_uvalue.clone());
             return vec![
                 geq(left_svalue.into(), 0i64.into()),
                 cmp_s,
@@ -658,16 +620,8 @@ impl FiniteDomain {
         if (left_interval_negative | left_interval_positive).is_included_in(&Interval::negative(32))
             && right_interval.is_included_in(&Interval::negative(32))
         {
-            let cmp_u = if strict {
-                gt(left_uvalue.into(), right_uvalue.clone())
-            } else {
-                geq(left_uvalue.into(), right_uvalue.clone())
-            };
-            let cmp_s = if strict {
-                gt(left_svalue.into(), right_svalue.clone())
-            } else {
-                geq(left_svalue.into(), right_svalue.clone())
-            };
+            let cmp_u = strict_cmp(strict, false, left_uvalue.into(), right_uvalue.clone());
+            let cmp_s = strict_cmp(strict, false, left_svalue.into(), right_svalue.clone());
             return vec![
                 geq(
                     left_uvalue.into(),
@@ -684,11 +638,12 @@ impl FiniteDomain {
                 .eval_interval_expr(right_svalue, reg)
                 .is_included_in(&Interval::signed_int(32))
         {
-            return vec![if strict {
-                gt(left_svalue.into(), right_svalue.clone())
-            } else {
-                geq(left_svalue.into(), right_svalue.clone())
-            }];
+            return vec![strict_cmp(
+                strict,
+                false,
+                left_svalue.into(),
+                right_svalue.clone(),
+            )];
         }
         vec![]
     }
@@ -808,11 +763,7 @@ impl FiniteDomain {
         if right_interval.is_included_in(&Interval::nonnegative(64))
             && (if strict { &lllb >= rub } else { &lllb > rub })
         {
-            let cmp_u = if strict {
-                lt(left_uvalue.into(), right_uvalue.clone())
-            } else {
-                leq(left_uvalue.into(), right_uvalue.clone())
-            };
+            let cmp_u = strict_cmp(strict, true, left_uvalue.into(), right_uvalue.clone());
             let mut result = vec![geq(left_uvalue.into(), 0i64.into()), cmp_u];
             if let Some(lsubn) = self.eval_interval(left_svalue, reg).ub().number() {
                 result.push(leq(left_uvalue.into(), (*lsubn).into()));
@@ -826,11 +777,7 @@ impl FiniteDomain {
             && (if strict { &lhlb >= rub } else { &lhlb > rub })
         {
             let rub_n = *rub.number().unwrap();
-            let cmp_u = if strict {
-                lt(left_uvalue.into(), rub_n.into())
-            } else {
-                leq(left_uvalue.into(), rub_n.into())
-            };
+            let cmp_u = strict_cmp(strict, true, left_uvalue.into(), rub_n.into());
             let mut result = vec![geq(left_uvalue.into(), 0i64.into()), cmp_u];
             if let Some(lsubn) = self.eval_interval(left_svalue, reg).ub().number() {
                 result.push(leq(left_uvalue.into(), (*lsubn).into()));
@@ -845,16 +792,8 @@ impl FiniteDomain {
                 .ub()
                 .number()
                 .unwrap();
-            let cmp_u = if strict {
-                lt(left_uvalue.into(), right_uvalue.clone())
-            } else {
-                leq(left_uvalue.into(), right_uvalue.clone())
-            };
-            let cmp_s = if strict {
-                lt(left_svalue.into(), right_svalue.clone())
-            } else {
-                leq(left_svalue.into(), right_svalue.clone())
-            };
+            let cmp_u = strict_cmp(strict, true, left_uvalue.into(), right_uvalue.clone());
+            let cmp_s = strict_cmp(strict, true, left_svalue.into(), right_svalue.clone());
             return vec![
                 geq(left_uvalue.into(), 0i64.into()),
                 cmp_u,
@@ -867,34 +806,23 @@ impl FiniteDomain {
         if left_interval_low.is_bottom()
             && right_interval.is_included_in(&Interval::unsigned_high(64))
         {
-            let cmp_u = if strict {
-                lt(left_uvalue.into(), right_uvalue.clone())
-            } else {
-                leq(left_uvalue.into(), right_uvalue.clone())
-            };
-            let cmp_s = if strict {
-                lt(left_svalue.into(), right_svalue.clone())
-            } else {
-                leq(left_svalue.into(), right_svalue.clone())
-            };
+            let cmp_u = strict_cmp(strict, true, left_uvalue.into(), right_uvalue.clone());
+            let cmp_s = strict_cmp(strict, true, left_svalue.into(), right_svalue.clone());
             return vec![geq(left_uvalue.into(), 0i64.into()), cmp_u, cmp_s];
         }
 
         if (left_interval_low | left_interval_high) == Interval::unsigned_int(64) {
-            return vec![if strict {
-                lt(left_uvalue.into(), right_uvalue.clone())
-            } else {
-                leq(left_uvalue.into(), right_uvalue.clone())
-            }];
+            return vec![strict_cmp(
+                strict,
+                true,
+                left_uvalue.into(),
+                right_uvalue.clone(),
+            )];
         }
 
         vec![
             geq(left_uvalue.into(), 0i64.into()),
-            if strict {
-                lt(left_uvalue.into(), right_uvalue.clone())
-            } else {
-                leq(left_uvalue.into(), right_uvalue.clone())
-            },
+            strict_cmp(strict, true, left_uvalue.into(), right_uvalue.clone()),
         ]
     }
 
@@ -907,16 +835,8 @@ impl FiniteDomain {
         right_uvalue: &LinearExpression,
         reg: &VariableRegistry,
     ) -> Vec<LinearConstraint> {
-        let cmp_u = if strict {
-            lt(left_uvalue.into(), right_uvalue.clone())
-        } else {
-            leq(left_uvalue.into(), right_uvalue.clone())
-        };
-        let cmp_s = if strict {
-            lt(left_svalue.into(), right_svalue.clone())
-        } else {
-            leq(left_svalue.into(), right_svalue.clone())
-        };
+        let cmp_u = strict_cmp(strict, true, left_uvalue.into(), right_uvalue.clone());
+        let cmp_s = strict_cmp(strict, true, left_svalue.into(), right_svalue.clone());
 
         if self
             .eval_interval(left_uvalue, reg)
@@ -966,11 +886,7 @@ impl FiniteDomain {
         if right_interval.is_included_in(&Interval::nonnegative(64))
             && (if strict { &llub <= rlb } else { &llub < rlb })
         {
-            let cmp_u = if strict {
-                gt(left_uvalue.into(), right_uvalue.clone())
-            } else {
-                geq(left_uvalue.into(), right_uvalue.clone())
-            };
+            let cmp_u = strict_cmp(strict, false, left_uvalue.into(), right_uvalue.clone());
             let lhlb_n = *lhlb.number().unwrap();
             let lhlb_cst = if lhlb_n == Number::from(u64::MAX) {
                 expr_eq(left_uvalue.into(), lhlb_n.into())
@@ -980,41 +896,21 @@ impl FiniteDomain {
             return vec![cmp_u, lhlb_cst, lt(left_svalue.into(), 0i64.into())];
         }
         if right_interval.is_included_in(&Interval::unsigned_high(64)) {
-            let cmp_u = if strict {
-                gt(left_uvalue.into(), right_uvalue.clone())
-            } else {
-                geq(left_uvalue.into(), right_uvalue.clone())
-            };
-            let cmp_s = if strict {
-                gt(left_svalue.into(), right_svalue.clone())
-            } else {
-                geq(left_svalue.into(), right_svalue.clone())
-            };
+            let cmp_u = strict_cmp(strict, false, left_uvalue.into(), right_uvalue.clone());
+            let cmp_s = strict_cmp(strict, false, left_svalue.into(), right_svalue.clone());
             return vec![geq(left_uvalue.into(), 0i64.into()), cmp_u, cmp_s];
         }
         if (left_interval_low | left_interval_high).is_included_in(&Interval::nonnegative(64))
             && right_interval.is_included_in(&Interval::nonnegative(64))
         {
-            let cmp_u = if strict {
-                gt(left_uvalue.into(), right_uvalue.clone())
-            } else {
-                geq(left_uvalue.into(), right_uvalue.clone())
-            };
-            let cmp_s = if strict {
-                gt(left_svalue.into(), right_svalue.clone())
-            } else {
-                geq(left_svalue.into(), right_svalue.clone())
-            };
+            let cmp_u = strict_cmp(strict, false, left_uvalue.into(), right_uvalue.clone());
+            let cmp_s = strict_cmp(strict, false, left_svalue.into(), right_svalue.clone());
             return vec![geq(left_uvalue.into(), 0i64.into()), cmp_u, cmp_s];
         }
 
         vec![
             geq(left_uvalue.into(), 0i64.into()),
-            if strict {
-                gt(left_uvalue.into(), right_uvalue.clone())
-            } else {
-                geq(left_uvalue.into(), right_uvalue.clone())
-            },
+            strict_cmp(strict, false, left_uvalue.into(), right_uvalue.clone()),
         ]
     }
 
@@ -1031,16 +927,8 @@ impl FiniteDomain {
         reg: &VariableRegistry,
     ) -> Vec<LinearConstraint> {
         if right_interval.is_included_in(&Interval::unsigned_high(32)) {
-            let cmp_u = if strict {
-                gt(left_uvalue.into(), right_uvalue.clone())
-            } else {
-                geq(left_uvalue.into(), right_uvalue.clone())
-            };
-            let cmp_s = if strict {
-                gt(left_svalue.into(), right_svalue.clone())
-            } else {
-                geq(left_svalue.into(), right_svalue.clone())
-            };
+            let cmp_u = strict_cmp(strict, false, left_uvalue.into(), right_uvalue.clone());
+            let cmp_s = strict_cmp(strict, false, left_svalue.into(), right_svalue.clone());
             return vec![geq(left_uvalue.into(), 0i64.into()), cmp_u, cmp_s];
         }
         if self
@@ -1052,11 +940,7 @@ impl FiniteDomain {
         {
             return vec![
                 geq(left_uvalue.into(), 0i64.into()),
-                if strict {
-                    gt(left_uvalue.into(), right_uvalue.clone())
-                } else {
-                    geq(left_uvalue.into(), right_uvalue.clone())
-                },
+                strict_cmp(strict, false, left_uvalue.into(), right_uvalue.clone()),
             ];
         }
         vec![]
@@ -1131,11 +1015,12 @@ impl FiniteDomain {
         }
         if is_lt && (if strict { lub < rlb } else { lub <= rlb }) {
             if is64 {
-                let out = vec![if strict {
-                    lt(left_uvalue.into(), right_uvalue.clone())
-                } else {
-                    leq(left_uvalue.into(), right_uvalue.clone())
-                }];
+                let out = vec![strict_cmp(
+                    strict,
+                    true,
+                    left_uvalue.into(),
+                    right_uvalue.clone(),
+                )];
                 dump_unsigned_trace(
                     op,
                     is64,
@@ -1164,11 +1049,12 @@ impl FiniteDomain {
             return out;
         } else if !is_lt && (if strict { llb > rub } else { llb >= rub }) {
             if is64 {
-                let out = vec![if strict {
-                    gt(left_uvalue.into(), right_uvalue.clone())
-                } else {
-                    geq(left_uvalue.into(), right_uvalue.clone())
-                }];
+                let out = vec![strict_cmp(
+                    strict,
+                    false,
+                    left_uvalue.into(),
+                    right_uvalue.clone(),
+                )];
                 dump_unsigned_trace(
                     op,
                     is64,
