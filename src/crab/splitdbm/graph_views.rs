@@ -22,7 +22,7 @@ use super::{VertId, Weight};
 /// The performance cost is negligible compared to the graph algorithm work.
 pub trait ReadableGraph {
     fn size(&self) -> usize;
-    #[expect(dead_code)]
+    #[allow(dead_code)]
     fn elem(&self, s: VertId, d: VertId) -> bool;
     fn edge_val(&self, s: VertId, d: VertId) -> Weight;
     fn lookup(&self, s: VertId, d: VertId) -> Option<Weight>;

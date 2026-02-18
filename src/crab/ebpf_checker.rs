@@ -525,8 +525,10 @@ impl<'a> EbpfChecker<'a> {
                                 lb_s, ub_s
                             ),
                         )?;
-                    } else if self.ctx.options.strict && fd_type.is_some() {
-                        let map_type = self.ctx.platform.get_map_type(fd_type.unwrap());
+                    } else if self.ctx.options.strict
+                        && let Some(fd) = fd_type
+                    {
+                        let map_type = self.ctx.platform.get_map_type(fd);
                         if map_type.is_array {
                             let key_ptr = access_reg.stack_offset;
                             let offset_num = self

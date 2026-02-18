@@ -24,7 +24,7 @@ pub enum DataKind {
     StackNumericSizes,
 }
 
-#[expect(dead_code)]
+#[allow(dead_code)]
 pub const KIND_MIN: DataKind = DataKind::Types;
 pub const KIND_VALUE_MIN: DataKind = DataKind::Svalues;
 pub const KIND_MAX: DataKind = DataKind::StackNumericSizes;
@@ -340,7 +340,7 @@ pub const TS_POINTER: TypeSet = TypeSet::of(&[TCtx, TPacket, TStack, TShared]);
 /// `{ctx, packet, stack}` — pointer types with a unique region
 pub const TS_SINGLETON_PTR: TypeSet = TypeSet::of(&[TCtx, TPacket, TStack]);
 /// `{packet, stack, shared}` — memory-accessible pointer types
-#[expect(dead_code)]
+#[allow(dead_code)]
 pub const TS_MEM: TypeSet = TypeSet::of(&[TPacket, TStack, TShared]);
 
 // ============================================================================

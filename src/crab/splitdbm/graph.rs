@@ -236,7 +236,7 @@ impl AdaptGraph {
 
     // ----- clearing -----
 
-    #[expect(dead_code)]
+    #[allow(dead_code)]
     pub fn clear_edges(&mut self) {
         self.ws.clear();
         for v in 0..self.is_free.len() {
@@ -248,7 +248,7 @@ impl AdaptGraph {
         self.edge_count = 0;
     }
 
-    #[expect(dead_code)]
+    #[allow(dead_code)]
     pub fn clear(&mut self) {
         self.ws.clear();
         self.succs.clear();

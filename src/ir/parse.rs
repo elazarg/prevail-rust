@@ -656,8 +656,8 @@ pub fn parse_instruction_with_platform(
         );
         if let Some(m) = Regex::new(&pat).unwrap().captures(text) {
             let label_str = m.get(5).unwrap().as_str().to_string();
-            let cond = if m.get(1).is_some() {
-                let left_str = m.get(1).unwrap().as_str();
+            let cond = if let Some(m1) = m.get(1) {
+                let left_str = m1.as_str();
                 Some(Condition {
                     op: cmpops[m.get(2).unwrap().as_str()],
                     left: reg(left_str),

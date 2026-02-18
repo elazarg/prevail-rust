@@ -289,7 +289,7 @@ impl SplitDBM {
             Side::Left => {
                 let edge_weight = -bound_value;
                 let w = self.g.lookup(v, 0);
-                if w.is_none() || edge_weight >= *w.unwrap() {
+                if w.is_none_or(|w| edge_weight >= *w) {
                     return true;
                 }
                 self.g.set_edge(v, edge_weight, 0);
@@ -312,7 +312,7 @@ impl SplitDBM {
             }
             Side::Right => {
                 let w = self.g.lookup(0, v);
-                if w.is_none() || *bound_value >= *w.unwrap() {
+                if w.is_none_or(|w| *bound_value >= *w) {
                     return true;
                 }
                 self.g.set_edge(0, *bound_value, v);

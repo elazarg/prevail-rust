@@ -91,7 +91,7 @@ type MapOffsets = BTreeMap<String, usize>;
 
 enum MapResolution {
     /// Legacy mode — retained for future legacy-record-size path.
-    #[expect(dead_code)]
+    #[allow(dead_code)]
     Legacy(usize),
     /// Name-based lookup from map/section name to descriptor index.
     Named(MapOffsets),
@@ -1203,7 +1203,7 @@ impl<'a> ProgramReader<'a> {
 // ── CO-RE relocation application ─────────────────────────────────────
 
 /// CO-RE relocation kinds (from linux/bpf.h).
-#[expect(dead_code)]
+#[allow(dead_code)]
 mod core_relo_kind {
     pub const FIELD_BYTE_OFFSET: u32 = 0;
     pub const FIELD_BYTE_SIZE: u32 = 1;
