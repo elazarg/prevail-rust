@@ -339,16 +339,15 @@ impl TypeDomain {
             let mut first_id = None;
             for &v in members {
                 let id = result.ensure_var(v);
-                result.class_types[id] = ts;
                 if let Some(fid) = first_id {
-                    let new_rep = result.dsu.union(fid, id);
-                    result.class_types[new_rep] = ts;
+                    result.dsu.union(fid, id);
                 } else {
                     first_id = Some(id);
                 }
             }
-            // Maintain singleton-merging invariant in result
+            // Set the TypeSet on the representative (after all unifications).
             if let Some(fid) = first_id {
+                result.class_types[result.dsu.find(fid)] = ts;
                 result.merge_if_singleton(fid);
             }
         }
