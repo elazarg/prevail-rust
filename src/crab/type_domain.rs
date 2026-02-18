@@ -29,7 +29,7 @@ pub fn reg_type(reg: &Reg, registry: &mut VariableRegistry) -> Variable {
 // ============================================================================
 
 /// Number of sentinel DSU elements (one per `TypeEncoding`).
-const NUM_SENTINELS: usize = 8;
+const NUM_SENTINELS: usize = NUM_TYPE_ENCODINGS;
 
 /// Type abstract domain based on disjoint-set with `TypeSet` annotations.
 ///
@@ -128,6 +128,8 @@ impl TypeDomain {
             }
             self.id_to_var[id] = Some(v);
             self.class_types.push(TypeSet::all());
+            debug_assert_eq!(self.class_types.len(), self.dsu.len());
+            debug_assert_eq!(self.id_to_var.len(), self.dsu.len());
             id
         }
     }
@@ -169,6 +171,8 @@ impl TypeDomain {
         }
         self.id_to_var[new_id] = Some(v);
         self.class_types.push(TypeSet::all());
+        debug_assert_eq!(self.class_types.len(), self.dsu.len());
+        debug_assert_eq!(self.id_to_var.len(), self.dsu.len());
     }
 
     /// Restrict the TypeSet of a variable's class to a mask.
@@ -276,13 +280,15 @@ impl TypeDomain {
 
         // Build fresh partition: variables with same (key_A, key_B) → same class.
         //
-        // Key insight: variables with the same singleton TypeSet in an operand are
-        // semantically equal (they must all hold the same type). We use the singleton
-        // value as a canonical key for such variables, which allows the join to detect
-        // implicit equalities that the DSU doesn't track explicitly. This matches the
-        // precision of the zone domain, which tracks pairwise difference constraints.
+        // With the singleton-merging invariant, all variables sharing a singleton
+        // TypeSet in an operand already share the same DSU rep (the sentinel).
+        // So raw DSU reps partition correctly without a special singleton key.
         //
-        // For non-singleton TypeSets, the DSU representative is used as the key.
+        // Variables absent from an operand are unconstrained (top). They must get
+        // unique keys so they are never falsely grouped with each other: two
+        // variables both absent from A but sharing a class in B must NOT be unified
+        // in the result (A doesn't know they're equal). Unique keys start at
+        // `dsu.len()`, which is always > any valid rep, so no collisions.
 
         // Collect all active variables from both operands.
         let mut all_vars: Vec<Variable> = Vec::new();
@@ -295,13 +301,26 @@ impl TypeDomain {
             }
         }
 
-        // With the singleton-merging invariant, all variables sharing a singleton
-        // TypeSet in an operand already share the same DSU rep (the sentinel).
-        // So raw DSU reps partition correctly without a special singleton key.
-        let mut keys: BTreeMap<(Option<usize>, Option<usize>), Vec<Variable>> = BTreeMap::new();
+        let mut next_unique_a = self.dsu.len();
+        let mut next_unique_b = other.dsu.len();
+        let mut keys: BTreeMap<(usize, usize), Vec<Variable>> = BTreeMap::new();
         for &v in &all_vars {
-            let key_a = self.var_to_id.get(&v).map(|&id| self.dsu.find_const(id));
-            let key_b = other.var_to_id.get(&v).map(|&id| other.dsu.find_const(id));
+            let key_a = match self.var_to_id.get(&v) {
+                Some(&id) => self.dsu.find_const(id),
+                None => {
+                    let k = next_unique_a;
+                    next_unique_a += 1;
+                    k
+                }
+            };
+            let key_b = match other.var_to_id.get(&v) {
+                Some(&id) => other.dsu.find_const(id),
+                None => {
+                    let k = next_unique_b;
+                    next_unique_b += 1;
+                    k
+                }
+            };
             keys.entry((key_a, key_b)).or_default().push(v);
         }
 
@@ -485,7 +504,8 @@ impl TypeDomain {
                 self.class_types[id] = TypeSet::singleton(te);
                 self.merge_if_singleton(id);
             } else {
-                self.class_types[id] = TypeSet::all();
+                // Not a valid TypeEncoding — same as asserting an impossible type.
+                self.is_bottom = true;
             }
         } else if terms.len() == 1 {
             let (&var, coeff) = terms.iter().next().unwrap();
@@ -1296,5 +1316,26 @@ mod tests {
         assert_eq!(td.get_type(&r1, &mut reg), T_STACK);
         assert_eq!(td.get_type(&r2, &mut reg), T_STACK);
         assert!(td.same_type(&r0, &r2, &mut reg));
+    }
+
+    #[test]
+    fn test_join_absent_vars_not_falsely_unified() {
+        // Regression: if v1 and v2 are both absent from operand A but share a
+        // class in operand B, join must NOT preserve B's equality.
+        let a = TypeDomain::top();
+        let mut b = TypeDomain::top();
+        let mut reg = make_registry();
+        let r0 = Reg { v: 0 };
+        let r1 = Reg { v: 1 };
+
+        // A: neither r0 nor r1 (both are top/absent)
+        // B: r0=r1=ctx
+        b.assign_type_encoding(&r0, T_CTX, &mut reg);
+        b.assign_type_from_reg(&r1, &r0, &mut reg);
+
+        let joined = a.join(&b);
+        // r0 and r1 should NOT be equal in the result:
+        // A doesn't constrain them, so A doesn't know they're equal.
+        assert!(!joined.same_type(&r0, &r1, &mut reg));
     }
 }

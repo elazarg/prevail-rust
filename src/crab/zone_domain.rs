@@ -786,9 +786,6 @@ impl ZoneDomain {
     // ========================================================================
 
     pub fn to_set(&self, registry: &VariableRegistry) -> StringInvariant {
-        use crate::crab::type_encoding::{
-            T_MAX, T_UNINIT, TypeEncoding, int_to_type_encoding, iterate_types, typeset_to_string,
-        };
         use std::collections::BTreeSet;
 
         if self.is_top() {
@@ -915,42 +912,7 @@ impl ZoneDomain {
 
             let name = registry.name(var);
 
-            if registry.is_type(var) {
-                // Clamp to valid type encoding range
-                let type_min = Number::from(T_UNINIT as i64);
-                let type_max = Number::from(T_MAX as i64);
-                let lb = match v_out.lb().number() {
-                    Some(n) => std::cmp::max(*n, type_min),
-                    None => Number::from(T_UNINIT as i64),
-                };
-                let ub = match v_out.ub().number() {
-                    Some(n) => std::cmp::min(*n, type_max),
-                    None => Number::from(T_MAX as i64),
-                };
-                let lb_enc = lb.to_i64().and_then(|v| int_to_type_encoding(v as i32));
-                let ub_enc = ub.to_i64().and_then(|v| int_to_type_encoding(v as i32));
-                match (lb_enc, ub_enc) {
-                    (Some(lb_t), Some(ub_t)) if lb_t == ub_t => {
-                        if registry.is_in_stack(var) && lb_t == TypeEncoding::TNum {
-                            // Skip: stack variables with type=number are implicit
-                            continue;
-                        }
-                        result.insert(format!("{name}={lb_t}"));
-                    }
-                    (Some(lb_t), Some(ub_t)) => {
-                        let types = iterate_types(lb_t, ub_t);
-                        result.insert(format!("{name} in {}", typeset_to_string(&types)));
-                    }
-                    _ => {
-                        // Fallback: just emit the raw interval
-                        if v_out.is_singleton() {
-                            result.insert(format!("{name}={}", v_out.lb()));
-                        } else {
-                            result.insert(format!("{name}={v_out}"));
-                        }
-                    }
-                }
-            } else if registry.is_min_only(var) {
+            if registry.is_min_only(var) {
                 // One-sided: just emit lower bound
                 result.insert(format!("{name}={}", v_out.lb()));
             } else if v_out.is_singleton() {

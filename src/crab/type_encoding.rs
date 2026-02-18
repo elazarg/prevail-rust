@@ -94,19 +94,20 @@ pub fn iterate_kinds(lb: DataKind, ub: DataKind) -> Vec<DataKind> {
 // ============================================================================
 
 /// eBPF type encoding values.
-/// The exact numbers are taken advantage of in EbpfDomain.
-#[repr(i32)]
+///
+/// Values are 0..7, one per bit position in [`TypeSet`].
+#[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[allow(clippy::enum_variant_names)] // T_ prefix matches upstream C++ naming.
 pub enum TypeEncoding {
-    TUninit = -7,
-    TMapPrograms = -6,
-    TMap = -5,
-    TNum = -4,
-    TCtx = -3,
-    TPacket = -2,
-    TStack = -1,
-    TShared = 0,
+    TUninit = 0,
+    TMapPrograms = 1,
+    TMap = 2,
+    TNum = 3,
+    TCtx = 4,
+    TPacket = 5,
+    TStack = 6,
+    TShared = 7,
 }
 
 pub const T_UNINIT: TypeEncoding = TypeEncoding::TUninit;
@@ -118,13 +119,11 @@ pub const T_PACKET: TypeEncoding = TypeEncoding::TPacket;
 pub const T_STACK: TypeEncoding = TypeEncoding::TStack;
 pub const T_SHARED: TypeEncoding = TypeEncoding::TShared;
 
-#[expect(dead_code)]
-pub const T_MIN: TypeEncoding = T_UNINIT;
-#[expect(dead_code)]
-pub const T_MIN_VALID: TypeEncoding = T_MAP_PROGRAMS;
-pub const T_MAX: TypeEncoding = T_SHARED;
+/// Number of `TypeEncoding` variants.
+pub const NUM_TYPE_ENCODINGS: usize = 8;
 
-const ALL_TYPE_ENCODINGS: [TypeEncoding; 8] = [
+#[cfg(test)]
+const ALL_TYPE_ENCODINGS: [TypeEncoding; NUM_TYPE_ENCODINGS] = [
     TypeEncoding::TUninit,
     TypeEncoding::TMapPrograms,
     TypeEncoding::TMap,
@@ -134,15 +133,6 @@ const ALL_TYPE_ENCODINGS: [TypeEncoding; 8] = [
     TypeEncoding::TStack,
     TypeEncoding::TShared,
 ];
-
-/// Iterate over TypeEncoding values in the range [lb, ub] (inclusive).
-pub fn iterate_types(lb: TypeEncoding, ub: TypeEncoding) -> Vec<TypeEncoding> {
-    ALL_TYPE_ENCODINGS
-        .iter()
-        .copied()
-        .filter(|&t| t >= lb && t <= ub)
-        .collect()
-}
 
 impl fmt::Display for TypeEncoding {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -177,14 +167,14 @@ pub fn string_to_type_encoding(s: &str) -> Option<TypeEncoding> {
 /// Convert an integer to a TypeEncoding, if valid.
 pub fn int_to_type_encoding(v: i32) -> Option<TypeEncoding> {
     match v {
-        -7 => Some(TypeEncoding::TUninit),
-        -6 => Some(TypeEncoding::TMapPrograms),
-        -5 => Some(TypeEncoding::TMap),
-        -4 => Some(TypeEncoding::TNum),
-        -3 => Some(TypeEncoding::TCtx),
-        -2 => Some(TypeEncoding::TPacket),
-        -1 => Some(TypeEncoding::TStack),
-        0 => Some(TypeEncoding::TShared),
+        0 => Some(TypeEncoding::TUninit),
+        1 => Some(TypeEncoding::TMapPrograms),
+        2 => Some(TypeEncoding::TMap),
+        3 => Some(TypeEncoding::TNum),
+        4 => Some(TypeEncoding::TCtx),
+        5 => Some(TypeEncoding::TPacket),
+        6 => Some(TypeEncoding::TStack),
+        7 => Some(TypeEncoding::TShared),
         _ => None,
     }
 }
@@ -209,9 +199,7 @@ pub struct TypeSet(u8);
 
 /// Map a `TypeEncoding` to its bit position (0..7).
 pub(crate) const fn type_to_bit(te: TypeEncoding) -> u8 {
-    // TypeEncoding values range from -7 (TUninit) to 0 (TShared).
-    // Adding 7 maps them to 0..7.
-    (te as i32 + 7) as u8
+    te as u8
 }
 
 impl TypeSet {
@@ -219,7 +207,7 @@ impl TypeSet {
     pub const EMPTY: TypeSet = TypeSet(0);
 
     /// The full set (all 8 types).
-    pub const ALL: TypeSet = TypeSet(0xFF);
+    pub const ALL: TypeSet = TypeSet(((1u16 << NUM_TYPE_ENCODINGS) - 1) as u8);
 
     /// Create a singleton set containing exactly one type.
     pub const fn singleton(te: TypeEncoding) -> TypeSet {
@@ -289,7 +277,7 @@ impl TypeSet {
     pub fn as_singleton(self) -> Option<TypeEncoding> {
         if self.is_singleton() {
             let bit = self.0.trailing_zeros() as i32;
-            int_to_type_encoding(bit - 7)
+            int_to_type_encoding(bit)
         } else {
             None
         }
@@ -313,7 +301,7 @@ impl Iterator for TypeSetIter {
         }
         let bit = self.0.trailing_zeros() as i32;
         self.0 &= self.0 - 1; // clear lowest set bit
-        int_to_type_encoding(bit - 7)
+        int_to_type_encoding(bit)
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
