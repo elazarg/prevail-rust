@@ -24,7 +24,7 @@ pub enum DataKind {
     StackNumericSizes,
 }
 
-#[allow(dead_code)]
+#[expect(dead_code)]
 pub const KIND_MIN: DataKind = DataKind::Types;
 pub const KIND_VALUE_MIN: DataKind = DataKind::Svalues;
 pub const KIND_MAX: DataKind = DataKind::StackNumericSizes;
@@ -98,7 +98,7 @@ pub fn iterate_kinds(lb: DataKind, ub: DataKind) -> Vec<DataKind> {
 /// Values are 0..7, one per bit position in [`TypeSet`].
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[allow(clippy::enum_variant_names)] // T_ prefix matches upstream C++ naming.
+#[expect(clippy::enum_variant_names)] // T_ prefix matches upstream C++ naming.
 pub enum TypeEncoding {
     TUninit = 0,
     TMapPrograms = 1,

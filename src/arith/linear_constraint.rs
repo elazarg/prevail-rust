@@ -10,7 +10,7 @@ use super::variable::Variable;
 
 /// The kind of comparison against zero.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-#[allow(clippy::enum_variant_names)] // All variants describe relations to zero.
+#[expect(clippy::enum_variant_names)] // All variants describe relations to zero.
 pub enum ConstraintKind {
     EqualsZero,
     LessThanOrEqualsZero,

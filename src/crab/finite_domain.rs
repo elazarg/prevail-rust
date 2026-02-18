@@ -24,7 +24,7 @@ use crate::ir::syntax::ConditionOp;
 
 /// Signed arithmetic binary operations (div/rem).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(clippy::upper_case_acronyms)] // Matches upstream C++ naming.
+#[expect(clippy::upper_case_acronyms)] // Matches upstream C++ naming.
 pub enum SignedArithBinOp {
     SDIV,
     UDIV,
@@ -34,7 +34,7 @@ pub enum SignedArithBinOp {
 
 /// Bitwise binary operations.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(clippy::upper_case_acronyms)] // Matches upstream C++ naming.
+#[expect(clippy::upper_case_acronyms)] // Matches upstream C++ naming.
 pub enum BitwiseBinOp {
     AND,
     OR,

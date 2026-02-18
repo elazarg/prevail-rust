@@ -22,7 +22,7 @@ use crate::crab::var_registry::VariableRegistry;
 
 /// Arithmetic binary operations (zone-level).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(clippy::upper_case_acronyms)] // Matches upstream C++ naming.
+#[expect(clippy::upper_case_acronyms)] // Matches upstream C++ naming.
 pub enum ArithBinOp {
     ADD,
     SUB,
