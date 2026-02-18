@@ -54,8 +54,6 @@ const ARRAY_RANGE: &str = r"\s*\[([-+]?\d+)\.\.\.\s*([-+]?\d+)\]?\s*";
 const DOT: &str = r"[.]";
 const TYPE_PAT: &str = r"\s*(shared|number|packet|stack|ctx|map_fd|map_fd_programs)\s*";
 const MAP_VAL: &str = r"\s*map_val\((\d+)\)\s*\+\s*(\d+)\s*";
-const MAP_FD: &str = r"\s*map_fd\s+(\d+)\s*";
-const MAP_FD_PROGRAMS: &str = r"\s*map_fd_programs\s+(\d+)\s*";
 
 fn wrapped_label() -> String {
     format!(r"\s*{}\s*", LABEL_PAT)
@@ -399,9 +397,9 @@ pub fn parse_instruction_with_platform(
         }
     }
 
-    // <wreg> = map_fd_programs <fd>
+    // <wreg> = map_fd_programs <fd>  or  <wreg> = map_fd <fd>
     {
-        let pat = format!("^{}{}{}$", WREG, ASSIGN, MAP_FD_PROGRAMS);
+        let pat = format!(r"^{}{}map_fd(?:_programs)?\s+(\d+)\s*$", WREG, ASSIGN);
         if let Some(m) = Regex::new(&pat).unwrap().captures(text) {
             return Instruction::LoadMapFd(LoadMapFd {
                 dst: reg(m.get(1).unwrap().as_str()),
@@ -410,77 +408,48 @@ pub fn parse_instruction_with_platform(
         }
     }
 
-    // <wreg> = map_fd <fd>
+    // Pseudo-load instructions: variable_addr, code_addr, map_by_idx, mva(map_by_idx)
     {
-        let pat = format!("^{}{}{}$", WREG, ASSIGN, MAP_FD);
-        if let Some(m) = Regex::new(&pat).unwrap().captures(text) {
-            return Instruction::LoadMapFd(LoadMapFd {
-                dst: reg(m.get(1).unwrap().as_str()),
-                mapfd: to_int(m.get(2).unwrap().as_str()),
-            });
-        }
-    }
-
-    // <wreg> = variable_addr <imm>
-    {
-        let pat = format!("^{}{}variable_addr\\s+{}$", WREG, ASSIGN, IMM);
-        if let Some(m) = Regex::new(&pat).unwrap().captures(text) {
-            return Instruction::LoadPseudo(LoadPseudo {
-                dst: reg(m.get(1).unwrap().as_str()),
-                addr: PseudoAddress {
-                    kind: PseudoAddressKind::VariableAddr,
-                    imm: to_int(m.get(2).unwrap().as_str()),
-                    next_imm: 0,
-                },
-            });
-        }
-    }
-
-    // <wreg> = code_addr <imm>
-    {
-        let pat = format!("^{}{}code_addr\\s+{}$", WREG, ASSIGN, IMM);
-        if let Some(m) = Regex::new(&pat).unwrap().captures(text) {
-            return Instruction::LoadPseudo(LoadPseudo {
-                dst: reg(m.get(1).unwrap().as_str()),
-                addr: PseudoAddress {
-                    kind: PseudoAddressKind::CodeAddr,
-                    imm: to_int(m.get(2).unwrap().as_str()),
-                    next_imm: 0,
-                },
-            });
-        }
-    }
-
-    // <wreg> = map_by_idx(<imm>)
-    {
-        let pat = format!(r"^{}{}map_by_idx\({}\)$", WREG, ASSIGN, IMM);
-        if let Some(m) = Regex::new(&pat).unwrap().captures(text) {
-            return Instruction::LoadPseudo(LoadPseudo {
-                dst: reg(m.get(1).unwrap().as_str()),
-                addr: PseudoAddress {
-                    kind: PseudoAddressKind::MapByIdx,
-                    imm: to_int(m.get(2).unwrap().as_str()),
-                    next_imm: 0,
-                },
-            });
-        }
-    }
-
-    // <wreg> = mva(map_by_idx(<imm>)) + <imm>
-    {
-        let pat = format!(
-            r"^{}{}mva\(map_by_idx\({}\)\)\s*\+\s*{}$",
-            WREG, ASSIGN, IMM, IMM
-        );
-        if let Some(m) = Regex::new(&pat).unwrap().captures(text) {
-            return Instruction::LoadPseudo(LoadPseudo {
-                dst: reg(m.get(1).unwrap().as_str()),
-                addr: PseudoAddress {
-                    kind: PseudoAddressKind::MapValueByIdx,
-                    imm: to_int(m.get(2).unwrap().as_str()),
-                    next_imm: to_int(m.get(3).unwrap().as_str()),
-                },
-            });
+        let pseudo_patterns: &[(&str, PseudoAddressKind, bool)] = &[
+            (
+                &format!("^{}{}variable_addr\\s+{}$", WREG, ASSIGN, IMM),
+                PseudoAddressKind::VariableAddr,
+                false,
+            ),
+            (
+                &format!("^{}{}code_addr\\s+{}$", WREG, ASSIGN, IMM),
+                PseudoAddressKind::CodeAddr,
+                false,
+            ),
+            (
+                &format!(r"^{}{}map_by_idx\({}\)$", WREG, ASSIGN, IMM),
+                PseudoAddressKind::MapByIdx,
+                false,
+            ),
+            (
+                &format!(
+                    r"^{}{}mva\(map_by_idx\({}\)\)\s*\+\s*{}$",
+                    WREG, ASSIGN, IMM, IMM
+                ),
+                PseudoAddressKind::MapValueByIdx,
+                true,
+            ),
+        ];
+        for &(pat, kind, has_next_imm) in pseudo_patterns {
+            if let Some(m) = Regex::new(pat).unwrap().captures(text) {
+                return Instruction::LoadPseudo(LoadPseudo {
+                    dst: reg(m.get(1).unwrap().as_str()),
+                    addr: PseudoAddress {
+                        kind,
+                        imm: to_int(m.get(2).unwrap().as_str()),
+                        next_imm: if has_next_imm {
+                            to_int(m.get(3).unwrap().as_str())
+                        } else {
+                            0
+                        },
+                    },
+                });
+            }
         }
     }
 
@@ -735,6 +704,18 @@ pub fn parse_program(source: &str) -> InstructionSeq {
 // special_var
 // ---------------------------------------------------------------------------
 
+/// Parse a register variable from regex capture groups: `regkind(kind_str)` + `regnum(reg_str)`.
+fn parse_reg_var(
+    m: &regex::Captures,
+    regnum_group: usize,
+    kind_group: usize,
+    registry: &mut VariableRegistry,
+) -> Variable {
+    let kind_str = m.get(kind_group).unwrap().as_str();
+    let kind = regkind(kind_str).unwrap_or_else(|| panic!("Unknown kind: {}", kind_str));
+    registry.reg(kind, regnum(m.get(regnum_group).unwrap().as_str()))
+}
+
 fn special_var(s: &str, registry: &mut VariableRegistry) -> Variable {
     match s {
         "packet_size" => registry.packet_size(),
@@ -824,18 +805,14 @@ pub fn parse_linear_constraints(
         } else if let Some(m) = re_special_eq_reg_kind.captures(cst_text) {
             // SPECIAL_VAR = REG.KIND
             let d = special_var(m.get(1).unwrap().as_str(), registry);
-            let kind = regkind(m.get(3).unwrap().as_str())
-                .unwrap_or_else(|| panic!("Unknown kind: {}", m.get(3).unwrap().as_str()));
-            let s = registry.reg(kind, regnum(m.get(2).unwrap().as_str()));
+            let s = parse_reg_var(&m, 2, 3, registry);
             value_csts.push(expr_eq(
                 LinearExpression::from(d),
                 LinearExpression::from(s),
             ));
         } else if let Some(m) = re_reg_kind_eq_special.captures(cst_text) {
             // REG.KIND = SPECIAL_VAR
-            let kind = regkind(m.get(2).unwrap().as_str())
-                .unwrap_or_else(|| panic!("Unknown kind: {}", m.get(2).unwrap().as_str()));
-            let d = registry.reg(kind, regnum(m.get(1).unwrap().as_str()));
+            let d = parse_reg_var(&m, 1, 2, registry);
             let s = special_var(m.get(3).unwrap().as_str(), registry);
             value_csts.push(expr_eq(
                 LinearExpression::from(d),
@@ -843,12 +820,8 @@ pub fn parse_linear_constraints(
             ));
         } else if let Some(m) = re_reg_kind_eq_reg_kind.captures(cst_text) {
             // REG.KIND = REG.KIND
-            let kind1 = regkind(m.get(2).unwrap().as_str())
-                .unwrap_or_else(|| panic!("Unknown kind: {}", m.get(2).unwrap().as_str()));
-            let d = registry.reg(kind1, regnum(m.get(1).unwrap().as_str()));
-            let kind2 = regkind(m.get(4).unwrap().as_str())
-                .unwrap_or_else(|| panic!("Unknown kind: {}", m.get(4).unwrap().as_str()));
-            let s = registry.reg(kind2, regnum(m.get(3).unwrap().as_str()));
+            let d = parse_reg_var(&m, 1, 2, registry);
+            let s = parse_reg_var(&m, 3, 4, registry);
             value_csts.push(expr_eq(
                 LinearExpression::from(d),
                 LinearExpression::from(s),
@@ -884,10 +857,8 @@ pub fn parse_linear_constraints(
             type_restrictions.push((d, ts));
         } else if let Some(m) = re_reg_kind_eq_imm.captures(cst_text) {
             // REG.KIND = IMM
-            let kind_str = m.get(2).unwrap().as_str();
-            let kind = regkind(kind_str).unwrap_or_else(|| panic!("Unknown kind: {}", kind_str));
-            let d = registry.reg(kind, regnum(m.get(1).unwrap().as_str()));
-            let value = if kind_str == "uvalue" {
+            let d = parse_reg_var(&m, 1, 2, registry);
+            let value = if m.get(2).unwrap().as_str() == "uvalue" {
                 unsigned_number(m.get(3).unwrap().as_str())
             } else {
                 signed_number(m.get(3).unwrap().as_str())
@@ -898,10 +869,8 @@ pub fn parse_linear_constraints(
             ));
         } else if let Some(m) = re_reg_kind_eq_interval.captures(cst_text) {
             // REG.KIND = [lb, ub]
-            let kind_str = m.get(2).unwrap().as_str();
-            let kind = regkind(kind_str).unwrap_or_else(|| panic!("Unknown kind: {}", kind_str));
-            let d = registry.reg(kind, regnum(m.get(1).unwrap().as_str()));
-            let (lb, ub) = if kind_str == "uvalue" {
+            let d = parse_reg_var(&m, 1, 2, registry);
+            let (lb, ub) = if m.get(2).unwrap().as_str() == "uvalue" {
                 (
                     unsigned_number(m.get(3).unwrap().as_str()),
                     unsigned_number(m.get(4).unwrap().as_str()),
@@ -916,12 +885,8 @@ pub fn parse_linear_constraints(
             value_csts.push(leq(LinearExpression::from(d), LinearExpression::from(ub)));
         } else if let Some(m) = re_reg_kind_diff_leq.captures(cst_text) {
             // REG.KIND - REG.KIND <= IMM
-            let kind1 = regkind(m.get(2).unwrap().as_str())
-                .unwrap_or_else(|| panic!("Unknown kind: {}", m.get(2).unwrap().as_str()));
-            let d = registry.reg(kind1, regnum(m.get(1).unwrap().as_str()));
-            let kind2 = regkind(m.get(4).unwrap().as_str())
-                .unwrap_or_else(|| panic!("Unknown kind: {}", m.get(4).unwrap().as_str()));
-            let s = registry.reg(kind2, regnum(m.get(3).unwrap().as_str()));
+            let d = parse_reg_var(&m, 1, 2, registry);
+            let s = parse_reg_var(&m, 3, 4, registry);
             let diff = signed_number(m.get(5).unwrap().as_str());
             // d - s <= diff
             value_csts.push(leq(
