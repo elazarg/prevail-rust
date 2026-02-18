@@ -181,7 +181,7 @@ fn cpp_fingerprint(path: &Path) -> Result<String> {
     Ok(fnv1a64_hex(&bytes))
 }
 
-fn fnv1a64_hex(bytes: &[u8]) -> String {
+pub fn fnv1a64_hex(bytes: &[u8]) -> String {
     const OFFSET: u64 = 0xcbf29ce484222325;
     const PRIME: u64 = 0x100000001b3;
     let mut hash = OFFSET;

@@ -28,8 +28,7 @@ pub fn run(root: &Path) -> Result<()> {
     let mut skip = 0u32;
     let mut cpp_crash = 0u32;
 
-    let mut o_files = find_o_files(&samples)?;
-    o_files.sort();
+    let o_files = paths::find_o_files(&samples)?;
 
     for elf in &o_files {
         let elf_str = elf.to_string_lossy().to_string();
@@ -174,23 +173,4 @@ fn redact_stats(text: &str) -> String {
         lines[len - 1] = verdict;
     }
     lines.join("\n")
-}
-
-fn find_o_files(dir: &Path) -> Result<Vec<std::path::PathBuf>> {
-    let mut result = Vec::new();
-    walk_o(dir, &mut result)?;
-    Ok(result)
-}
-
-fn walk_o(dir: &Path, out: &mut Vec<std::path::PathBuf>) -> Result<()> {
-    for entry in std::fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.is_dir() {
-            walk_o(&path, out)?;
-        } else if path.extension().is_some_and(|ext| ext == "o") {
-            out.push(path);
-        }
-    }
-    Ok(())
 }

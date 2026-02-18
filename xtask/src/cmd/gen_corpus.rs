@@ -7,6 +7,8 @@ use std::path::Path;
 use anyhow::Result;
 use object::{Object, ObjectSection, read::File as ObjectFile};
 
+use crate::util::paths;
+
 pub fn run(root: &Path) -> Result<()> {
     // 1. fuzz_assembler: extract "-- asm" sections from conformance test data files.
     let asm_dir = root.join("fuzz/corpus/fuzz_assembler");
@@ -45,7 +47,7 @@ pub fn run(root: &Path) -> Result<()> {
     recreate_dir(&e2e_dir)?;
 
     let samples_dir = root.join("tests/upstream/ebpf-samples");
-    let o_files = find_o_files(&samples_dir)?;
+    let o_files = paths::find_o_files(&samples_dir)?;
     for f in &o_files {
         let base = corpus_seed_name(root, f);
         fs::copy(f, elf_dir.join(&base))?;
@@ -148,28 +150,6 @@ fn extract_asm_section(content: &str) -> String {
         }
     }
     result
-}
-
-fn find_o_files(dir: &Path) -> Result<Vec<std::path::PathBuf>> {
-    let mut result = Vec::new();
-    if dir.is_dir() {
-        walk_o(dir, &mut result)?;
-    }
-    result.sort();
-    Ok(result)
-}
-
-fn walk_o(dir: &Path, out: &mut Vec<std::path::PathBuf>) -> Result<()> {
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.is_dir() {
-            walk_o(&path, out)?;
-        } else if path.extension().is_some_and(|ext| ext == "o") {
-            out.push(path);
-        }
-    }
-    Ok(())
 }
 
 fn count_files(dir: &Path) -> usize {

@@ -5,6 +5,29 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
+/// Recursively find all `.o` files under `dir`, sorted.
+pub fn find_o_files(dir: &Path) -> Result<Vec<PathBuf>> {
+    let mut result = Vec::new();
+    if dir.is_dir() {
+        walk_o(dir, &mut result)?;
+    }
+    result.sort();
+    Ok(result)
+}
+
+fn walk_o(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            walk_o(&path, out)?;
+        } else if path.extension().is_some_and(|ext| ext == "o") {
+            out.push(path);
+        }
+    }
+    Ok(())
+}
+
 /// Return the repository root (the directory containing `Cargo.toml` in the workspace root).
 pub fn repo_root() -> Result<PathBuf> {
     let output = std::process::Command::new("git")
