@@ -768,7 +768,7 @@ use std::collections::BTreeSet;
 use std::fs::File;
 
 use crate::cfg::graph::{Cfg, collect_basic_blocks};
-use crate::crab::ebpf_domain::VerificationError;
+use crate::crab::ebpf_domain::{EbpfDomain, VerificationError};
 use crate::ir::program::Program;
 use crate::result::AnalysisResult;
 use crate::spec::type_descriptors::ProgramInfo;
@@ -953,6 +953,369 @@ pub fn print_unreachable(
 pub fn print_error(out: &mut dyn Write, error: &VerificationError) -> io::Result<()> {
     writeln!(out, "{error}")?;
     writeln!(out)
+}
+
+// ============================================================================
+// Failure slice printing
+// ============================================================================
+
+use crate::result::{FailureSlice, RelevantState, extract_assertion_registers};
+
+/// Print invariants filtered to only show labels in the given set.
+/// Used to print a failure slice in context.
+///
+/// When `compact` is true, skip invariant output and only show instructions.
+/// When `relevance` is provided, only show assertions involving relevant registers.
+#[expect(clippy::too_many_arguments)]
+pub fn print_invariants_filtered(
+    out: &mut dyn Write,
+    prog: &Program,
+    info: &ProgramInfo,
+    simplify: bool,
+    result: &AnalysisResult,
+    registry: &VariableRegistry,
+    filter: &BTreeSet<Label>,
+    compact: bool,
+    relevance: Option<&BTreeMap<Label, RelevantState>>,
+) -> io::Result<()> {
+    let basic_blocks = collect_basic_blocks(prog.cfg(), simplify);
+
+    // Build a mapping from each label in a basic block to the block's first label.
+    let mut label_to_block_leader: BTreeMap<Label, Label> = BTreeMap::new();
+    for bb in &basic_blocks {
+        for label in bb {
+            label_to_block_leader.insert(label.clone(), bb.first_label().clone());
+        }
+    }
+
+    // Helper to look up the post-invariant for a predecessor label.
+    let get_parent_post_invariant = |parent: &Label| -> Option<&EbpfDomain> {
+        let lookup_label = label_to_block_leader.get(parent).unwrap_or(parent);
+        result
+            .invariants
+            .get(lookup_label)
+            .filter(|inv| !inv.post.is_bottom())
+            .map(|inv| &inv.post)
+    };
+
+    let mut previous_source = String::new();
+
+    for bb in &basic_blocks {
+        // Check if any label in this basic block is in the filter
+        let bb_has_filtered_label = bb.into_iter().any(|label| filter.contains(label));
+        if !bb_has_filtered_label {
+            continue;
+        }
+
+        // Find the first filtered label in this block
+        let first_filtered_label = bb
+            .into_iter()
+            .find(|label| filter.contains(label))
+            .unwrap_or(bb.first_label());
+
+        // If the block's entry is unreachable, skip
+        if result
+            .invariants
+            .get(bb.first_label())
+            .is_some_and(|inv| inv.pre.is_bottom())
+        {
+            continue;
+        }
+
+        // Print pre-invariant for first filtered label in block (unless compact)
+        if !compact {
+            let label_relevance = relevance.and_then(|r| r.get(first_filtered_label));
+            let inv = &result.invariants[first_filtered_label];
+            let mut buf = String::new();
+            inv.pre
+                .write_to_filtered(&mut buf, registry, label_relevance)
+                .unwrap();
+            writeln!(out, "\nPre-invariant : {buf}")?;
+        }
+
+        // Print jump and block header
+        print_jump(out, prog.cfg(), "from", bb.first_label())?;
+        writeln!(out, "{}:", bb.first_label())?;
+
+        // Show per-predecessor invariants at join points
+        if !compact && let Some(relevance) = relevance {
+            let parents = prog.cfg().parents_of(bb.first_label());
+            let in_slice_parents: Vec<&Label> =
+                parents.iter().filter(|p| filter.contains(p)).collect();
+            if in_slice_parents.len() >= 2 {
+                // Build union of relevant state
+                let mut join_relevance = RelevantState::default();
+                if let Some(fl) = relevance.get(first_filtered_label) {
+                    join_relevance.registers.extend(&fl.registers);
+                    join_relevance.stack_offsets.extend(&fl.stack_offsets);
+                }
+                for parent in &in_slice_parents {
+                    if let Some(pr) = relevance.get(*parent) {
+                        join_relevance.registers.extend(&pr.registers);
+                        join_relevance.stack_offsets.extend(&pr.stack_offsets);
+                    }
+                }
+
+                writeln!(out, "  --- join point: per-predecessor state ---")?;
+                for parent in &in_slice_parents {
+                    if let Some(post) = get_parent_post_invariant(parent) {
+                        let mut buf = String::new();
+                        post.write_to_filtered(&mut buf, registry, Some(&join_relevance))
+                            .unwrap();
+                        writeln!(out, "  from {parent}: {buf}")?;
+                    }
+                }
+                writeln!(out, "  --- end join point ---")?;
+            }
+        }
+
+        if first_filtered_label != bb.first_label() {
+            writeln!(out, "  ... skipped ...")?;
+        }
+
+        let mut last_label = bb.first_label().clone();
+        let mut prev_filtered_label = bb.first_label().clone();
+        let mut has_prev_filtered = false;
+
+        for label in bb {
+            if !filter.contains(label) {
+                continue;
+            }
+
+            // Handle gap since previous filtered label
+            if has_prev_filtered && prev_filtered_label != *label {
+                // Print post-invariant for previous filtered label
+                if !compact {
+                    let prev_current = &result.invariants[&prev_filtered_label];
+                    if !prev_current.post.is_bottom() {
+                        let prev_label_relevance =
+                            relevance.and_then(|r| r.get(&prev_filtered_label));
+                        let mut buf = String::new();
+                        prev_current
+                            .post
+                            .write_to_filtered(&mut buf, registry, prev_label_relevance)
+                            .unwrap();
+                        print_jump(out, prog.cfg(), "goto", &prev_filtered_label)?;
+                        writeln!(out, "\nPost-invariant : {buf}")?;
+                    }
+                }
+                // Check for gap between prev and current
+                let has_gap = bb
+                    .into_iter()
+                    .any(|mid| mid > &prev_filtered_label && mid < label);
+                if has_gap {
+                    writeln!(out, "  ... skipped ...")?;
+                }
+                // Print pre-invariant for this label
+                if !compact {
+                    let label_rel = relevance.and_then(|r| r.get(label));
+                    let mut buf = String::new();
+                    result.invariants[label]
+                        .pre
+                        .write_to_filtered(&mut buf, registry, label_rel)
+                        .unwrap();
+                    writeln!(out, "\nPre-invariant : {buf}")?;
+                    print_jump(out, prog.cfg(), "from", label)?;
+                }
+            }
+
+            print_line_info_for_label(out, info, label, &mut previous_source)?;
+
+            // Print assertions, filtered by relevance
+            let label_relevance = relevance.and_then(|r| r.get(label));
+            for assertion in prog.assertions_at(label) {
+                if let Some(lr) = label_relevance {
+                    let assertion_regs = extract_assertion_registers(assertion);
+                    if !assertion_regs.is_empty()
+                        && !assertion_regs.iter().any(|reg| lr.registers.contains(reg))
+                    {
+                        continue;
+                    }
+                }
+                writeln!(out, "  assert {assertion};")?;
+            }
+            writeln!(out, "  {};", prog.instruction_at(label))?;
+
+            last_label = label.clone();
+            prev_filtered_label = label.clone();
+            has_prev_filtered = true;
+
+            if let Some(current) = result.invariants.get(&last_label)
+                && let Some(ref error) = current.error
+            {
+                writeln!(out, "\nVerification error:")?;
+                print_error(out, error)?;
+                writeln!(out)?;
+            }
+        }
+
+        // Print post-invariant (unless compact)
+        if !compact
+            && let Some(current) = result.invariants.get(&last_label)
+            && !current.post.is_bottom()
+        {
+            let label_relevance = relevance.and_then(|r| r.get(&last_label));
+            let mut buf = String::new();
+            current
+                .post
+                .write_to_filtered(&mut buf, registry, label_relevance)
+                .unwrap();
+            print_jump(out, prog.cfg(), "goto", &last_label)?;
+            writeln!(out, "\nPost-invariant : {buf}")?;
+        }
+    }
+    writeln!(out)
+}
+
+/// Print all failure slices in a structured diagnostic format.
+#[expect(clippy::too_many_arguments)]
+pub fn print_failure_slices(
+    out: &mut dyn Write,
+    prog: &Program,
+    info: &ProgramInfo,
+    simplify: bool,
+    result: &AnalysisResult,
+    registry: &VariableRegistry,
+    slices: &[FailureSlice],
+    compact: bool,
+) -> io::Result<()> {
+    if slices.is_empty() {
+        writeln!(out, "No verification failures found.")?;
+        return Ok(());
+    }
+
+    for (i, slice) in slices.iter().enumerate() {
+        writeln!(out, "=== Failure Slice {} of {} ===\n", i + 1, slices.len())?;
+
+        // Error summary
+        writeln!(out, "[ERROR] {}", slice.error)?;
+        writeln!(out, "[LOCATION] {}", slice.failing_label)?;
+
+        // Relevant registers at failure point
+        if let Some(failing_rel) = slice.relevance.get(&slice.failing_label) {
+            write!(out, "[RELEVANT REGISTERS] ")?;
+            let mut first = true;
+            for reg in &failing_rel.registers {
+                if !first {
+                    write!(out, ", ")?;
+                }
+                write!(out, "r{}", reg.v)?;
+                first = false;
+            }
+            for offset in &failing_rel.stack_offsets {
+                if !first {
+                    write!(out, ", ")?;
+                }
+                write!(out, "stack[{offset}]")?;
+                first = false;
+            }
+            writeln!(out)?;
+        }
+
+        writeln!(
+            out,
+            "[SLICE SIZE] {} program points\n",
+            slice.relevance.len()
+        )?;
+
+        // Control flow summary
+        {
+            write!(out, "[CONTROL FLOW] ")?;
+            let labels = slice.impacted_labels();
+
+            // Build join-point map
+            let mut join_predecessors: BTreeMap<Label, Vec<Label>> = BTreeMap::new();
+            for lbl in &labels {
+                let parents = prog.cfg().parents_of(lbl);
+                let in_slice_parents: Vec<Label> = parents
+                    .iter()
+                    .filter(|p| labels.contains(p))
+                    .cloned()
+                    .collect();
+                if in_slice_parents.len() >= 2 {
+                    join_predecessors.insert(lbl.clone(), in_slice_parents);
+                }
+            }
+
+            // Labels consumed by a convergence group
+            let mut convergence_members: BTreeSet<Label> = BTreeSet::new();
+            for preds in join_predecessors.values() {
+                for p in preds {
+                    if !join_predecessors.contains_key(p) {
+                        convergence_members.insert(p.clone());
+                    }
+                }
+            }
+
+            let annotate_label = |out: &mut dyn Write, lbl: &Label| -> io::Result<()> {
+                write!(out, "{lbl}")?;
+                let ins = prog.instruction_at(lbl);
+                match ins {
+                    Instruction::Assume(assume) => {
+                        write!(
+                            out,
+                            " (assume {} {} {})",
+                            assume.cond.left, assume.cond.op, assume.cond.right
+                        )?;
+                    }
+                    Instruction::Jmp(jmp) => {
+                        if let Some(cond) = &jmp.cond {
+                            write!(out, " (if {} {} {})", cond.left, cond.op, cond.right)?;
+                        }
+                    }
+                    _ => {}
+                }
+                Ok(())
+            };
+
+            let mut first_cf = true;
+            for lbl in &labels {
+                if convergence_members.contains(lbl) {
+                    continue;
+                }
+                if !first_cf {
+                    write!(out, ", ")?;
+                }
+                first_cf = false;
+
+                if let Some(preds) = join_predecessors.get(lbl) {
+                    write!(out, "{{")?;
+                    for (j, pred) in preds.iter().enumerate() {
+                        if j > 0 {
+                            write!(out, " | ")?;
+                        }
+                        annotate_label(out, pred)?;
+                    }
+                    write!(out, "}} -> ")?;
+                }
+
+                annotate_label(out, lbl)?;
+            }
+            if labels.contains(&slice.failing_label) {
+                write!(out, " FAIL")?;
+            }
+            writeln!(out, "\n")?;
+        }
+
+        // Causal trace
+        writeln!(out, "[CAUSAL TRACE]")?;
+        print_invariants_filtered(
+            out,
+            prog,
+            info,
+            simplify,
+            result,
+            registry,
+            &slice.impacted_labels(),
+            compact,
+            Some(&slice.relevance),
+        )?;
+
+        if i + 1 < slices.len() {
+            writeln!(out)?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

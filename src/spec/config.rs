@@ -18,6 +18,7 @@ pub struct VerbosityOptions {
     pub print_failures: bool,
     pub print_line_info: bool,
     pub dump_btf_types_json: bool,
+    pub collect_instruction_deps: bool,
 }
 
 #[repr(C)]

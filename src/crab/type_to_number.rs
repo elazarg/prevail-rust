@@ -1,9 +1,9 @@
 // Copyright (c) Prevail Verifier contributors.
 // SPDX-License-Identifier: MIT
 
-//! Reduced Cardinal Power domain (TypeToNumDomain).
+//! TypeToNumDomain.
 //!
-//! Ported from `src/crab/rcp.hpp` and `src/crab/rcp.cpp`.
+//! Ported from `src/crab/type_to_number.hpp` and `src/crab/type_to_number.cpp`.
 //! This is eBPF-specific, not derived from CRAB.
 //!
 //! Combines a TypeDomain (type information) with a NumAbsDomain (numeric values)
@@ -133,7 +133,7 @@ pub fn get_type_offset_variable(
 // TypeToNumDomain
 // ============================================================================
 
-/// Reduced Cardinal Power of TypeDomain and NumAbsDomain.
+/// Reduced Cartesian Product of TypeDomain and NumAbsDomain.
 ///
 /// The type domain tracks which types each register can have;
 /// the numeric domain tracks the actual values and offsets.

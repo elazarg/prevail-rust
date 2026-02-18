@@ -12,11 +12,11 @@ use crate::arith::variable::Variable;
 use crate::cfg::label::Label;
 use crate::crab::ebpf_domain::{DomainContext, EbpfDomain, VerificationError};
 use crate::crab::interval::Interval;
-use crate::crab::rcp::reg_pack;
 use crate::crab::type_domain::reg_type;
 use crate::crab::type_encoding::{
     DataKind, T_NUM, T_STACK, TS_MAP, TS_POINTER, TS_SINGLETON_PTR, TypeEncoding, TypeSet,
 };
+use crate::crab::type_to_number::reg_pack;
 use crate::crab::var_registry::VariableRegistry;
 use crate::ir::assertions::get_assertions;
 use crate::ir::syntax::{
@@ -88,7 +88,7 @@ impl<'a> EbpfChecker<'a> {
     }
 
     fn require_value(&mut self, cst: LinearConstraint, msg: &str) -> Result<(), VerificationError> {
-        if !self.dom.rcp.values.entail(&cst, self.registry) {
+        if !self.dom.state.values.entail(&cst, self.registry) {
             self.throw_fail(msg)
         } else {
             Ok(())
@@ -102,7 +102,7 @@ impl<'a> EbpfChecker<'a> {
         msg: &str,
     ) -> Result<(), VerificationError> {
         let v = reg_type(reg, self.registry);
-        if !self.dom.rcp.types.entail_type(v, te) {
+        if !self.dom.state.types.entail_type(v, te) {
             self.throw_fail(msg)
         } else {
             Ok(())
@@ -213,7 +213,7 @@ impl<'a> EbpfChecker<'a> {
     fn check_addable(&mut self, s: &Addable) -> Result<(), VerificationError> {
         let ptr_var = reg_type(&s.ptr, self.registry);
         let num_var = reg_type(&s.num, self.registry);
-        if !self.dom.rcp.types.implies_superset(
+        if !self.dom.state.types.implies_superset(
             ptr_var,
             TS_POINTER,
             num_var,
@@ -241,9 +241,9 @@ impl<'a> EbpfChecker<'a> {
     }
 
     fn check_comparable(&mut self, s: &Comparable) -> Result<(), VerificationError> {
-        if self.dom.rcp.types.same_type(&s.r1, &s.r2, self.registry) {
+        if self.dom.state.types.same_type(&s.r1, &s.r2, self.registry) {
             // Same type. If both are numbers, that's okay. Otherwise:
-            let mut non_number_types = self.dom.rcp.types.clone();
+            let mut non_number_types = self.dom.state.types.clone();
             let r2_type_var = reg_type(&s.r2, self.registry);
             non_number_types.remove_type(r2_type_var, T_NUM);
 
@@ -290,7 +290,7 @@ impl<'a> EbpfChecker<'a> {
         let r = reg_pack(&s.reg, self.registry);
         let src_interval = self
             .dom
-            .rcp
+            .state
             .values
             .eval_interval_var(r.svalue, self.registry);
 
@@ -321,7 +321,7 @@ impl<'a> EbpfChecker<'a> {
 
     fn check_valid_divisor(&mut self, s: &ValidDivisor) -> Result<(), VerificationError> {
         let reg_var = reg_type(&s.reg, self.registry);
-        if !self.dom.rcp.types.implies_superset(
+        if !self.dom.state.types.implies_superset(
             reg_var,
             TS_POINTER,
             reg_var,
@@ -333,7 +333,7 @@ impl<'a> EbpfChecker<'a> {
             let r = reg_pack(&s.reg, self.registry);
             let v = if s.is_signed { r.svalue } else { r.uvalue };
 
-            let intv = self.dom.rcp.values.eval_interval_var(v, self.registry);
+            let intv = self.dom.state.values.eval_interval_var(v, self.registry);
             if intv.contains(&Number::from(0)) {
                 return self.throw_fail("Possible division by zero");
             }
@@ -344,7 +344,7 @@ impl<'a> EbpfChecker<'a> {
     fn check_type_constraint(&mut self, s: &TypeConstraint) -> Result<(), VerificationError> {
         if !self
             .dom
-            .rcp
+            .state
             .types
             .is_in_group(&s.reg, s.types.to_typeset(), self.registry)
         {
@@ -374,7 +374,7 @@ impl<'a> EbpfChecker<'a> {
         let is_comparison_check = s.width == Value::Imm(Imm { v: 0 });
 
         let r = reg_pack(&s.reg, self.registry);
-        for type_enc in self.dom.rcp.enumerate_types(&s.reg, self.registry) {
+        for type_enc in self.dom.state.enumerate_types(&s.reg, self.registry) {
             match type_enc {
                 TypeEncoding::TPacket => {
                     let (lb, ub) = self.lb_ub_access_pair(s, r.packet_offset);
@@ -390,8 +390,8 @@ impl<'a> EbpfChecker<'a> {
                     self.check_access_stack(lb.clone(), ub.clone())?;
                     if s.access_type == AccessType::Read
                         && !self.dom.stack.all_num_lb_ub(
-                            &self.dom.rcp.values.eval_interval(&lb, self.registry),
-                            &self.dom.rcp.values.eval_interval(&ub, self.registry),
+                            &self.dom.state.values.eval_interval(&lb, self.registry),
+                            &self.dom.state.values.eval_interval(&ub, self.registry),
                         )
                     {
                         if s.offset < 0 {
@@ -491,12 +491,12 @@ impl<'a> EbpfChecker<'a> {
             }
         };
 
-        for access_reg_type in self.dom.rcp.enumerate_types(&s.access_reg, self.registry) {
+        for access_reg_type in self.dom.state.enumerate_types(&s.access_reg, self.registry) {
             match access_reg_type {
                 TypeEncoding::TStack => {
                     let offset = self
                         .dom
-                        .rcp
+                        .state
                         .values
                         .eval_interval_var(access_reg.stack_offset, self.registry);
                     if !self
@@ -533,7 +533,7 @@ impl<'a> EbpfChecker<'a> {
                             let key_ptr = access_reg.stack_offset;
                             let offset_num = self
                                 .dom
-                                .rcp
+                                .state
                                 .values
                                 .eval_interval_var(key_ptr, self.registry)
                                 .singleton()
@@ -622,7 +622,7 @@ impl<'a> EbpfChecker<'a> {
     fn check_valid_store(&mut self, s: &ValidStore) -> Result<(), VerificationError> {
         let mem_var = reg_type(&s.mem, self.registry);
         let val_var = reg_type(&s.val, self.registry);
-        if !self.dom.rcp.types.implies_not_type(
+        if !self.dom.state.types.implies_not_type(
             mem_var,
             T_STACK,
             val_var,
@@ -639,8 +639,8 @@ impl<'a> EbpfChecker<'a> {
         // The domain is not expressive enough to handle join of null and non-null ctx,
         // since non-null ctx pointers are nonzero numbers.
         if s.or_null
-            && self.dom.rcp.types.get_type(&s.reg, self.registry) == Some(TypeEncoding::TNum)
-            && self.dom.rcp.values.entail(
+            && self.dom.state.types.get_type(&s.reg, self.registry) == Some(TypeEncoding::TNum)
+            && self.dom.state.values.entail(
                 &expr_eq(LinearExpression::from(r.uvalue), LinearExpression::from(0)),
                 self.registry,
             )

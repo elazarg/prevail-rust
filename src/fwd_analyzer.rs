@@ -22,7 +22,7 @@ use crate::crab::interval::Interval;
 use crate::crab::string_constraints::StringInvariant;
 use crate::crab::var_registry::VariableRegistry;
 use crate::ir::syntax::{Assertion, Instruction};
-use crate::result::{AnalysisResult, InvariantMapPair};
+use crate::result::{AnalysisResult, InvariantMapPair, extract_instruction_deps};
 
 // ============================================================================
 // Program trait
@@ -117,6 +117,7 @@ impl<'a, P: Program> FwdFixpointIterator<'a, P> {
                     pre: EbpfDomain::bottom(),
                     error: None,
                     post: EbpfDomain::bottom(),
+                    deps: None,
                 },
             );
         }
@@ -172,6 +173,16 @@ impl<'a, P: Program> FwdFixpointIterator<'a, P> {
     /// Run the checker and transformer on a single label.
     fn transform_to_post(&mut self, label: &Label, mut pre: EbpfDomain) {
         let ins = self.prog.instruction_at(label);
+
+        // Dependency extraction runs on the pre-state *before* assertions or
+        // transformation, so that even failing instructions get deps recorded.
+        if self.ctx.options.verbosity_opts.collect_instruction_deps {
+            let deps = extract_instruction_deps(ins, &pre, self.registry);
+            if let Some(pair) = self.result.invariants.get_mut(label) {
+                pair.deps = Some(deps);
+            }
+        }
+
         if !matches!(ins, Instruction::IncrementLoopCounter(_)) {
             if self.has_error(label) {
                 return;

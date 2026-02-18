@@ -18,13 +18,7 @@ fn get_test_options() -> EbpfVerifierOptions {
         allow_division_by_zero: true,
         setup_constraints: false,
         big_endian: false,
-        verbosity_opts: VerbosityOptions {
-            simplify: false,
-            print_invariants: false,
-            print_failures: false,
-            print_line_info: false,
-            dump_btf_types_json: false,
-        },
+        verbosity_opts: VerbosityOptions::default(),
     }
 }
 

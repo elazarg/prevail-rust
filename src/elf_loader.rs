@@ -8,7 +8,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::mem;
 
 use object::elf;
 use object::read::elf::{
@@ -65,7 +64,7 @@ fn is_global_section(name: &str) -> bool {
 
 /// Cast a byte slice to a vector of `EbpfInst`, reading fields in little-endian.
 fn bytes_to_instructions(data: &[u8]) -> Result<Vec<EbpfInst>, UnmarshalError> {
-    let inst_size = mem::size_of::<EbpfInst>();
+    let inst_size = size_of::<EbpfInst>();
     if !data.len().is_multiple_of(inst_size) {
         return Err(UnmarshalError(
             "Section size is not a multiple of instruction size".into(),
@@ -725,7 +724,7 @@ impl<'a> ProgramReader<'a> {
         program_size: u64,
         reloc_section_header: &elf::SectionHeader64<LittleEndian>,
     ) -> Result<(), UnmarshalError> {
-        let inst_size = mem::size_of::<EbpfInst>() as u64;
+        let inst_size = size_of::<EbpfInst>() as u64;
         let sh_type = reloc_section_header.sh_type(ENDIAN);
 
         if sh_type == elf::SHT_RELA {
@@ -949,7 +948,7 @@ impl<'a> ProgramReader<'a> {
         ]);
 
         // Find the matching program
-        let inst_size = mem::size_of::<EbpfInst>();
+        let inst_size = size_of::<EbpfInst>();
         let mut applied = false;
         for prog in &mut self.raw_programs {
             let prog_start = prog.insn_off;
@@ -1350,7 +1349,7 @@ fn update_line_info(
     btf_ext_data: &[u8],
 ) -> Result<(), UnmarshalError> {
     let records = crate::btf::parse::parse_line_information(btf_data, btf_ext_data)?;
-    let inst_size = mem::size_of::<EbpfInst>();
+    let inst_size = size_of::<EbpfInst>();
 
     for record in &records {
         for prog in raw_programs.iter_mut() {
@@ -1595,10 +1594,7 @@ mod tests {
             big_endian: false,
             verbosity_opts: crate::spec::config::VerbosityOptions {
                 simplify: true,
-                print_invariants: false,
-                print_failures: false,
-                print_line_info: false,
-                dump_btf_types_json: false,
+                ..crate::spec::config::VerbosityOptions::default()
             },
         }
     }

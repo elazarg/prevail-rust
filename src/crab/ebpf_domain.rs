@@ -16,9 +16,9 @@ use crate::arith::variable::Variable;
 use crate::cfg::label::Label;
 use crate::crab::array_domain::{ArrayDomain, ArrayMap};
 use crate::crab::interval::Interval;
-use crate::crab::rcp::{TypeToNumDomain, reg_pack};
 use crate::crab::string_constraints::StringInvariant;
 use crate::crab::type_encoding::*;
+use crate::crab::type_to_number::{TypeToNumDomain, reg_pack};
 use crate::crab::var_registry::VariableRegistry;
 use crate::ir::syntax::Reg;
 use crate::platform::EbpfPlatform;
@@ -91,7 +91,7 @@ pub struct DomainContext<'a> {
 /// with `ArrayDomain` (stack byte tracking via bitset domain + cell maps).
 #[derive(Clone)]
 pub struct EbpfDomain {
-    pub(crate) rcp: TypeToNumDomain,
+    pub(crate) state: TypeToNumDomain,
     /// Stack modeled as an array of bytes with cell expansion.
     pub(crate) stack: ArrayDomain,
 }
@@ -99,13 +99,13 @@ pub struct EbpfDomain {
 impl EbpfDomain {
     pub fn new() -> Self {
         EbpfDomain {
-            rcp: TypeToNumDomain::new(),
+            state: TypeToNumDomain::new(),
             stack: ArrayDomain::new(),
         }
     }
 
-    pub fn from_parts(rcp: TypeToNumDomain, stack: ArrayDomain) -> Self {
-        EbpfDomain { rcp, stack }
+    pub fn from_parts(state: TypeToNumDomain, stack: ArrayDomain) -> Self {
+        EbpfDomain { state, stack }
     }
 
     pub fn top() -> Self {
@@ -121,20 +121,20 @@ impl EbpfDomain {
     }
 
     pub fn set_to_top(&mut self) {
-        self.rcp.set_to_top();
+        self.state.set_to_top();
         self.stack.set_to_top();
     }
 
     pub fn set_to_bottom(&mut self) {
-        self.rcp.set_to_bottom();
+        self.state.set_to_bottom();
     }
 
     pub fn is_bottom(&self) -> bool {
-        self.rcp.is_bottom()
+        self.state.is_bottom()
     }
 
     pub fn is_top(&self) -> bool {
-        self.rcp.is_top() && self.stack.is_top()
+        self.state.is_top() && self.stack.is_top()
     }
 
     // ========================================================================
@@ -145,7 +145,7 @@ impl EbpfDomain {
         if !self.stack.is_included_in(&other.stack) {
             return false;
         }
-        self.rcp.is_included_in(&other.rcp, registry)
+        self.state.is_included_in(&other.state, registry)
     }
 
     pub fn join_assign(&mut self, other: &EbpfDomain, registry: &mut VariableRegistry) {
@@ -157,7 +157,7 @@ impl EbpfDomain {
             return;
         }
         self.stack.join_assign(&other.stack);
-        self.rcp.join_assign(&other.rcp, registry);
+        self.state.join_assign(&other.state, registry);
     }
 
     pub fn join(&self, other: &EbpfDomain, registry: &mut VariableRegistry) -> EbpfDomain {
@@ -173,12 +173,12 @@ impl EbpfDomain {
     }
 
     pub fn meet(&self, other: &EbpfDomain) -> EbpfDomain {
-        let rcp = self.rcp.meet(&other.rcp);
-        if rcp.is_bottom() {
+        let state = self.state.meet(&other.state);
+        if state.is_bottom() {
             return Self::bottom();
         }
         EbpfDomain {
-            rcp,
+            state,
             stack: self.stack.meet(&other.stack),
         }
     }
@@ -191,7 +191,7 @@ impl EbpfDomain {
         registry: &mut VariableRegistry,
     ) -> EbpfDomain {
         let res = EbpfDomain {
-            rcp: self.rcp.widen(&other.rcp, registry),
+            state: self.state.widen(&other.state, registry),
             stack: self.stack.widen(&other.stack),
         };
         if to_constants {
@@ -204,7 +204,7 @@ impl EbpfDomain {
 
     pub fn narrow(&self, other: &EbpfDomain) -> EbpfDomain {
         EbpfDomain {
-            rcp: self.rcp.narrow(&other.rcp),
+            state: self.state.narrow(&other.state),
             stack: self.stack.meet(&other.stack),
         }
     }
@@ -214,11 +214,11 @@ impl EbpfDomain {
     // ========================================================================
 
     pub fn add_value_constraint(&mut self, cst: &LinearConstraint, registry: &VariableRegistry) {
-        self.rcp.values.add_constraint(cst, registry);
+        self.state.values.add_constraint(cst, registry);
     }
 
     pub fn havoc(&mut self, var: Variable) {
-        self.rcp.values.havoc(var);
+        self.state.values.havoc(var);
     }
 
     // ========================================================================
@@ -233,7 +233,7 @@ impl EbpfDomain {
         registry: &mut VariableRegistry,
     ) -> Option<(i32, i32)> {
         let r = reg_pack(map_fd_reg, registry);
-        let map_fd_interval = self.rcp.values.eval_interval_var(r.map_fd, registry);
+        let map_fd_interval = self.state.values.eval_interval_var(r.map_fd, registry);
         let lb = map_fd_interval.lb().number()?;
         let ub = map_fd_interval.ub().number()?;
         let start_fd = lb.to_i64()? as i32;
@@ -351,7 +351,7 @@ impl EbpfDomain {
     pub fn get_loop_count_upper_bound(&self, registry: &mut VariableRegistry) -> ExtendedNumber {
         let mut ub = ExtendedNumber::Finite(Number::from(0));
         for counter in registry.get_loop_counters() {
-            let counter_ub = *self.rcp.values.eval_interval_var(counter, registry).ub();
+            let counter_ub = *self.state.values.eval_interval_var(counter, registry).ub();
             if counter_ub > ub {
                 ub = counter_ub;
             }
@@ -361,11 +361,28 @@ impl EbpfDomain {
 
     pub fn get_r0(&self, registry: &mut VariableRegistry) -> Interval {
         let r = reg_pack(&R0_RETURN_VALUE, registry);
-        self.rcp.values.eval_interval_var(r.svalue, registry)
+        self.state.values.eval_interval_var(r.svalue, registry)
+    }
+
+    /// Get the concrete stack offset of a register, if the register is
+    /// definitely a stack pointer with a known singleton offset.
+    ///
+    /// Returns `None` if the register's type is not `T_STACK` or its
+    /// `stack_offset` variable is not a singleton interval.
+    pub fn get_stack_offset(&self, reg: &Reg, registry: &mut VariableRegistry) -> Option<i64> {
+        if self.state.types.get_type(reg, registry) != Some(T_STACK) {
+            return None;
+        }
+        let pack = reg_pack(reg, registry);
+        let interval = self
+            .state
+            .values
+            .eval_interval_var(pack.stack_offset, registry);
+        interval.singleton().map(|n| n.narrow_to_i64())
     }
 
     pub fn to_set(&self, registry: &VariableRegistry) -> StringInvariant {
-        self.rcp.to_set(registry) + self.stack.to_set()
+        self.state.to_set(registry) + self.stack.to_set()
     }
 
     /// Write this domain in the C++ compatible format:
@@ -381,11 +398,75 @@ impl EbpfDomain {
             write!(
                 f,
                 "{}{}\nStack: {}",
-                self.rcp.types.to_set(registry),
-                self.rcp.values.to_set(registry),
+                self.state.types.to_set(registry),
+                self.state.values.to_set(registry),
                 self.stack
             )
         }
+    }
+
+    /// Write this domain filtered to only show constraints involving relevant
+    /// registers/stack. When `filter` is `None`, delegates to `write_to`.
+    pub fn write_to_filtered(
+        &self,
+        f: &mut dyn std::fmt::Write,
+        registry: &VariableRegistry,
+        filter: Option<&crate::result::RelevantState>,
+    ) -> std::fmt::Result {
+        let Some(filter) = filter else {
+            return self.write_to(f, registry);
+        };
+        if self.is_bottom() {
+            return write!(f, "_|_");
+        }
+        // Collect all constraints from the sub-domains
+        let type_set = self.state.types.to_set(registry);
+        let value_set = self.state.values.to_set(registry);
+        let stack_set = self.stack.to_set();
+
+        let mut first = true;
+        // Filter and format type constraints
+        if !type_set.is_bottom() {
+            for c in type_set.value() {
+                if filter.is_relevant_constraint(c) {
+                    if !first {
+                        write!(f, " ")?;
+                    }
+                    write!(f, "{c}")?;
+                    first = false;
+                }
+            }
+        }
+        // Filter and format value constraints
+        if !value_set.is_bottom() {
+            for c in value_set.value() {
+                if filter.is_relevant_constraint(c) {
+                    if !first {
+                        write!(f, " ")?;
+                    }
+                    write!(f, "{c}")?;
+                    first = false;
+                }
+            }
+        }
+        // Filter and format stack constraints
+        if !stack_set.is_bottom() {
+            let stack_constraints: Vec<_> = stack_set
+                .value()
+                .iter()
+                .filter(|c| filter.is_relevant_constraint(c))
+                .collect();
+            if !stack_constraints.is_empty() {
+                write!(f, "\nStack: ")?;
+                for (i, c) in stack_constraints.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, " ")?;
+                    }
+                    write!(f, "{c}")?;
+                }
+            }
+        }
+        Ok(())
     }
 
     // ========================================================================
@@ -462,7 +543,7 @@ impl EbpfDomain {
                 registry,
             );
         } else {
-            self.rcp
+            self.state
                 .values
                 .assign_i64(registry.meta_offset(), 0, registry);
         }
@@ -482,18 +563,18 @@ impl EbpfDomain {
             registry,
         );
         inv.add_value_constraint(&leq(r10.svalue.into(), PTR_MAX.into()), registry);
-        inv.rcp
+        inv.state
             .values
             .assign_i64(r10.stack_offset, EBPF_TOTAL_STACK_SIZE as i64, registry);
-        inv.rcp
+        inv.state
             .assign_type_encoding(&R10_STACK_POINTER, T_STACK, registry);
 
         if init_r1 {
             let r1 = reg_pack(&R1_ARG, registry);
             inv.add_value_constraint(&leq(1i64.into(), r1.svalue.into()), registry);
             inv.add_value_constraint(&leq(r1.svalue.into(), PTR_MAX.into()), registry);
-            inv.rcp.values.assign_i64(r1.ctx_offset, 0, registry);
-            inv.rcp.assign_type_encoding(&R1_ARG, T_CTX, registry);
+            inv.state.values.assign_i64(r1.ctx_offset, 0, registry);
+            inv.state.assign_type_encoding(&R1_ARG, T_CTX, registry);
         }
 
         inv.initialize_packet(ctx, registry);
@@ -520,10 +601,10 @@ impl EbpfDomain {
         let parsed =
             crate::ir::parse::parse_linear_constraints(constraints, &mut numeric_ranges, registry);
         for &(v1, v2) in &parsed.type_equalities {
-            inv.rcp.types.assume_eq(v1, v2);
+            inv.state.types.assume_eq(v1, v2);
         }
         for &(var, ts) in &parsed.type_restrictions {
-            inv.rcp.types.restrict_to(var, ts);
+            inv.state.types.restrict_to(var, ts);
         }
         for cst in &parsed.value_csts {
             inv.add_value_constraint(cst, registry);
@@ -551,7 +632,7 @@ impl std::fmt::Display for EbpfDomain {
         if self.is_bottom() {
             write!(f, "_|_")
         } else {
-            write!(f, "{}\nStack: {}", self.rcp, self.stack)
+            write!(f, "{}\nStack: {}", self.state, self.stack)
         }
     }
 }

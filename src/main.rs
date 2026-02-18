@@ -37,7 +37,7 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
 }
 
 fn serialize_inst_bytes(insts: &[EbpfInst]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(std::mem::size_of_val(insts));
+    let mut out = Vec::with_capacity(size_of_val(insts));
     for inst in insts {
         out.push(inst.opcode);
         out.push(inst.dst_src);
@@ -174,6 +174,10 @@ struct Cli {
     /// Export control-flow graph to dot FILE
     #[arg(long = "dot")]
     dot_file: Option<String>,
+
+    /// Print failure slices for verification errors
+    #[arg(long = "failure-slice")]
+    failure_slice: bool,
 }
 
 // ── Custom help text (matches C++ upstream exactly) ─────────────────────────
@@ -229,6 +233,9 @@ fn print_help() {
     println!("  -v                          Print invariants and first failure ");
     println!("  -f                          Print first failure ");
     println!();
+    println!("Diagnostics:");
+    println!("          --failure-slice     Print failure slices for verification errors ");
+    println!();
     println!("CFG output:");
     println!("          --asm FILE          Print disassembly to FILE ");
     println!("          --dot FILE          Export control-flow graph to dot FILE ");
@@ -275,6 +282,7 @@ fn main() -> ExitCode {
             print_failures: cli.print_failures,
             print_line_info: cli.line_info,
             dump_btf_types_json: cli.print_btf_types,
+            collect_instruction_deps: cli.failure_slice,
         },
     };
 
@@ -500,7 +508,24 @@ fn main() -> ExitCode {
     let elapsed = start.elapsed().as_secs_f64();
     let mem_kb = memsize::resident_set_size_kb();
 
-    if opts.verbosity_opts.print_invariants {
+    if cli.failure_slice && result.failed {
+        let slices = result.compute_failure_slices(
+            &program,
+            &ctx,
+            &mut registry,
+            prevail::result::SliceParams::default(),
+        );
+        let _ = prevail::printing::print_failure_slices(
+            &mut std::io::stdout(),
+            &program,
+            info,
+            simplify,
+            &result,
+            &registry,
+            &slices,
+            false,
+        );
+    } else if opts.verbosity_opts.print_invariants {
         let _ = prevail::printing::print_invariants(
             &mut std::io::stdout(),
             &program,
