@@ -749,10 +749,11 @@ fn special_var(s: &str, registry: &mut VariableRegistry) -> Variable {
 
 /// Parsed type and value constraints from a set of string constraints.
 pub struct TypeValueConstraints {
-    pub type_csts: Vec<LinearConstraint>,
-    pub value_csts: Vec<LinearConstraint>,
-    /// Direct TypeSet restrictions for type variables (from `in {...}` syntax).
+    /// Type equality constraints: `(v1, v2)` means `v1.type = v2.type`.
+    pub type_equalities: Vec<(Variable, Variable)>,
+    /// Direct TypeSet restrictions for type variables.
     pub type_restrictions: Vec<(Variable, crate::crab::type_encoding::TypeSet)>,
+    pub value_csts: Vec<LinearConstraint>,
 }
 
 // ---------------------------------------------------------------------------
@@ -770,7 +771,7 @@ pub fn parse_linear_constraints(
     registry: &mut VariableRegistry,
 ) -> TypeValueConstraints {
     let mut value_csts: Vec<LinearConstraint> = Vec::new();
-    let mut type_csts: Vec<LinearConstraint> = Vec::new();
+    let mut type_equalities: Vec<(Variable, Variable)> = Vec::new();
     let mut type_restrictions: Vec<(Variable, crate::crab::type_encoding::TypeSet)> = Vec::new();
 
     // Pre-compile all the regex patterns.
@@ -856,19 +857,13 @@ pub fn parse_linear_constraints(
             // REG.type = REG.type
             let d = registry.type_reg(regnum(m.get(1).unwrap().as_str()));
             let s = registry.type_reg(regnum(m.get(2).unwrap().as_str()));
-            type_csts.push(expr_eq(
-                LinearExpression::from(d),
-                LinearExpression::from(s),
-            ));
+            type_equalities.push((d, s));
         } else if let Some(m) = re_reg_type_eq_type.captures(cst_text) {
             // REG.type = TYPE
             let d = registry.type_reg(regnum(m.get(1).unwrap().as_str()));
             let enc = string_to_type_encoding(m.get(2).unwrap().as_str())
                 .unwrap_or_else(|| panic!("Unknown type encoding: {}", m.get(2).unwrap().as_str()));
-            type_csts.push(expr_eq(
-                LinearExpression::from(d),
-                LinearExpression::from(enc as i32),
-            ));
+            type_restrictions.push((d, crate::crab::type_encoding::TypeSet::singleton(enc)));
         } else if let Some(m) = re_reg_type_in_typeset.captures(cst_text) {
             // REG.type in { TYPE, TYPE, ... }
             let d = registry.type_reg(regnum(m.get(1).unwrap().as_str()));
@@ -944,10 +939,8 @@ pub fn parse_linear_constraints(
             } else {
                 let size = ub - lb + Number::from(1i32);
                 let d = registry.cell_var(DataKind::Types, &lb, &size);
-                type_csts.push(expr_eq(
-                    LinearExpression::from(d),
-                    LinearExpression::from(type_enc as i32),
-                ));
+                type_restrictions
+                    .push((d, crate::crab::type_encoding::TypeSet::singleton(type_enc)));
             }
         } else if let Some(m) = re_stack_range_svalue.captures(cst_text) {
             // s[lb...ub].svalue = IMM
@@ -975,8 +968,8 @@ pub fn parse_linear_constraints(
     }
 
     TypeValueConstraints {
-        type_csts,
-        value_csts,
+        type_equalities,
         type_restrictions,
+        value_csts,
     }
 }

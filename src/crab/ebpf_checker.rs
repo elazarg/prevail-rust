@@ -14,7 +14,9 @@ use crate::crab::ebpf_domain::{DomainContext, EbpfDomain, VerificationError};
 use crate::crab::interval::Interval;
 use crate::crab::rcp::reg_pack;
 use crate::crab::type_domain::reg_type;
-use crate::crab::type_encoding::{DataKind, T_NUM, T_STACK, TypeEncoding, TypeGroup, TypeSet};
+use crate::crab::type_encoding::{
+    DataKind, T_NUM, T_STACK, TS_MAP, TS_POINTER, TS_SINGLETON_PTR, TypeEncoding, TypeSet,
+};
 use crate::crab::var_registry::VariableRegistry;
 use crate::ir::assertions::get_assertions;
 use crate::ir::syntax::{
@@ -211,9 +213,9 @@ impl<'a> EbpfChecker<'a> {
     fn check_addable(&mut self, s: &Addable) -> Result<(), VerificationError> {
         let ptr_var = reg_type(&s.ptr, self.registry);
         let num_var = reg_type(&s.num, self.registry);
-        if !self.dom.rcp.types.implies_group(
+        if !self.dom.rcp.types.implies_superset(
             ptr_var,
-            TypeGroup::Pointer,
+            TS_POINTER,
             num_var,
             TypeSet::singleton(T_NUM),
         ) {
@@ -246,8 +248,8 @@ impl<'a> EbpfChecker<'a> {
             non_number_types.remove_type(r2_type_var, T_NUM);
 
             // We must check that they belong to a singleton region:
-            if !non_number_types.is_in_group(&s.r1, TypeGroup::SingletonPtr, self.registry)
-                && !non_number_types.is_in_group(&s.r1, TypeGroup::MapFd, self.registry)
+            if !non_number_types.is_in_group(&s.r1, TS_SINGLETON_PTR, self.registry)
+                && !non_number_types.is_in_group(&s.r1, TS_MAP, self.registry)
             {
                 return self.throw_fail("Cannot subtract pointers to non-singleton regions");
             }
@@ -319,9 +321,9 @@ impl<'a> EbpfChecker<'a> {
 
     fn check_valid_divisor(&mut self, s: &ValidDivisor) -> Result<(), VerificationError> {
         let reg_var = reg_type(&s.reg, self.registry);
-        if !self.dom.rcp.types.implies_group(
+        if !self.dom.rcp.types.implies_superset(
             reg_var,
-            TypeGroup::Pointer,
+            TS_POINTER,
             reg_var,
             TypeSet::singleton(T_NUM),
         ) {
@@ -344,7 +346,7 @@ impl<'a> EbpfChecker<'a> {
             .dom
             .rcp
             .types
-            .is_in_group(&s.reg, s.types, self.registry)
+            .is_in_group(&s.reg, s.types.to_typeset(), self.registry)
         {
             self.throw_fail("Invalid type")
         } else {
@@ -635,7 +637,7 @@ impl<'a> EbpfChecker<'a> {
         // The domain is not expressive enough to handle join of null and non-null ctx,
         // since non-null ctx pointers are nonzero numbers.
         if s.or_null
-            && self.dom.rcp.types.get_type(&s.reg, self.registry) == TypeEncoding::TNum
+            && self.dom.rcp.types.get_type(&s.reg, self.registry) == Some(TypeEncoding::TNum)
             && self.dom.rcp.values.entail(
                 &expr_eq(LinearExpression::from(r.uvalue), LinearExpression::from(0)),
                 self.registry,

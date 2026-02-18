@@ -214,11 +214,13 @@ impl TypeSet {
         TypeSet(1 << type_to_bit(te))
     }
 
-    /// Create a set from a slice of types.
-    pub fn of(types: &[TypeEncoding]) -> TypeSet {
+    /// Create a set from a slice of types. Usable in `const` contexts.
+    pub const fn of(types: &[TypeEncoding]) -> TypeSet {
         let mut bits = 0u8;
-        for &te in types {
-            bits |= 1 << type_to_bit(te);
+        let mut i = 0;
+        while i < types.len() {
+            bits |= 1 << type_to_bit(types[i]);
+            i += 1;
         }
         TypeSet(bits)
     }
@@ -322,6 +324,24 @@ impl std::fmt::Display for TypeSet {
         }
     }
 }
+
+// ============================================================================
+// Named TypeSet constants
+// ============================================================================
+
+use TypeEncoding::*;
+
+/// `{number}`
+pub const TS_NUM: TypeSet = TypeSet::singleton(TNum);
+/// `{map_fd}`
+pub const TS_MAP: TypeSet = TypeSet::singleton(TMap);
+/// `{ctx, packet, stack, shared}`
+pub const TS_POINTER: TypeSet = TypeSet::of(&[TCtx, TPacket, TStack, TShared]);
+/// `{ctx, packet, stack}` — pointer types with a unique region
+pub const TS_SINGLETON_PTR: TypeSet = TypeSet::of(&[TCtx, TPacket, TStack]);
+/// `{packet, stack, shared}` — memory-accessible pointer types
+#[expect(dead_code)]
+pub const TS_MEM: TypeSet = TypeSet::of(&[TPacket, TStack, TShared]);
 
 // ============================================================================
 // TypeGroup
@@ -590,5 +610,14 @@ mod tests {
         assert_eq!(TypeGroup::Pointer.to_typeset().len(), 4);
         assert_eq!(TypeGroup::PtrOrNum.to_typeset().len(), 5);
         assert_eq!(TypeGroup::Mem.to_typeset().len(), 3);
+    }
+
+    #[test]
+    fn test_ts_constants_match_typegroups() {
+        assert_eq!(TS_NUM, TypeGroup::Number.to_typeset());
+        assert_eq!(TS_MAP, TypeGroup::MapFd.to_typeset());
+        assert_eq!(TS_POINTER, TypeGroup::Pointer.to_typeset());
+        assert_eq!(TS_SINGLETON_PTR, TypeGroup::SingletonPtr.to_typeset());
+        assert_eq!(TS_MEM, TypeGroup::Mem.to_typeset());
     }
 }

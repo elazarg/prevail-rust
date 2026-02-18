@@ -15,5 +15,6 @@ pub(crate) mod splitdbm;
 pub mod string_constraints;
 pub(crate) mod type_domain;
 pub(crate) mod type_encoding;
+pub(crate) mod var_id_map;
 pub mod var_registry;
 pub(crate) mod zone_domain;

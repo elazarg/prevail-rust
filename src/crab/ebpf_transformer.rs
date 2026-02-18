@@ -746,7 +746,7 @@ fn do_store_stack(
             );
             return;
         }
-        must_be_num = rcp.types.type_is_number(val_reg, registry);
+        must_be_num = rcp.types.is_in_group(val_reg, TS_NUM, registry);
     } else {
         // opt_val_reg is unset when storing an immediate value.
         must_be_num = true;
@@ -1073,7 +1073,7 @@ fn shl_to_reg(
     // The BPF ISA requires masking the imm.
     imm &= finite_width - 1;
     let dst = reg_pack(dst_reg, registry);
-    if dom.rcp.types.type_is_number(dst_reg, registry) {
+    if dom.rcp.types.is_in_group(dst_reg, TS_NUM, registry) {
         dom.rcp
             .values
             .inner_mut()
@@ -1096,7 +1096,7 @@ fn lshr_to_reg(
     // The BPF ISA requires masking the imm.
     imm &= finite_width - 1;
     let dst = reg_pack(dst_reg, registry);
-    if dom.rcp.types.type_is_number(dst_reg, registry) {
+    if dom.rcp.types.is_in_group(dst_reg, TS_NUM, registry) {
         dom.rcp
             .values
             .inner_mut()
@@ -1117,7 +1117,7 @@ fn ashr_to_reg(
     dom.rcp.havoc_offsets(dst_reg, registry);
 
     let dst = reg_pack(dst_reg, registry);
-    if dom.rcp.types.type_is_number(dst_reg, registry) {
+    if dom.rcp.types.is_in_group(dst_reg, TS_NUM, registry) {
         dom.rcp.values.inner_mut().ashr(
             dst.svalue,
             dst.uvalue,
@@ -1212,7 +1212,7 @@ fn transform_un(
                            swap_fn: fn(i64) -> i64,
                            dst_reg: &Reg,
                            registry: &mut VariableRegistry| {
-        if rcp.types.type_is_number(dst_reg, registry) {
+        if rcp.types.is_in_group(dst_reg, TS_NUM, registry) {
             let interval = rcp.values.eval_interval_var(v, registry);
             if let Some(n) = interval.singleton()
                 && let Some(val) = n.to_i64()
@@ -1418,12 +1418,19 @@ fn transform_atomic(
     if dom.is_bottom() {
         return;
     }
-    if !dom.rcp.types.type_is_pointer(&a.access.basereg, registry)
-        || !dom.rcp.types.type_is_number(&a.valreg, registry)
+    if !dom
+        .rcp
+        .types
+        .is_in_group(&a.access.basereg, TS_POINTER, registry)
+        || !dom.rcp.types.is_in_group(&a.valreg, TS_NUM, registry)
     {
         return;
     }
-    if dom.rcp.types.type_is_not_stack(&a.access.basereg, registry) {
+    if !dom
+        .rcp
+        .types
+        .may_have_type_reg(&a.access.basereg, T_STACK, registry)
+    {
         // Shared memory regions are volatile so we can just havoc
         // any register that will be updated.
         if a.op == AtomicOp::CMPXCHG {
@@ -1740,7 +1747,7 @@ fn transform_bin(
                 imm = pimm.v as i64;
             } else {
                 imm = pimm.v as i32 as i64;
-                if dom.rcp.types.type_is_number(&bin.dst, registry) {
+                if dom.rcp.types.is_in_group(&bin.dst, TS_NUM, registry) {
                     dom.rcp.values.inner_mut().bitwise_and_num(
                         dst.svalue,
                         dst.uvalue,
@@ -2138,7 +2145,7 @@ fn transform_bin(
                         );
                     } else {
                         // We're not sure that lhs and rhs are the same type.
-                        if dom.rcp.types.type_is_number(&src_reg, registry) {
+                        if dom.rcp.types.is_in_group(&src_reg, TS_NUM, registry) {
                             dom.rcp.values.inner_mut().sub_overflow_var(
                                 dst.svalue,
                                 dst.uvalue,
@@ -2253,7 +2260,7 @@ fn transform_bin(
                     dom.rcp.havoc_offsets(&bin.dst, registry);
                 }
                 BinOp::LSH => {
-                    if dom.rcp.types.type_is_number(&src_reg, registry) {
+                    if dom.rcp.types.is_in_group(&src_reg, TS_NUM, registry) {
                         let src_interval = dom.rcp.values.eval_interval_var(src.uvalue, registry);
                         if let Some(sn) = src_interval.singleton() {
                             let imm = sn.narrow_to_u64() & if bin.is64 { 63 } else { 31 };
@@ -2290,7 +2297,7 @@ fn transform_bin(
                     }
                 }
                 BinOp::RSH => {
-                    if dom.rcp.types.type_is_number(&src_reg, registry) {
+                    if dom.rcp.types.is_in_group(&src_reg, TS_NUM, registry) {
                         let src_interval = dom.rcp.values.eval_interval_var(src.uvalue, registry);
                         if let Some(sn) = src_interval.singleton() {
                             let imm = sn.narrow_to_u64() & if bin.is64 { 63 } else { 31 };
@@ -2315,7 +2322,7 @@ fn transform_bin(
                     }
                 }
                 BinOp::ARSH => {
-                    if dom.rcp.types.type_is_number(&src_reg, registry) {
+                    if dom.rcp.types.is_in_group(&src_reg, TS_NUM, registry) {
                         ashr_to_reg(dom, &bin.dst, &src.svalue.into(), finite_width, registry);
                     } else {
                         dom.rcp.havoc_register_except_type(&bin.dst, registry);
@@ -2341,7 +2348,7 @@ fn transform_bin(
                             return;
                         }
                     }
-                    if dom.rcp.types.type_is_number(&src_reg, registry) {
+                    if dom.rcp.types.is_in_group(&src_reg, TS_NUM, registry) {
                         dom.rcp.havoc_offsets(&bin.dst, registry);
                         dom.rcp.assign_type_encoding(&bin.dst, T_NUM, registry);
                         dom.rcp.values.inner_mut().sign_extend(
@@ -2358,7 +2365,7 @@ fn transform_bin(
                 }
                 BinOp::MOV => {
                     // Keep relational information if operation is a no-op.
-                    if bin.is64 || dom.rcp.types.type_is_number(&src_reg, registry) {
+                    if bin.is64 || dom.rcp.types.is_in_group(&src_reg, TS_NUM, registry) {
                         if bin.dst != src_reg {
                             dom.rcp.assign_reg(&bin.dst, &src_reg, registry);
                         }

@@ -11,7 +11,6 @@
 
 use std::collections::BTreeMap;
 
-use crate::arith::linear_constraint::LinearConstraint;
 use crate::arith::linear_expression::LinearExpression;
 use crate::arith::variable::Variable;
 use crate::crab::add_bottom::NumAbsDomain;
@@ -283,7 +282,7 @@ impl TypeToNumDomain {
         reg: &Reg,
         registry: &mut VariableRegistry,
     ) -> Option<Variable> {
-        let te = self.types.get_type(reg, registry);
+        let te = self.types.get_type(reg, registry)?;
         get_type_offset_variable(reg, te, registry)
     }
 
@@ -372,7 +371,7 @@ impl TypeToNumDomain {
         for &te in &valid_types {
             let mut tmp = self.clone();
             let type_var = reg_type(reg, registry);
-            tmp.types.restrict(type_var, TypeSet::singleton(te));
+            tmp.types.restrict_to(type_var, TypeSet::singleton(te));
             // Havoc kind variables for other types.
             for (&other_type, kinds) in &valid_type_kinds {
                 if other_type != te as i32 {
@@ -407,14 +406,6 @@ impl TypeToNumDomain {
                     self.values.havoc(v);
                 }
             }
-        }
-    }
-
-    /// Add a type constraint and set values to bottom if types become bottom.
-    pub fn assume_type(&mut self, cst: &LinearConstraint, registry: &mut VariableRegistry) {
-        self.types.add_constraint(cst, registry);
-        if self.types.is_bottom() {
-            self.values.set_to_bottom();
         }
     }
 

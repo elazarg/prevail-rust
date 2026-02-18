@@ -10,12 +10,12 @@
 
 use std::collections::BTreeMap;
 
-use crate::arith::linear_constraint::{ConstraintKind, LinearConstraint};
 use crate::arith::linear_expression::LinearExpression;
 use crate::arith::variable::Variable;
 use crate::crab::dsu::DisjointSetUnion;
 use crate::crab::string_constraints::StringInvariant;
 use crate::crab::type_encoding::*;
+use crate::crab::var_id_map::VarIdMap;
 use crate::crab::var_registry::VariableRegistry;
 use crate::ir::syntax::Reg;
 
@@ -25,16 +25,16 @@ pub fn reg_type(reg: &Reg, registry: &mut VariableRegistry) -> Variable {
 }
 
 // ============================================================================
-// TypeDomain
+// State — the inner (non-bottom) representation
 // ============================================================================
 
 /// Number of sentinel DSU elements (one per `TypeEncoding`).
 const NUM_SENTINELS: usize = NUM_TYPE_ENCODINGS;
 
-/// Type abstract domain based on disjoint-set with `TypeSet` annotations.
+/// The inner state of the type domain, representing a non-bottom element.
 ///
-/// Tracks must-equality between type variables (partition into equivalence
-/// classes) and exact finite sets of possible types per class.
+/// Extracted from `TypeDomain` so that bottom is represented structurally as
+/// `None` rather than a flag, preventing access to stale DSU/class_types data.
 ///
 /// ## Singleton-merging invariant
 ///
@@ -46,60 +46,26 @@ const NUM_SENTINELS: usize = NUM_TYPE_ENCODINGS;
 ///
 /// > **All DSU elements whose `TypeSet` is the singleton `{te}` belong to the
 /// > same equivalence class as sentinel `type_to_bit(te)`.**
-///
-/// Consequences:
-/// - `same_type(a, b)` reduces to a single DSU rep comparison (no TypeSet
-///   fallback needed).
-/// - `join` can use raw DSU reps as partition keys (no `singleton_key` hack).
-/// - `is_included_in` equality check is pure DSU (no singleton special-case).
 #[derive(Clone)]
-pub struct TypeDomain {
+struct State {
     dsu: DisjointSetUnion,
-    var_to_id: BTreeMap<Variable, usize>,
-    id_to_var: Vec<Option<Variable>>,
+    vars: VarIdMap,
     class_types: Vec<TypeSet>,
-    is_bottom: bool,
 }
 
-impl TypeDomain {
-    pub fn top() -> Self {
+impl State {
+    fn top() -> Self {
         let dsu = DisjointSetUnion::new(NUM_SENTINELS);
         let mut class_types = Vec::with_capacity(NUM_SENTINELS);
         for te in TypeSet::all().iter() {
             class_types.push(TypeSet::singleton(te));
         }
-        TypeDomain {
+        State {
             dsu,
-            var_to_id: BTreeMap::new(),
-            id_to_var: vec![None; NUM_SENTINELS],
+            vars: VarIdMap::new(NUM_SENTINELS),
             class_types,
-            is_bottom: false,
         }
     }
-
-    pub fn set_to_top(&mut self) {
-        self.dsu = DisjointSetUnion::new(NUM_SENTINELS);
-        self.var_to_id.clear();
-        self.id_to_var.clear();
-        self.id_to_var.resize(NUM_SENTINELS, None);
-        self.class_types.clear();
-        for te in TypeSet::all().iter() {
-            self.class_types.push(TypeSet::singleton(te));
-        }
-        self.is_bottom = false;
-    }
-
-    pub fn is_bottom(&self) -> bool {
-        self.is_bottom
-    }
-
-    fn set_to_bottom(&mut self) {
-        self.is_bottom = true;
-    }
-
-    // ========================================================================
-    // Internal helpers
-    // ========================================================================
 
     /// If the class containing `id` has a singleton TypeSet, merge it with the
     /// corresponding sentinel element to maintain the singleton-merging invariant.
@@ -118,18 +84,14 @@ impl TypeDomain {
 
     /// Ensure a variable has a DSU element. Returns its id.
     fn ensure_var(&mut self, v: Variable) -> usize {
-        if let Some(&id) = self.var_to_id.get(&v) {
+        if let Some(id) = self.vars.find_id(v) {
             id
         } else {
             let id = self.dsu.push();
-            self.var_to_id.insert(v, id);
-            while self.id_to_var.len() <= id {
-                self.id_to_var.push(None);
-            }
-            self.id_to_var[id] = Some(v);
+            self.vars.insert(v, id);
             self.class_types.push(TypeSet::all());
             debug_assert_eq!(self.class_types.len(), self.dsu.len());
-            debug_assert_eq!(self.id_to_var.len(), self.dsu.len());
+            debug_assert_eq!(self.vars.id_capacity(), self.dsu.len());
             id
         }
     }
@@ -137,7 +99,7 @@ impl TypeDomain {
     /// Group variables by their DSU equivalence class representative.
     fn equivalence_classes(&self) -> BTreeMap<usize, Vec<Variable>> {
         let mut classes: BTreeMap<usize, Vec<Variable>> = BTreeMap::new();
-        for (&v, &id) in &self.var_to_id {
+        for (v, id) in self.vars.vars() {
             let rep = self.dsu.find_const(id);
             classes.entry(rep).or_default().push(v);
         }
@@ -145,12 +107,9 @@ impl TypeDomain {
     }
 
     /// Get the TypeSet for a variable without mutating (no path compression).
-    fn get_typeset_const(&self, v: Variable) -> TypeSet {
-        if self.is_bottom {
-            return TypeSet::empty();
-        }
-        match self.var_to_id.get(&v) {
-            Some(&id) => {
+    fn get_typeset(&self, v: Variable) -> TypeSet {
+        match self.vars.find_id(v) {
+            Some(id) => {
                 let rep = self.dsu.find_const(id);
                 self.class_types[rep]
             }
@@ -159,36 +118,133 @@ impl TypeDomain {
     }
 
     /// Detach a variable from its equivalence class, giving it a fresh DSU element.
-    /// The old element becomes an orphan (id_to_var[old] = None).
+    /// The old element becomes an orphan.
     fn detach(&mut self, v: Variable) {
-        if let Some(&old_id) = self.var_to_id.get(&v) {
-            self.id_to_var[old_id] = None;
-        }
+        self.vars.orphan_var(v);
         let new_id = self.dsu.push();
-        self.var_to_id.insert(v, new_id);
-        while self.id_to_var.len() <= new_id {
-            self.id_to_var.push(None);
-        }
-        self.id_to_var[new_id] = Some(v);
+        self.vars.insert(v, new_id);
         self.class_types.push(TypeSet::all());
         debug_assert_eq!(self.class_types.len(), self.dsu.len());
-        debug_assert_eq!(self.id_to_var.len(), self.dsu.len());
+        debug_assert_eq!(self.vars.id_capacity(), self.dsu.len());
     }
 
     /// Restrict the TypeSet of a variable's class to a mask.
-    pub fn restrict(&mut self, v: Variable, mask: TypeSet) {
-        if self.is_bottom {
-            return;
-        }
+    /// Returns `false` if the result is empty (caller should set bottom).
+    fn restrict_to(&mut self, v: Variable, mask: TypeSet) -> bool {
         let id = self.ensure_var(v);
         let rep = self.dsu.find(id);
         let result = self.class_types[rep].intersect(mask);
         self.class_types[rep] = result;
         if result.is_empty() {
-            self.is_bottom = true;
+            false
         } else {
             self.merge_if_singleton(id);
+            true
         }
+    }
+
+    /// Assume two variables have equal types (merge their equivalence classes).
+    /// Returns `false` if the intersection is empty (caller should set bottom).
+    fn assume_eq(&mut self, v1: Variable, v2: Variable) -> bool {
+        let id1 = self.ensure_var(v1);
+        let id2 = self.ensure_var(v2);
+        let rep1 = self.dsu.find(id1);
+        let rep2 = self.dsu.find(id2);
+        let ts = self.class_types[rep1].intersect(self.class_types[rep2]);
+        let new_rep = self.dsu.union(id1, id2);
+        self.class_types[new_rep] = ts;
+        if ts.is_empty() {
+            false
+        } else {
+            self.merge_if_singleton(id1);
+            true
+        }
+    }
+
+    /// Remove a single type from a variable's class.
+    /// Returns `false` if the result is empty (caller should set bottom).
+    fn remove_type(&mut self, v: Variable, te: TypeEncoding) -> bool {
+        let id = self.ensure_var(v);
+        let rep = self.dsu.find(id);
+        let result = self.class_types[rep].remove(te);
+        self.class_types[rep] = result;
+        if result.is_empty() {
+            false
+        } else {
+            self.merge_if_singleton(id);
+            true
+        }
+    }
+
+    /// Interpret a linear expression as a type assignment source.
+    /// Returns `false` if an impossible type encoding is assigned (caller should set bottom).
+    fn assign_from_expr(&mut self, lhs: Variable, expr: &LinearExpression) -> bool {
+        let terms = expr.variable_terms();
+        if terms.is_empty() {
+            // Constant expression: assign that type encoding
+            let val = expr.constant_term().to_i64().unwrap_or(T_UNINIT as i64) as i32;
+            self.detach(lhs);
+            let id = self.vars.find_id(lhs).unwrap();
+            if let Some(te) = int_to_type_encoding(val) {
+                self.class_types[id] = TypeSet::singleton(te);
+                self.merge_if_singleton(id);
+                true
+            } else {
+                // Not a valid TypeEncoding — same as asserting an impossible type.
+                false
+            }
+        } else if terms.len() == 1 {
+            let (&var, coeff) = terms.iter().next().unwrap();
+            if coeff.to_i64() == Some(1) && expr.constant_term().is_zero() {
+                // Simple variable copy
+                self.detach(lhs);
+                let rhs_id = self.ensure_var(var);
+                let lhs_id = self.vars.find_id(lhs).unwrap();
+                let rhs_ts = self.class_types[self.dsu.find(rhs_id)];
+                let new_rep = self.dsu.union(lhs_id, rhs_id);
+                self.class_types[new_rep] = rhs_ts;
+                self.merge_if_singleton(lhs_id);
+            } else {
+                // Complex expression: havoc
+                self.detach(lhs);
+            }
+            true
+        } else {
+            // Multi-variable expression: havoc
+            self.detach(lhs);
+            true
+        }
+    }
+}
+
+// ============================================================================
+// TypeDomain
+// ============================================================================
+
+/// Type abstract domain based on disjoint-set with `TypeSet` annotations.
+///
+/// Tracks must-equality between type variables (partition into equivalence
+/// classes) and exact finite sets of possible types per class.
+///
+/// Bottom is represented as `state: None`, preventing access to stale data.
+#[derive(Clone)]
+pub struct TypeDomain {
+    state: Option<State>,
+}
+
+impl TypeDomain {
+    pub fn top() -> Self {
+        TypeDomain {
+            state: Some(State::top()),
+        }
+    }
+
+    pub fn set_to_top(&mut self) {
+        self.state = Some(State::top());
+    }
+
+    pub fn is_bottom(&self) -> bool {
+        self.state.is_none()
     }
 
     // ========================================================================
@@ -196,60 +252,56 @@ impl TypeDomain {
     // ========================================================================
 
     pub fn is_included_in(&self, other: &TypeDomain) -> bool {
-        if self.is_bottom {
-            return true;
-        }
-        if other.is_bottom {
-            return false;
-        }
+        let Some(self_s) = &self.state else {
+            return true; // bottom ≤ anything
+        };
+        let Some(other_s) = &other.state else {
+            return false; // non-bottom > bottom
+        };
         // A ≤ B iff:
         // 1. TypeSets refine: S_A[v] ⊆ S_B[v] for all v
         // 2. A has at least B's equalities: (v ~_B w) ⟹ (v ~_A w)
 
         // Check (1): for every variable in self, its TypeSet must be a subset
-        for (&v, &id_a) in &self.var_to_id {
-            let rep_a = self.dsu.find_const(id_a);
-            let ts_a = self.class_types[rep_a];
-            let ts_b = other.get_typeset_const(v);
+        for (v, id_a) in self_s.vars.vars() {
+            let rep_a = self_s.dsu.find_const(id_a);
+            let ts_a = self_s.class_types[rep_a];
+            let ts_b = other_s.get_typeset(v);
             if !ts_a.is_subset_of(ts_b) {
                 return false;
             }
         }
         // Variables in other but absent in self are unconstrained (all types).
         // This only subsumes if other also allows all types for them.
-        for (&v, &id_b) in &other.var_to_id {
-            if !self.var_to_id.contains_key(&v) {
-                let rep_b = other.dsu.find_const(id_b);
-                if other.class_types[rep_b] != TypeSet::all() {
+        for (v, id_b) in other_s.vars.vars() {
+            if !self_s.vars.contains(v) {
+                let rep_b = other_s.dsu.find_const(id_b);
+                if other_s.class_types[rep_b] != TypeSet::all() {
                     return false;
                 }
             }
         }
 
         // Check (2): for every pair in the same B-class, they must be in the same A-class.
-        // With the singleton-merging invariant, DSU rep equality is the single source
-        // of truth (no singleton fallback needed).
-        for members in other.equivalence_classes().values() {
+        for members in other_s.equivalence_classes().values() {
             if members.len() <= 1 {
                 continue;
             }
             let first = members[0];
-            let Some(&first_id_a) = self.var_to_id.get(&first) else {
-                // Variable not in A — unconstrained (top).
-                // For B's equality to hold, all members must also be unknown in A.
+            let Some(first_id_a) = self_s.vars.find_id(first) else {
                 for &m in &members[1..] {
-                    if self.var_to_id.contains_key(&m) {
+                    if self_s.vars.contains(m) {
                         return false;
                     }
                 }
                 continue;
             };
-            let rep_a = self.dsu.find_const(first_id_a);
+            let rep_a = self_s.dsu.find_const(first_id_a);
             for &m in &members[1..] {
-                let Some(&m_id_a) = self.var_to_id.get(&m) else {
+                let Some(m_id_a) = self_s.vars.find_id(m) else {
                     return false;
                 };
-                if self.dsu.find_const(m_id_a) != rep_a {
+                if self_s.dsu.find_const(m_id_a) != rep_a {
                     return false;
                 }
             }
@@ -260,10 +312,10 @@ impl TypeDomain {
 
     /// Join: keep only facts that hold in both operands.
     pub fn join_assign(&mut self, other: &TypeDomain) {
-        if other.is_bottom {
+        if other.state.is_none() {
             return;
         }
-        if self.is_bottom {
+        if self.state.is_none() {
             *self = other.clone();
             return;
         }
@@ -271,50 +323,38 @@ impl TypeDomain {
     }
 
     pub fn join(&self, other: &TypeDomain) -> TypeDomain {
-        if self.is_bottom {
+        let Some(self_s) = &self.state else {
             return other.clone();
-        }
-        if other.is_bottom {
+        };
+        let Some(other_s) = &other.state else {
             return self.clone();
-        }
+        };
 
         // Build fresh partition: variables with same (key_A, key_B) → same class.
-        //
-        // With the singleton-merging invariant, all variables sharing a singleton
-        // TypeSet in an operand already share the same DSU rep (the sentinel).
-        // So raw DSU reps partition correctly without a special singleton key.
-        //
-        // Variables absent from an operand are unconstrained (top). They must get
-        // unique keys so they are never falsely grouped with each other: two
-        // variables both absent from A but sharing a class in B must NOT be unified
-        // in the result (A doesn't know they're equal). Unique keys start at
-        // `dsu.len()`, which is always > any valid rep, so no collisions.
-
-        // Collect all active variables from both operands.
         let mut all_vars: Vec<Variable> = Vec::new();
-        for &v in self.var_to_id.keys() {
+        for (v, _) in self_s.vars.vars() {
             all_vars.push(v);
         }
-        for &v in other.var_to_id.keys() {
-            if !self.var_to_id.contains_key(&v) {
+        for (v, _) in other_s.vars.vars() {
+            if !self_s.vars.contains(v) {
                 all_vars.push(v);
             }
         }
 
-        let mut next_unique_a = self.dsu.len();
-        let mut next_unique_b = other.dsu.len();
+        let mut next_unique_a = self_s.dsu.len();
+        let mut next_unique_b = other_s.dsu.len();
         let mut keys: BTreeMap<(usize, usize), Vec<Variable>> = BTreeMap::new();
         for &v in &all_vars {
-            let key_a = match self.var_to_id.get(&v) {
-                Some(&id) => self.dsu.find_const(id),
+            let key_a = match self_s.vars.find_id(v) {
+                Some(id) => self_s.dsu.find_const(id),
                 None => {
                     let k = next_unique_a;
                     next_unique_a += 1;
                     k
                 }
             };
-            let key_b = match other.var_to_id.get(&v) {
-                Some(&id) => other.dsu.find_const(id),
+            let key_b = match other_s.vars.find_id(v) {
+                Some(id) => other_s.dsu.find_const(id),
                 None => {
                     let k = next_unique_b;
                     next_unique_b += 1;
@@ -325,68 +365,69 @@ impl TypeDomain {
         }
 
         // Build result
-        let mut result = TypeDomain::top();
+        let mut result_s = State::top();
         for members in keys.values() {
-            // TypeSet = union of per-variable TypeSets from both operands
             let mut ts = TypeSet::empty();
             for &v in members {
-                let ts_a = self.get_typeset_const(v);
-                let ts_b = other.get_typeset_const(v);
+                let ts_a = self_s.get_typeset(v);
+                let ts_b = other_s.get_typeset(v);
                 ts = ts.union(ts_a).union(ts_b);
             }
 
-            // Register all members in the result, unified
             let mut first_id = None;
             for &v in members {
-                let id = result.ensure_var(v);
+                let id = result_s.ensure_var(v);
                 if let Some(fid) = first_id {
-                    result.dsu.union(fid, id);
+                    result_s.dsu.union(fid, id);
                 } else {
                     first_id = Some(id);
                 }
             }
-            // Set the TypeSet on the representative (after all unifications).
             if let Some(fid) = first_id {
-                result.class_types[result.dsu.find(fid)] = ts;
-                result.merge_if_singleton(fid);
+                result_s.class_types[result_s.dsu.find(fid)] = ts;
+                result_s.merge_if_singleton(fid);
             }
         }
 
-        result
+        TypeDomain {
+            state: Some(result_s),
+        }
     }
 
     /// Meet: enforce all constraints from both.
     pub fn meet(&self, other: &TypeDomain) -> Option<TypeDomain> {
-        if self.is_bottom || other.is_bottom {
+        let Some(_self_s) = &self.state else {
             return None;
-        }
+        };
+        let Some(other_s) = &other.state else {
+            return None;
+        };
 
         // Start from a clone of self
         let mut result = self.clone();
+        let result_s = result.state.as_mut().unwrap();
 
         // Add all variables and equalities from other
-        for &v in other.var_to_id.keys() {
-            result.ensure_var(v);
+        for (v, _) in other_s.vars.vars() {
+            result_s.ensure_var(v);
         }
 
-        // Merge equalities from other: for each pair in same B-class, unify in result
-        for members in other.equivalence_classes().values() {
+        // Merge equalities from other
+        for members in other_s.equivalence_classes().values() {
             if members.len() <= 1 {
                 continue;
             }
             for i in 1..members.len() {
-                result.unify(members[0], members[i]);
-                if result.is_bottom {
+                if !result_s.assume_eq(members[0], members[i]) {
                     return None;
                 }
             }
         }
 
         // Intersect TypeSets from other
-        for &v in other.var_to_id.keys() {
-            let ts_b = other.get_typeset_const(v);
-            result.restrict(v, ts_b);
-            if result.is_bottom {
+        for (v, _) in other_s.vars.vars() {
+            let ts_b = other_s.get_typeset(v);
+            if !result_s.restrict_to(v, ts_b) {
                 return None;
             }
         }
@@ -401,16 +442,21 @@ impl TypeDomain {
 
     /// Narrow = meet (domain is finite-height).
     pub fn narrow(&self, other: &TypeDomain) -> TypeDomain {
-        self.meet(other).unwrap_or_else(|| {
-            let mut bot = TypeDomain::top();
-            bot.set_to_bottom();
-            bot
-        })
+        self.meet(other).unwrap_or(TypeDomain { state: None })
     }
 
     // ========================================================================
     // Mutation operations
     // ========================================================================
+
+    /// Restrict the TypeSet of a variable's class to a mask.
+    pub fn restrict_to(&mut self, v: Variable, mask: TypeSet) {
+        if let Some(s) = &mut self.state
+            && !s.restrict_to(v, mask)
+        {
+            self.state = None;
+        }
+    }
 
     /// Assign a specific type encoding to a register.
     pub fn assign_type_encoding(
@@ -419,24 +465,26 @@ impl TypeDomain {
         encoding: TypeEncoding,
         registry: &mut VariableRegistry,
     ) {
-        if self.is_bottom {
-            return;
-        }
+        let Some(s) = &mut self.state else { return };
         let v = reg_type(reg, registry);
-        self.detach(v);
-        let id = self.var_to_id[&v];
-        self.class_types[id] = TypeSet::singleton(encoding);
-        self.merge_if_singleton(id);
+        s.detach(v);
+        let id = s.vars.find_id(v).unwrap();
+        s.class_types[id] = TypeSet::singleton(encoding);
+        s.merge_if_singleton(id);
     }
 
     /// Assign the type of `rhs` to `lhs` (copy with equality tracking).
     pub fn assign_type_from_reg(&mut self, lhs: &Reg, rhs: &Reg, registry: &mut VariableRegistry) {
-        if self.is_bottom {
-            return;
-        }
+        let Some(s) = &mut self.state else { return };
         let lhs_var = reg_type(lhs, registry);
         let rhs_var = reg_type(rhs, registry);
-        self.assign_type_var(lhs_var, rhs_var, registry);
+        s.detach(lhs_var);
+        let rhs_id = s.ensure_var(rhs_var);
+        let lhs_id = s.vars.find_id(lhs_var).unwrap();
+        let rhs_ts = s.class_types[s.dsu.find(rhs_id)];
+        let new_rep = s.dsu.union(lhs_id, rhs_id);
+        s.class_types[new_rep] = rhs_ts;
+        s.merge_if_singleton(lhs_id);
     }
 
     /// Assign an optional linear expression to the type of `lhs`.
@@ -447,13 +495,15 @@ impl TypeDomain {
         rhs: &Option<LinearExpression>,
         registry: &mut VariableRegistry,
     ) {
-        if self.is_bottom {
-            return;
-        }
+        let Some(s) = &mut self.state else { return };
         let lhs_var = reg_type(lhs, registry);
         match rhs {
-            None => self.havoc_type_var(lhs_var),
-            Some(expr) => self.assign_from_expr(lhs_var, expr),
+            None => s.detach(lhs_var),
+            Some(expr) => {
+                if !s.assign_from_expr(lhs_var, expr) {
+                    self.state = None;
+                }
+            }
         }
     }
 
@@ -464,11 +514,11 @@ impl TypeDomain {
         t: &LinearExpression,
         _registry: &mut VariableRegistry,
     ) {
-        if self.is_bottom {
-            return;
-        }
-        if let Some(v) = lhs {
-            self.assign_from_expr(v, t);
+        let Some(s) = &mut self.state else { return };
+        if let Some(v) = lhs
+            && !s.assign_from_expr(v, t)
+        {
+            self.state = None;
         }
     }
 
@@ -479,219 +529,48 @@ impl TypeDomain {
         rhs: Variable,
         _registry: &mut VariableRegistry,
     ) {
-        if self.is_bottom {
-            return;
-        }
-        self.detach(lhs);
-        let rhs_id = self.ensure_var(rhs);
-        let lhs_id = self.var_to_id[&lhs];
-        let rhs_ts = self.class_types[self.dsu.find(rhs_id)];
-        let new_rep = self.dsu.union(lhs_id, rhs_id);
-        self.class_types[new_rep] = rhs_ts;
-        self.merge_if_singleton(lhs_id);
+        let Some(s) = &mut self.state else { return };
+        s.detach(lhs);
+        let rhs_id = s.ensure_var(rhs);
+        let lhs_id = s.vars.find_id(lhs).unwrap();
+        let rhs_ts = s.class_types[s.dsu.find(rhs_id)];
+        let new_rep = s.dsu.union(lhs_id, rhs_id);
+        s.class_types[new_rep] = rhs_ts;
+        s.merge_if_singleton(lhs_id);
     }
 
-    /// Interpret a linear expression as a type assignment source.
-    fn assign_from_expr(&mut self, lhs: Variable, expr: &LinearExpression) {
-        let terms = expr.variable_terms();
-        if terms.is_empty() {
-            // Constant expression: assign that type encoding
-            let val = expr.constant_term().to_i64().unwrap_or(T_UNINIT as i64) as i32;
-            self.detach(lhs);
-            let id = self.var_to_id[&lhs];
-            if let Some(te) = int_to_type_encoding(val) {
-                self.class_types[id] = TypeSet::singleton(te);
-                self.merge_if_singleton(id);
-            } else {
-                // Not a valid TypeEncoding — same as asserting an impossible type.
-                self.is_bottom = true;
-            }
-        } else if terms.len() == 1 {
-            let (&var, coeff) = terms.iter().next().unwrap();
-            if coeff.to_i64() == Some(1) && expr.constant_term().is_zero() {
-                // Simple variable copy
-                self.detach(lhs);
-                let rhs_id = self.ensure_var(var);
-                let lhs_id = self.var_to_id[&lhs];
-                let rhs_ts = self.class_types[self.dsu.find(rhs_id)];
-                let new_rep = self.dsu.union(lhs_id, rhs_id);
-                self.class_types[new_rep] = rhs_ts;
-                self.merge_if_singleton(lhs_id);
-            } else {
-                // Complex expression: havoc
-                self.havoc_type_var(lhs);
-            }
-        } else {
-            // Multi-variable expression: havoc
-            self.havoc_type_var(lhs);
-        }
-    }
-
-    /// Add a linear constraint (equality or inequality only).
-    ///
-    /// Interprets the constraint as a type domain operation:
-    /// - `var == const` → restrict to singleton
-    /// - `var == var2` → unify
-    /// - `var != const` → remove one type
-    pub fn add_constraint(&mut self, cst: &LinearConstraint, _registry: &mut VariableRegistry) {
-        if self.is_bottom {
-            return;
-        }
-        if cst.is_tautology() {
-            return;
-        }
-        if cst.is_contradiction() {
-            self.set_to_bottom();
-            return;
-        }
-
-        let expr = cst.expression();
-        let terms = expr.variable_terms();
-        let constant = expr.constant_term();
-
-        match cst.kind() {
-            ConstraintKind::EqualsZero => {
-                // expression == 0
-                if terms.len() == 1 {
-                    let (&var, coeff) = terms.iter().next().unwrap();
-                    if coeff.to_i64() == Some(1) {
-                        // var + c == 0 → var == -c
-                        let val = (-constant).to_i64().unwrap_or(0) as i32;
-                        if let Some(te) = int_to_type_encoding(val) {
-                            self.restrict(var, TypeSet::singleton(te));
-                        } else {
-                            self.set_to_bottom();
-                        }
-                    } else if coeff.to_i64() == Some(-1) {
-                        // -var + c == 0 → var == c
-                        let val = constant.to_i64().unwrap_or(0) as i32;
-                        if let Some(te) = int_to_type_encoding(val) {
-                            self.restrict(var, TypeSet::singleton(te));
-                        } else {
-                            self.set_to_bottom();
-                        }
-                    }
-                } else if terms.len() == 2 {
-                    // var1 - var2 + c == 0 → if c == 0: unify var1, var2
-                    let mut iter = terms.iter();
-                    let (&v1, c1) = iter.next().unwrap();
-                    let (&v2, c2) = iter.next().unwrap();
-                    if constant.is_zero()
-                        && ((c1.to_i64() == Some(1) && c2.to_i64() == Some(-1))
-                            || (c1.to_i64() == Some(-1) && c2.to_i64() == Some(1)))
-                    {
-                        self.unify(v1, v2);
-                    }
-                }
-            }
-            ConstraintKind::NotZero => {
-                // expression != 0
-                if terms.len() == 1 {
-                    let (&var, coeff) = terms.iter().next().unwrap();
-                    if coeff.to_i64() == Some(1) {
-                        // var + c != 0 → var != -c
-                        let val = (-constant).to_i64().unwrap_or(0) as i32;
-                        if let Some(te) = int_to_type_encoding(val) {
-                            self.remove_type(var, te);
-                        }
-                    } else if coeff.to_i64() == Some(-1) {
-                        // -var + c != 0 → var != c
-                        let val = constant.to_i64().unwrap_or(0) as i32;
-                        if let Some(te) = int_to_type_encoding(val) {
-                            self.remove_type(var, te);
-                        }
-                    }
-                }
-            }
-            ConstraintKind::LessThanOrEqualsZero | ConstraintKind::LessThanZero => {
-                // Order constraints are not supported by the DSU-based TypeDomain.
-                // All callers should use direct TypeDomain methods instead.
-                debug_assert!(
-                    false,
-                    "Order constraints should not be passed to TypeDomain::add_constraint"
-                );
-            }
-        }
-    }
-
-    /// Unify two variables (merge their equivalence classes).
-    fn unify(&mut self, v1: Variable, v2: Variable) {
-        if self.is_bottom {
-            return;
-        }
-        let id1 = self.ensure_var(v1);
-        let id2 = self.ensure_var(v2);
-        let rep1 = self.dsu.find(id1);
-        let rep2 = self.dsu.find(id2);
-        let ts = self.class_types[rep1].intersect(self.class_types[rep2]);
-        let new_rep = self.dsu.union(id1, id2);
-        self.class_types[new_rep] = ts;
-        if ts.is_empty() {
-            self.is_bottom = true;
-        } else {
-            self.merge_if_singleton(id1);
+    /// Assume two variables have equal types (merge their equivalence classes).
+    pub fn assume_eq(&mut self, v1: Variable, v2: Variable) {
+        if let Some(s) = &mut self.state
+            && !s.assume_eq(v1, v2)
+        {
+            self.state = None;
         }
     }
 
     /// Remove a single type from a variable's class.
     pub fn remove_type(&mut self, v: Variable, te: TypeEncoding) {
-        if self.is_bottom {
-            return;
-        }
-        let id = self.ensure_var(v);
-        let rep = self.dsu.find(id);
-        let result = self.class_types[rep].remove(te);
-        self.class_types[rep] = result;
-        if result.is_empty() {
-            self.is_bottom = true;
-        } else {
-            self.merge_if_singleton(id);
+        if let Some(s) = &mut self.state
+            && !s.remove_type(v, te)
+        {
+            self.state = None;
         }
     }
 
     pub fn havoc_type_reg(&mut self, r: &Reg, registry: &mut VariableRegistry) {
-        if self.is_bottom {
-            return;
-        }
+        let Some(s) = &mut self.state else { return };
         let v = reg_type(r, registry);
-        self.havoc_type_var(v);
+        s.detach(v);
     }
 
     pub fn havoc_type_var(&mut self, v: Variable) {
-        if self.is_bottom {
-            return;
-        }
-        self.detach(v);
-        // detach already sets TypeSet to ALL
+        let Some(s) = &mut self.state else { return };
+        s.detach(v);
     }
 
     // ========================================================================
     // Query operations
     // ========================================================================
-
-    pub fn type_is_pointer(&self, r: &Reg, registry: &mut VariableRegistry) -> bool {
-        let v = reg_type(r, registry);
-        let ts = self.get_typeset_const(v);
-        ts.is_subset_of(TypeGroup::Pointer.to_typeset())
-    }
-
-    pub fn type_is_number(&self, r: &Reg, registry: &mut VariableRegistry) -> bool {
-        let v = reg_type(r, registry);
-        let ts = self.get_typeset_const(v);
-        ts == TypeSet::singleton(T_NUM)
-    }
-
-    pub fn type_is_not_stack(&self, r: &Reg, registry: &mut VariableRegistry) -> bool {
-        let v = reg_type(r, registry);
-        let ts = self.get_typeset_const(v);
-        !ts.contains(T_STACK)
-    }
-
-    pub fn type_is_not_number(&self, r: &Reg, registry: &mut VariableRegistry) -> bool {
-        let v = reg_type(r, registry);
-        let ts = self.get_typeset_const(v);
-        !ts.contains(T_NUM)
-    }
 
     /// Return the possible type encodings for a register.
     pub fn iterate_types(&self, reg: &Reg, registry: &mut VariableRegistry) -> Vec<TypeEncoding> {
@@ -701,10 +580,10 @@ impl TypeDomain {
 
     /// Return the possible type encodings for a variable.
     pub fn iterate_types_var(&self, v: Variable) -> Vec<TypeEncoding> {
-        if self.is_bottom {
+        let Some(s) = &self.state else {
             return vec![];
-        }
-        let ts = self.get_typeset_const(v);
+        };
+        let ts = s.get_typeset(v);
         if ts.contains(T_UNINIT) {
             return vec![T_UNINIT];
         }
@@ -713,9 +592,12 @@ impl TypeDomain {
     }
 
     /// Get the singleton type of a register, or `None` if not a singleton.
-    pub fn get_type(&self, r: &Reg, registry: &mut VariableRegistry) -> TypeEncoding {
+    pub fn get_type(&self, r: &Reg, registry: &mut VariableRegistry) -> Option<TypeEncoding> {
         let v = reg_type(r, registry);
-        self.get_typeset_const(v).as_singleton().unwrap_or(T_UNINIT)
+        let Some(s) = &self.state else {
+            return None;
+        };
+        s.get_typeset(v).as_singleton()
     }
 
     /// Get the singleton type from a linear expression, or T_UNINIT if unknown.
@@ -724,6 +606,9 @@ impl TypeDomain {
         expr: &LinearExpression,
         _registry: &mut VariableRegistry,
     ) -> TypeEncoding {
+        let Some(s) = &self.state else {
+            return T_UNINIT;
+        };
         let terms = expr.variable_terms();
         if terms.is_empty() {
             // Constant
@@ -732,9 +617,7 @@ impl TypeDomain {
         } else if terms.len() == 1 {
             let (&var, coeff) = terms.iter().next().unwrap();
             if coeff.to_i64() == Some(1) && expr.constant_term().is_zero() {
-                self.get_typeset_const(var)
-                    .as_singleton()
-                    .unwrap_or(T_UNINIT)
+                s.get_typeset(var).as_singleton().unwrap_or(T_UNINIT)
             } else {
                 T_UNINIT
             }
@@ -743,32 +626,31 @@ impl TypeDomain {
         }
     }
 
-    /// Check: "if var1 belongs to `premise_group`, then var2's types ⊆ `conclusion_set`".
-    ///
-    /// Implemented as: clone domain, restrict var1 to premise_group, check var2.
-    pub fn implies_group(
+    /// Check: "if var1's types ⊆ `premise_set`, then var2's types ⊆ `conclusion_set`".
+    pub fn implies_superset(
         &self,
         var1: Variable,
-        premise_group: TypeGroup,
+        premise_set: TypeSet,
         var2: Variable,
         conclusion_set: TypeSet,
     ) -> bool {
-        if self.is_bottom {
-            return true;
-        }
+        let Some(_) = &self.state else {
+            return true; // bottom → vacuously true
+        };
         let mut restricted = self.clone();
-        restricted.restrict(var1, premise_group.to_typeset());
-        if restricted.is_bottom {
+        restricted.restrict_to(var1, premise_set);
+        if restricted.state.is_none() {
             return true; // premise unsatisfiable → vacuously true
         }
         restricted
-            .get_typeset_const(var2)
+            .state
+            .as_ref()
+            .unwrap()
+            .get_typeset(var2)
             .is_subset_of(conclusion_set)
     }
 
     /// Check: "if var1 ≠ `excluded_type`, then var2's types ⊆ `conclusion_set`".
-    ///
-    /// Implemented as: clone domain, remove excluded_type from var1, check var2.
     pub fn implies_not_type(
         &self,
         var1: Variable,
@@ -776,25 +658,28 @@ impl TypeDomain {
         var2: Variable,
         conclusion_set: TypeSet,
     ) -> bool {
-        if self.is_bottom {
-            return true;
-        }
+        let Some(_) = &self.state else {
+            return true; // bottom → vacuously true
+        };
         let mut restricted = self.clone();
         restricted.remove_type(var1, excluded_type);
-        if restricted.is_bottom {
+        if restricted.state.is_none() {
             return true; // premise unsatisfiable → vacuously true
         }
         restricted
-            .get_typeset_const(var2)
+            .state
+            .as_ref()
+            .unwrap()
+            .get_typeset(var2)
             .is_subset_of(conclusion_set)
     }
 
     /// Check whether a variable's type is certainly `te` (singleton TypeSet).
     pub fn entail_type(&self, v: Variable, te: TypeEncoding) -> bool {
-        if self.is_bottom {
-            return true;
-        }
-        self.get_typeset_const(v) == TypeSet::singleton(te)
+        let Some(s) = &self.state else {
+            return true; // bottom entails everything
+        };
+        s.get_typeset(v) == TypeSet::singleton(te)
     }
 
     /// Check whether the register's type may include a given type.
@@ -805,7 +690,10 @@ impl TypeDomain {
         registry: &mut VariableRegistry,
     ) -> bool {
         let v = reg_type(r, registry);
-        self.get_typeset_const(v).contains(te)
+        let Some(s) = &self.state else {
+            return false; // bottom has no types
+        };
+        s.get_typeset(v).contains(te)
     }
 
     /// Check whether a linear expression's type may include a given type.
@@ -815,6 +703,9 @@ impl TypeDomain {
         te: TypeEncoding,
         _registry: &mut VariableRegistry,
     ) -> bool {
+        let Some(s) = &self.state else {
+            return false;
+        };
         let terms = expr.variable_terms();
         if terms.is_empty() {
             let val = expr.constant_term().to_i64().unwrap_or(0) as i32;
@@ -822,7 +713,7 @@ impl TypeDomain {
         } else if terms.len() == 1 {
             let (&var, coeff) = terms.iter().next().unwrap();
             if coeff.to_i64() == Some(1) && expr.constant_term().is_zero() {
-                self.get_typeset_const(var).contains(te)
+                s.get_typeset(var).contains(te)
             } else {
                 true // complex expression, conservatively true
             }
@@ -838,14 +729,19 @@ impl TypeDomain {
         te: TypeEncoding,
         _registry: &mut VariableRegistry,
     ) -> bool {
-        self.get_typeset_const(v).contains(te)
+        let Some(s) = &self.state else {
+            return false;
+        };
+        s.get_typeset(v).contains(te)
     }
 
     /// Check whether a register is initialized (type != T_UNINIT).
     pub fn is_initialized_reg(&self, r: &Reg, registry: &mut VariableRegistry) -> bool {
         let v = reg_type(r, registry);
-        let ts = self.get_typeset_const(v);
-        !ts.contains(T_UNINIT)
+        let Some(s) = &self.state else {
+            return false;
+        };
+        !s.get_typeset(v).contains(T_UNINIT)
     }
 
     /// Check whether a type expression is initialized.
@@ -854,6 +750,9 @@ impl TypeDomain {
         expr: &LinearExpression,
         _registry: &mut VariableRegistry,
     ) -> bool {
+        let Some(s) = &self.state else {
+            return false;
+        };
         let terms = expr.variable_terms();
         if terms.is_empty() {
             let val = expr.constant_term().to_i64().unwrap_or(T_UNINIT as i64) as i32;
@@ -861,7 +760,7 @@ impl TypeDomain {
         } else if terms.len() == 1 {
             let (&var, coeff) = terms.iter().next().unwrap();
             if coeff.to_i64() == Some(1) && expr.constant_term().is_zero() {
-                !self.get_typeset_const(var).contains(T_UNINIT)
+                !s.get_typeset(var).contains(T_UNINIT)
             } else {
                 false // complex, conservatively not initialized
             }
@@ -872,53 +771,54 @@ impl TypeDomain {
 
     /// Check whether a type variable is initialized.
     pub fn is_initialized_var(&self, v: Variable, _registry: &mut VariableRegistry) -> bool {
-        !self.get_typeset_const(v).contains(T_UNINIT)
+        let Some(s) = &self.state else {
+            return false;
+        };
+        !s.get_typeset(v).contains(T_UNINIT)
     }
 
     /// Check whether two registers have the same type.
-    ///
-    /// With the singleton-merging invariant, this is a pure DSU rep comparison:
-    /// if both variables have a singleton TypeSet `{te}`, they are already merged
-    /// with the same sentinel.
     pub fn same_type(&self, a: &Reg, b: &Reg, registry: &mut VariableRegistry) -> bool {
-        if self.is_bottom {
-            return true;
-        }
+        let Some(s) = &self.state else {
+            return true; // bottom: vacuously true
+        };
         let va = reg_type(a, registry);
         let vb = reg_type(b, registry);
-        match (self.var_to_id.get(&va), self.var_to_id.get(&vb)) {
-            (Some(&id_a), Some(&id_b)) => self.dsu.find_const(id_a) == self.dsu.find_const(id_b),
+        match (s.vars.find_id(va), s.vars.find_id(vb)) {
+            (Some(id_a), Some(id_b)) => s.dsu.find_const(id_a) == s.dsu.find_const(id_b),
             _ => false,
         }
     }
 
-    /// Check whether a register's type belongs to a type group.
-    pub fn is_in_group(&self, r: &Reg, group: TypeGroup, registry: &mut VariableRegistry) -> bool {
+    /// Check whether a register's type belongs to a type set.
+    pub fn is_in_group(&self, r: &Reg, group: TypeSet, registry: &mut VariableRegistry) -> bool {
         let v = reg_type(r, registry);
-        let ts = self.get_typeset_const(v);
-        ts.is_subset_of(group.to_typeset())
+        let Some(s) = &self.state else {
+            return true; // bottom: vacuously true
+        };
+        s.get_typeset(v).is_subset_of(group)
     }
 
     /// Serialize as a set of string constraints.
     pub fn to_set(&self, reg: &VariableRegistry) -> StringInvariant {
-        if self.is_bottom {
+        let Some(s) = &self.state else {
             return StringInvariant::bottom();
-        }
+        };
 
         let mut constraints = std::collections::BTreeSet::new();
 
         // Group variables by representative to find equalities
         let mut classes: BTreeMap<usize, Vec<Variable>> = BTreeMap::new();
-        for (&v, &id) in &self.var_to_id {
-            if self.id_to_var[id].is_none() {
+        for (v, id) in s.vars.vars() {
+            if !s.vars.id_is_live(id) {
                 continue; // orphaned
             }
-            let rep = self.dsu.find_const(id);
+            let rep = s.dsu.find_const(id);
             classes.entry(rep).or_default().push(v);
         }
 
         for (&rep, members) in &classes {
-            let ts = self.class_types[rep];
+            let ts = s.class_types[rep];
             if ts == TypeSet::all() {
                 continue; // top = no constraint
             }
@@ -963,7 +863,7 @@ impl Default for TypeDomain {
 
 impl std::fmt::Display for TypeDomain {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.is_bottom {
+        if self.state.is_none() {
             write!(f, "_|_")
         } else {
             write!(f, "TypeDomain")
@@ -992,7 +892,7 @@ mod tests {
         let mut reg = make_registry();
         let r0 = Reg { v: 0 };
         td.assign_type_encoding(&r0, T_NUM, &mut reg);
-        assert_eq!(td.get_type(&r0, &mut reg), T_NUM);
+        assert_eq!(td.get_type(&r0, &mut reg), Some(T_NUM));
     }
 
     #[test]
@@ -1012,7 +912,7 @@ mod tests {
         let r0 = Reg { v: 0 };
         // Restrict to {T_MAP, T_SHARED} (non-contiguous)
         let v = reg_type(&r0, &mut reg);
-        td.restrict(v, TypeSet::of(&[T_MAP, T_SHARED]));
+        td.restrict_to(v, TypeSet::of(&[T_MAP, T_SHARED]));
         let types = td.iterate_types(&r0, &mut reg);
         assert_eq!(types, vec![T_MAP, T_SHARED]);
     }
@@ -1063,7 +963,7 @@ mod tests {
         let joined = a.join(&b);
         assert!(!joined.same_type(&r0, &r1, &mut reg));
         // r0 should be {ctx}
-        assert_eq!(joined.get_type(&r0, &mut reg), T_CTX);
+        assert_eq!(joined.get_type(&r0, &mut reg), Some(T_CTX));
         // r1 should be {ctx, stack}
         let types = joined.iterate_types(&r1, &mut reg);
         assert!(types.contains(&T_CTX));
@@ -1117,16 +1017,16 @@ mod tests {
         // r0 = r1 = {ctx, stack}
         let v0 = reg_type(&r0, &mut reg);
         let v1 = reg_type(&r1, &mut reg);
-        td.ensure_var(v0);
-        td.ensure_var(v1);
-        td.restrict(v0, TypeSet::of(&[T_CTX, T_STACK]));
+        td.state.as_mut().unwrap().ensure_var(v0);
+        td.state.as_mut().unwrap().ensure_var(v1);
+        td.restrict_to(v0, TypeSet::of(&[T_CTX, T_STACK]));
         td.assign_type_var(v1, v0, &mut reg);
 
         // Restrict r0 to {ctx} — should also affect r1
-        td.restrict(v0, TypeSet::singleton(T_CTX));
+        td.restrict_to(v0, TypeSet::singleton(T_CTX));
 
-        assert_eq!(td.get_type(&r0, &mut reg), T_CTX);
-        assert_eq!(td.get_type(&r1, &mut reg), T_CTX);
+        assert_eq!(td.get_type(&r0, &mut reg), Some(T_CTX));
+        assert_eq!(td.get_type(&r1, &mut reg), Some(T_CTX));
     }
 
     #[test]
@@ -1136,10 +1036,10 @@ mod tests {
         let r0 = Reg { v: 0 };
 
         let v = reg_type(&r0, &mut reg);
-        td.restrict(v, TypeSet::of(&[T_CTX, T_STACK]));
+        td.restrict_to(v, TypeSet::of(&[T_CTX, T_STACK]));
 
         // Non-singleton returns T_UNINIT (compatibility)
-        assert_eq!(td.get_type(&r0, &mut reg), T_UNINIT);
+        assert_eq!(td.get_type(&r0, &mut reg), None);
     }
 
     #[test]
@@ -1156,7 +1056,7 @@ mod tests {
 
         // B: r0 can be {ctx, stack}
         let v0 = reg_type(&r0, &mut reg);
-        b.restrict(v0, TypeSet::of(&[T_CTX, T_STACK]));
+        b.restrict_to(v0, TypeSet::of(&[T_CTX, T_STACK]));
 
         assert!(a.is_included_in(&b));
         assert!(!b.is_included_in(&a));
@@ -1169,10 +1069,10 @@ mod tests {
         let r0 = Reg { v: 0 };
 
         td.assign_type_encoding(&r0, T_CTX, &mut reg);
-        assert!(td.is_in_group(&r0, TypeGroup::Pointer, &mut reg));
-        assert!(td.is_in_group(&r0, TypeGroup::Ctx, &mut reg));
-        assert!(!td.is_in_group(&r0, TypeGroup::Number, &mut reg));
-        assert!(td.is_in_group(&r0, TypeGroup::SingletonPtr, &mut reg));
+        assert!(td.is_in_group(&r0, TS_POINTER, &mut reg));
+        assert!(td.is_in_group(&r0, TypeSet::singleton(T_CTX), &mut reg));
+        assert!(!td.is_in_group(&r0, TS_NUM, &mut reg));
+        assert!(td.is_in_group(&r0, TS_SINGLETON_PTR, &mut reg));
     }
 
     // --- Tests for unify (assume x.type = y.type) ---
@@ -1187,15 +1087,15 @@ mod tests {
 
         let v0 = reg_type(&r0, &mut reg);
         let v1 = reg_type(&r1, &mut reg);
-        td.ensure_var(v0);
-        td.ensure_var(v1);
-        td.restrict(v0, TypeSet::of(&[T_MAP, T_CTX]));
-        td.restrict(v1, TypeSet::of(&[T_CTX, T_SHARED]));
-        td.unify(v0, v1);
+        td.state.as_mut().unwrap().ensure_var(v0);
+        td.state.as_mut().unwrap().ensure_var(v1);
+        td.restrict_to(v0, TypeSet::of(&[T_MAP, T_CTX]));
+        td.restrict_to(v1, TypeSet::of(&[T_CTX, T_SHARED]));
+        td.assume_eq(v0, v1);
 
         assert!(!td.is_bottom());
-        assert_eq!(td.get_type(&r0, &mut reg), T_CTX);
-        assert_eq!(td.get_type(&r1, &mut reg), T_CTX);
+        assert_eq!(td.get_type(&r0, &mut reg), Some(T_CTX));
+        assert_eq!(td.get_type(&r1, &mut reg), Some(T_CTX));
         assert!(td.same_type(&r0, &r1, &mut reg));
     }
 
@@ -1209,11 +1109,11 @@ mod tests {
 
         let v0 = reg_type(&r0, &mut reg);
         let v1 = reg_type(&r1, &mut reg);
-        td.ensure_var(v0);
-        td.ensure_var(v1);
-        td.restrict(v0, TypeSet::of(&[T_MAP, T_CTX, T_STACK]));
-        td.restrict(v1, TypeSet::of(&[T_CTX, T_PACKET, T_STACK]));
-        td.unify(v0, v1);
+        td.state.as_mut().unwrap().ensure_var(v0);
+        td.state.as_mut().unwrap().ensure_var(v1);
+        td.restrict_to(v0, TypeSet::of(&[T_MAP, T_CTX, T_STACK]));
+        td.restrict_to(v1, TypeSet::of(&[T_CTX, T_PACKET, T_STACK]));
+        td.assume_eq(v0, v1);
 
         assert!(!td.is_bottom());
         let types = td.iterate_types(&r0, &mut reg);
@@ -1233,11 +1133,11 @@ mod tests {
 
         let v0 = reg_type(&r0, &mut reg);
         let v1 = reg_type(&r1, &mut reg);
-        td.ensure_var(v0);
-        td.ensure_var(v1);
-        td.restrict(v0, TypeSet::of(&[T_MAP, T_CTX]));
-        td.restrict(v1, TypeSet::of(&[T_PACKET, T_SHARED]));
-        td.unify(v0, v1);
+        td.state.as_mut().unwrap().ensure_var(v0);
+        td.state.as_mut().unwrap().ensure_var(v1);
+        td.restrict_to(v0, TypeSet::of(&[T_MAP, T_CTX]));
+        td.restrict_to(v1, TypeSet::of(&[T_PACKET, T_SHARED]));
+        td.assume_eq(v0, v1);
 
         assert!(td.is_bottom());
     }
@@ -1252,15 +1152,15 @@ mod tests {
 
         let v0 = reg_type(&r0, &mut reg);
         let v1 = reg_type(&r1, &mut reg);
-        td.ensure_var(v0);
-        td.ensure_var(v1);
-        td.restrict(v0, TypeSet::singleton(T_CTX));
-        td.restrict(v1, TypeSet::of(&[T_MAP, T_CTX, T_SHARED]));
-        td.unify(v0, v1);
+        td.state.as_mut().unwrap().ensure_var(v0);
+        td.state.as_mut().unwrap().ensure_var(v1);
+        td.restrict_to(v0, TypeSet::singleton(T_CTX));
+        td.restrict_to(v1, TypeSet::of(&[T_MAP, T_CTX, T_SHARED]));
+        td.assume_eq(v0, v1);
 
         assert!(!td.is_bottom());
-        assert_eq!(td.get_type(&r0, &mut reg), T_CTX);
-        assert_eq!(td.get_type(&r1, &mut reg), T_CTX);
+        assert_eq!(td.get_type(&r0, &mut reg), Some(T_CTX));
+        assert_eq!(td.get_type(&r1, &mut reg), Some(T_CTX));
     }
 
     #[test]
@@ -1273,11 +1173,11 @@ mod tests {
 
         let v0 = reg_type(&r0, &mut reg);
         let v1 = reg_type(&r1, &mut reg);
-        td.ensure_var(v0);
-        td.ensure_var(v1);
-        td.restrict(v0, TypeSet::singleton(T_MAP));
-        td.restrict(v1, TypeSet::singleton(T_SHARED));
-        td.unify(v0, v1);
+        td.state.as_mut().unwrap().ensure_var(v0);
+        td.state.as_mut().unwrap().ensure_var(v1);
+        td.restrict_to(v0, TypeSet::singleton(T_MAP));
+        td.restrict_to(v1, TypeSet::singleton(T_SHARED));
+        td.assume_eq(v0, v1);
 
         assert!(td.is_bottom());
     }
@@ -1295,25 +1195,25 @@ mod tests {
         let v0 = reg_type(&r0, &mut reg);
         let v1 = reg_type(&r1, &mut reg);
         let v2 = reg_type(&r2, &mut reg);
-        td.ensure_var(v0);
-        td.ensure_var(v1);
-        td.ensure_var(v2);
-        td.restrict(v0, TypeSet::of(&[T_MAP, T_CTX, T_STACK]));
-        td.restrict(v1, TypeSet::of(&[T_CTX, T_STACK, T_SHARED]));
-        td.restrict(v2, TypeSet::of(&[T_STACK, T_SHARED, T_PACKET]));
+        td.state.as_mut().unwrap().ensure_var(v0);
+        td.state.as_mut().unwrap().ensure_var(v1);
+        td.state.as_mut().unwrap().ensure_var(v2);
+        td.restrict_to(v0, TypeSet::of(&[T_MAP, T_CTX, T_STACK]));
+        td.restrict_to(v1, TypeSet::of(&[T_CTX, T_STACK, T_SHARED]));
+        td.restrict_to(v2, TypeSet::of(&[T_STACK, T_SHARED, T_PACKET]));
 
-        td.unify(v0, v1); // x,y → {ctx, stack}
+        td.assume_eq(v0, v1); // x,y → {ctx, stack}
         assert!(!td.is_bottom());
         let types = td.iterate_types(&r0, &mut reg);
         assert_eq!(types.len(), 2);
         assert!(types.contains(&T_CTX));
         assert!(types.contains(&T_STACK));
 
-        td.unify(v1, v2); // y,z → intersection of {ctx, stack} ∩ {stack, shared, packet} = {stack}
+        td.assume_eq(v1, v2); // y,z → intersection of {ctx, stack} ∩ {stack, shared, packet} = {stack}
         assert!(!td.is_bottom());
-        assert_eq!(td.get_type(&r0, &mut reg), T_STACK);
-        assert_eq!(td.get_type(&r1, &mut reg), T_STACK);
-        assert_eq!(td.get_type(&r2, &mut reg), T_STACK);
+        assert_eq!(td.get_type(&r0, &mut reg), Some(T_STACK));
+        assert_eq!(td.get_type(&r1, &mut reg), Some(T_STACK));
+        assert_eq!(td.get_type(&r2, &mut reg), Some(T_STACK));
         assert!(td.same_type(&r0, &r2, &mut reg));
     }
 

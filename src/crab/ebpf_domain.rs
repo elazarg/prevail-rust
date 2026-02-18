@@ -217,10 +217,6 @@ impl EbpfDomain {
         self.rcp.values.add_constraint(cst, registry);
     }
 
-    pub fn add_type_constraint(&mut self, cst: &LinearConstraint, registry: &mut VariableRegistry) {
-        self.rcp.types.add_constraint(cst, registry);
-    }
-
     pub fn havoc(&mut self, var: Variable) {
         self.rcp.values.havoc(var);
     }
@@ -504,22 +500,6 @@ impl EbpfDomain {
         inv
     }
 
-    /// Construct domain from type and value constraints.
-    pub fn from_linear_constraints(
-        type_constraints: &[LinearConstraint],
-        value_constraints: &[LinearConstraint],
-        registry: &mut VariableRegistry,
-    ) -> EbpfDomain {
-        let mut inv = EbpfDomain::new();
-        for cst in type_constraints {
-            inv.add_type_constraint(cst, registry);
-        }
-        for cst in value_constraints {
-            inv.add_value_constraint(cst, registry);
-        }
-        inv
-    }
-
     /// Construct domain from string constraints (used by YAML tests and
     /// `analyze_with_entry`).
     ///
@@ -539,11 +519,11 @@ impl EbpfDomain {
         let mut numeric_ranges = Vec::new();
         let parsed =
             crate::ir::parse::parse_linear_constraints(constraints, &mut numeric_ranges, registry);
-        for cst in &parsed.type_csts {
-            inv.add_type_constraint(cst, registry);
+        for &(v1, v2) in &parsed.type_equalities {
+            inv.rcp.types.assume_eq(v1, v2);
         }
         for &(var, ts) in &parsed.type_restrictions {
-            inv.rcp.types.restrict(var, ts);
+            inv.rcp.types.restrict_to(var, ts);
         }
         for cst in &parsed.value_csts {
             inv.add_value_constraint(cst, registry);
