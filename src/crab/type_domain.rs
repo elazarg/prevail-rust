@@ -823,9 +823,9 @@ impl TypeDomain {
                 continue; // top = no constraint
             }
 
-            // Sort members for deterministic output
+            // Sort members by name for deterministic output (matches C++ printing_order).
             let mut sorted: Vec<&Variable> = members.iter().collect();
-            sorted.sort();
+            sorted.sort_by_key(|v| reg.name(**v));
 
             if let Some(te) = ts.as_singleton() {
                 // Singleton TypeSet: emit concrete type for every member
