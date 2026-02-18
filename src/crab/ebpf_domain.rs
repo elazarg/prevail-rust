@@ -288,7 +288,7 @@ impl EbpfDomain {
                 // upstream compares `map->type` instead of `map->inner_map_fd`
                 // when checking uniqueness across the range. This can admit an
                 // inconsistent inner-map set when map types match. Keep this
-                // behaviour for parity until upstream fixes it.
+                // behavior for parity until upstream fixes it.
                 Some(r) if map.map_type != r => return None,
                 _ => {}
             }
@@ -541,6 +541,9 @@ impl EbpfDomain {
             crate::ir::parse::parse_linear_constraints(constraints, &mut numeric_ranges, registry);
         for cst in &parsed.type_csts {
             inv.add_type_constraint(cst, registry);
+        }
+        for &(var, ts) in &parsed.type_restrictions {
+            inv.rcp.types.restrict(var, ts);
         }
         for cst in &parsed.value_csts {
             inv.add_value_constraint(cst, registry);

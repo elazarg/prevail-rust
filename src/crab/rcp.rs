@@ -11,7 +11,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::arith::linear_constraint::{LinearConstraint, expr_eq};
+use crate::arith::linear_constraint::LinearConstraint;
 use crate::arith::linear_expression::LinearExpression;
 use crate::arith::variable::Variable;
 use crate::crab::add_bottom::NumAbsDomain;
@@ -372,11 +372,7 @@ impl TypeToNumDomain {
         for &te in &valid_types {
             let mut tmp = self.clone();
             let type_var = reg_type(reg, registry);
-            let cst = expr_eq(
-                LinearExpression::from(type_var),
-                LinearExpression::from(te as i64),
-            );
-            tmp.types.add_constraint(&cst, registry);
+            tmp.types.restrict(type_var, TypeSet::singleton(te));
             // Havoc kind variables for other types.
             for (&other_type, kinds) in &valid_type_kinds {
                 if other_type != te as i32 {

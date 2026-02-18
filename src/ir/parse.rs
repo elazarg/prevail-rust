@@ -751,6 +751,8 @@ fn special_var(s: &str, registry: &mut VariableRegistry) -> Variable {
 pub struct TypeValueConstraints {
     pub type_csts: Vec<LinearConstraint>,
     pub value_csts: Vec<LinearConstraint>,
+    /// Direct TypeSet restrictions for type variables (from `in {...}` syntax).
+    pub type_restrictions: Vec<(Variable, crate::crab::type_encoding::TypeSet)>,
 }
 
 // ---------------------------------------------------------------------------
@@ -769,6 +771,7 @@ pub fn parse_linear_constraints(
 ) -> TypeValueConstraints {
     let mut value_csts: Vec<LinearConstraint> = Vec::new();
     let mut type_csts: Vec<LinearConstraint> = Vec::new();
+    let mut type_restrictions: Vec<(Variable, crate::crab::type_encoding::TypeSet)> = Vec::new();
 
     // Pre-compile all the regex patterns.
     let re_special_eq_imm = Regex::new(&format!("^{}={}$", SPECIAL_VAR, IMM)).unwrap();
@@ -871,41 +874,19 @@ pub fn parse_linear_constraints(
             let d = registry.type_reg(regnum(m.get(1).unwrap().as_str()));
             let inside = m.get(2).unwrap().as_str();
 
-            let mut any = false;
-            let mut lb_val = Number::from(0i32);
-            let mut ub_val = Number::from(0i32);
-
+            let mut ts = crate::crab::type_encoding::TypeSet::empty();
             for cap in type_tok_regex.captures_iter(inside) {
                 let sym = cap.get(1).unwrap().as_str();
                 let enc = string_to_type_encoding(sym)
                     .unwrap_or_else(|| panic!("Unknown type encoding: {}", sym));
-                let n = Number::from(enc as i32);
-                if !any {
-                    lb_val = n;
-                    ub_val = n;
-                    any = true;
-                } else {
-                    if n < lb_val {
-                        lb_val = n;
-                    }
-                    if n > ub_val {
-                        ub_val = n;
-                    }
-                }
+                ts = ts.union(crate::crab::type_encoding::TypeSet::singleton(enc));
             }
 
-            if !any {
+            if ts.is_empty() {
                 panic!("Empty type set in 'in {{...}}' constraint: {}", cst_text);
             }
 
-            type_csts.push(leq(
-                LinearExpression::from(lb_val),
-                LinearExpression::from(d),
-            ));
-            type_csts.push(leq(
-                LinearExpression::from(d),
-                LinearExpression::from(ub_val),
-            ));
+            type_restrictions.push((d, ts));
         } else if let Some(m) = re_reg_kind_eq_imm.captures(cst_text) {
             // REG.KIND = IMM
             let kind_str = m.get(2).unwrap().as_str();
@@ -996,5 +977,6 @@ pub fn parse_linear_constraints(
     TypeValueConstraints {
         type_csts,
         value_csts,
+        type_restrictions,
     }
 }

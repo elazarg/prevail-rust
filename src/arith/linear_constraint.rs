@@ -158,11 +158,6 @@ pub fn expr_eq(e1: LinearExpression, e2: LinearExpression) -> LinearConstraint {
     LinearConstraint::new(e1 - e2, ConstraintKind::EqualsZero)
 }
 
-/// `expr1 != expr2`
-pub fn expr_neq(e1: LinearExpression, e2: LinearExpression) -> LinearConstraint {
-    LinearConstraint::new(e1 - e2, ConstraintKind::NotZero)
-}
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------

@@ -19,49 +19,9 @@ use crate::crab::type_encoding::*;
 use crate::crab::var_registry::VariableRegistry;
 use crate::ir::syntax::Reg;
 
-// ============================================================================
-// Free functions for type constraints (kept for backward compatibility)
-// ============================================================================
-
 /// Get the type variable for a register.
 pub fn reg_type(reg: &Reg, registry: &mut VariableRegistry) -> Variable {
     registry.type_reg(reg.v as i32)
-}
-
-/// Constraint: register type >= T_CTX (i.e. register is a pointer).
-pub fn type_is_pointer_cst(reg: &Reg, registry: &mut VariableRegistry) -> LinearConstraint {
-    use crate::arith::linear_constraint::geq;
-    geq(
-        reg_type(reg, registry).into(),
-        (TypeEncoding::TCtx as i64).into(),
-    )
-}
-
-/// Constraint: register type == T_NUM.
-pub fn type_is_number_cst(reg: &Reg, registry: &mut VariableRegistry) -> LinearConstraint {
-    use crate::arith::linear_constraint::expr_eq;
-    expr_eq(
-        reg_type(reg, registry).into(),
-        (TypeEncoding::TNum as i64).into(),
-    )
-}
-
-/// Constraint: register type != T_STACK.
-pub fn type_is_not_stack_cst(reg: &Reg, registry: &mut VariableRegistry) -> LinearConstraint {
-    use crate::arith::linear_constraint::expr_neq;
-    expr_neq(
-        reg_type(reg, registry).into(),
-        (TypeEncoding::TStack as i64).into(),
-    )
-}
-
-/// Constraint: register type != T_NUM.
-pub fn type_is_not_number_cst(reg: &Reg, registry: &mut VariableRegistry) -> LinearConstraint {
-    use crate::arith::linear_constraint::expr_neq;
-    expr_neq(
-        reg_type(reg, registry).into(),
-        (TypeEncoding::TNum as i64).into(),
-    )
 }
 
 // ============================================================================
@@ -168,7 +128,7 @@ impl TypeDomain {
     }
 
     /// Restrict the TypeSet of a variable's class to a mask.
-    fn restrict(&mut self, v: Variable, mask: TypeSet) {
+    pub fn restrict(&mut self, v: Variable, mask: TypeSet) {
         if self.is_bottom {
             return;
         }
@@ -179,17 +139,6 @@ impl TypeDomain {
         if result.is_empty() {
             self.is_bottom = true;
         }
-    }
-
-    /// Build a TypeSet mask from an encoding range [lb_enc, ub_enc].
-    fn typeset_from_encoding_range(lb: i32, ub: i32) -> TypeSet {
-        let mut result = TypeSet::empty();
-        for enc in lb..=ub {
-            if let Some(te) = int_to_type_encoding(enc) {
-                result = result.union(TypeSet::singleton(te));
-            }
-        }
-        result
     }
 
     // ========================================================================
@@ -216,18 +165,27 @@ impl TypeDomain {
                 return false;
             }
         }
+        // Variables in other but absent in self are unconstrained (all types).
+        // This only subsumes if other also allows all types for them.
+        for (&v, &id_b) in &other.var_to_id {
+            if !self.var_to_id.contains_key(&v) {
+                let rep_b = other.dsu.find_const(id_b);
+                if other.class_types[rep_b] != TypeSet::all() {
+                    return false;
+                }
+            }
+        }
 
         // Check (2): for every pair in the same B-class, they must be in the same A-class
-        // Efficient: group B's variables by representative, check each group is same in A
+        // (or both must be the same singleton, which is implicit equality)
         for members in other.equivalence_classes().values() {
             if members.len() <= 1 {
                 continue;
             }
-            // All members must be in the same A-class
             let first = members[0];
             let Some(&first_id_a) = self.var_to_id.get(&first) else {
-                // Variable not in A — it's in a singleton class in A (top)
-                // For B's equality to hold in A, all members must also be unknown in A
+                // Variable not in A — unconstrained (top).
+                // For B's equality to hold, all members must also be unknown in A.
                 for &m in &members[1..] {
                     if self.var_to_id.contains_key(&m) {
                         return false;
@@ -236,12 +194,17 @@ impl TypeDomain {
                 continue;
             };
             let rep_a = self.dsu.find_const(first_id_a);
+            let ts_first = self.class_types[rep_a];
             for &m in &members[1..] {
                 let Some(&m_id_a) = self.var_to_id.get(&m) else {
                     return false;
                 };
                 if self.dsu.find_const(m_id_a) != rep_a {
-                    return false;
+                    // Different DSU classes — still equal if both are the same singleton
+                    let ts_m = self.class_types[self.dsu.find_const(m_id_a)];
+                    if !ts_first.is_singleton() || ts_first != ts_m {
+                        return false;
+                    }
                 }
             }
         }
@@ -512,14 +475,12 @@ impl TypeDomain {
         }
     }
 
-    /// Add a linear constraint (compatibility shim for the transition).
+    /// Add a linear constraint (equality or inequality only).
     ///
     /// Interprets the constraint as a type domain operation:
     /// - `var == const` → restrict to singleton
     /// - `var == var2` → unify
     /// - `var != const` → remove one type
-    /// - `var <= const` → restrict to types with encoding <= const
-    /// - `var >= const` → restrict to types with encoding >= const
     pub fn add_constraint(&mut self, cst: &LinearConstraint, _registry: &mut VariableRegistry) {
         if self.is_bottom {
             return;
@@ -590,39 +551,13 @@ impl TypeDomain {
                     }
                 }
             }
-            ConstraintKind::LessThanOrEqualsZero => {
-                // expression <= 0
-                if terms.len() == 1 {
-                    let (&var, coeff) = terms.iter().next().unwrap();
-                    if coeff.to_i64() == Some(1) {
-                        // var + c <= 0 → var <= -c
-                        let ub = (-constant).to_i64().unwrap_or(0) as i32;
-                        let mask = Self::typeset_from_encoding_range(T_UNINIT as i32, ub);
-                        self.restrict(var, mask);
-                    } else if coeff.to_i64() == Some(-1) {
-                        // -var + c <= 0 → var >= c
-                        let lb = constant.to_i64().unwrap_or(0) as i32;
-                        let mask = Self::typeset_from_encoding_range(lb, T_SHARED as i32);
-                        self.restrict(var, mask);
-                    }
-                }
-            }
-            ConstraintKind::LessThanZero => {
-                // expression < 0
-                if terms.len() == 1 {
-                    let (&var, coeff) = terms.iter().next().unwrap();
-                    if coeff.to_i64() == Some(1) {
-                        // var + c < 0 → var < -c → var <= -c - 1
-                        let ub = (-constant).to_i64().unwrap_or(0) as i32 - 1;
-                        let mask = Self::typeset_from_encoding_range(T_UNINIT as i32, ub);
-                        self.restrict(var, mask);
-                    } else if coeff.to_i64() == Some(-1) {
-                        // -var + c < 0 → var > c → var >= c + 1
-                        let lb = constant.to_i64().unwrap_or(0) as i32 + 1;
-                        let mask = Self::typeset_from_encoding_range(lb, T_SHARED as i32);
-                        self.restrict(var, mask);
-                    }
-                }
+            ConstraintKind::LessThanOrEqualsZero | ConstraintKind::LessThanZero => {
+                // Order constraints are not supported by the DSU-based TypeDomain.
+                // All callers should use direct TypeDomain methods instead.
+                debug_assert!(
+                    false,
+                    "Order constraints should not be passed to TypeDomain::add_constraint"
+                );
             }
         }
     }
@@ -645,7 +580,7 @@ impl TypeDomain {
     }
 
     /// Remove a single type from a variable's class.
-    fn remove_type(&mut self, v: Variable, te: TypeEncoding) {
+    pub fn remove_type(&mut self, v: Variable, te: TypeEncoding) {
         if self.is_bottom {
             return;
         }
@@ -752,173 +687,58 @@ impl TypeDomain {
         }
     }
 
-    /// Check whether the type invariant implies a conclusion under a premise.
+    /// Check: "if var1 belongs to `premise_group`, then var2's types ⊆ `conclusion_set`".
     ///
-    /// `implies(A, B)` = "for all concrete states, if A holds then B holds".
-    /// Implemented as: clone domain, add premise, check conclusion.
-    pub fn implies(
+    /// Implemented as: clone domain, restrict var1 to premise_group, check var2.
+    pub fn implies_group(
         &self,
-        premise: &LinearConstraint,
-        conclusion: &LinearConstraint,
-        registry: &mut VariableRegistry,
+        var1: Variable,
+        premise_group: TypeGroup,
+        var2: Variable,
+        conclusion_set: TypeSet,
     ) -> bool {
         if self.is_bottom {
             return true;
         }
         let mut restricted = self.clone();
-        restricted.add_constraint(premise, registry);
+        restricted.restrict(var1, premise_group.to_typeset());
         if restricted.is_bottom {
             return true; // premise unsatisfiable → vacuously true
         }
-        restricted.entail_constraint(conclusion)
+        restricted
+            .get_typeset_const(var2)
+            .is_subset_of(conclusion_set)
     }
 
-    /// Check whether a constraint is entailed by the current state.
-    pub fn entail_constraint(&self, cst: &LinearConstraint) -> bool {
+    /// Check: "if var1 ≠ `excluded_type`, then var2's types ⊆ `conclusion_set`".
+    ///
+    /// Implemented as: clone domain, remove excluded_type from var1, check var2.
+    pub fn implies_not_type(
+        &self,
+        var1: Variable,
+        excluded_type: TypeEncoding,
+        var2: Variable,
+        conclusion_set: TypeSet,
+    ) -> bool {
         if self.is_bottom {
             return true;
         }
-        if cst.is_tautology() {
+        let mut restricted = self.clone();
+        restricted.remove_type(var1, excluded_type);
+        if restricted.is_bottom {
+            return true; // premise unsatisfiable → vacuously true
+        }
+        restricted
+            .get_typeset_const(var2)
+            .is_subset_of(conclusion_set)
+    }
+
+    /// Check whether a variable's type is certainly `te` (singleton TypeSet).
+    pub fn entail_type(&self, v: Variable, te: TypeEncoding) -> bool {
+        if self.is_bottom {
             return true;
         }
-        if cst.is_contradiction() {
-            return false;
-        }
-
-        let expr = cst.expression();
-        let terms = expr.variable_terms();
-        let constant = expr.constant_term();
-
-        match cst.kind() {
-            ConstraintKind::EqualsZero => {
-                if terms.len() == 1 {
-                    let (&var, coeff) = terms.iter().next().unwrap();
-                    if coeff.to_i64() == Some(1) {
-                        // var == -c
-                        let val = (-constant).to_i64().unwrap_or(0) as i32;
-                        let ts = self.get_typeset_const(var);
-                        if let Some(te) = int_to_type_encoding(val) {
-                            ts == TypeSet::singleton(te)
-                        } else {
-                            false
-                        }
-                    } else if coeff.to_i64() == Some(-1) {
-                        // var == c
-                        let val = constant.to_i64().unwrap_or(0) as i32;
-                        let ts = self.get_typeset_const(var);
-                        if let Some(te) = int_to_type_encoding(val) {
-                            ts == TypeSet::singleton(te)
-                        } else {
-                            false
-                        }
-                    } else {
-                        false
-                    }
-                } else if terms.len() == 2 {
-                    // var1 - var2 == 0 → same_set check
-                    let mut iter = terms.iter();
-                    let (&v1, c1) = iter.next().unwrap();
-                    let (&v2, c2) = iter.next().unwrap();
-                    if constant.is_zero()
-                        && ((c1.to_i64() == Some(1) && c2.to_i64() == Some(-1))
-                            || (c1.to_i64() == Some(-1) && c2.to_i64() == Some(1)))
-                    {
-                        // Check if v1 and v2 are in the same class AND the class is a singleton
-                        match (self.var_to_id.get(&v1), self.var_to_id.get(&v2)) {
-                            (Some(&id1), Some(&id2)) => {
-                                let rep1 = self.dsu.find_const(id1);
-                                let rep2 = self.dsu.find_const(id2);
-                                if rep1 == rep2 {
-                                    true
-                                } else {
-                                    // Different classes — check if both are singletons with same value
-                                    let ts1 = self.class_types[rep1];
-                                    let ts2 = self.class_types[rep2];
-                                    ts1.is_singleton() && ts1 == ts2
-                                }
-                            }
-                            _ => false, // unknown variables can be anything
-                        }
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                }
-            }
-            ConstraintKind::NotZero => {
-                if terms.len() == 1 {
-                    let (&var, coeff) = terms.iter().next().unwrap();
-                    if coeff.to_i64() == Some(1) {
-                        // var != -c
-                        let val = (-constant).to_i64().unwrap_or(0) as i32;
-                        let ts = self.get_typeset_const(var);
-                        if let Some(te) = int_to_type_encoding(val) {
-                            !ts.contains(te)
-                        } else {
-                            true // if val isn't a valid type, it's trivially not equal
-                        }
-                    } else if coeff.to_i64() == Some(-1) {
-                        // var != c
-                        let val = constant.to_i64().unwrap_or(0) as i32;
-                        let ts = self.get_typeset_const(var);
-                        if let Some(te) = int_to_type_encoding(val) {
-                            !ts.contains(te)
-                        } else {
-                            true
-                        }
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                }
-            }
-            ConstraintKind::LessThanOrEqualsZero => {
-                if terms.len() == 1 {
-                    let (&var, coeff) = terms.iter().next().unwrap();
-                    if coeff.to_i64() == Some(1) {
-                        // var <= -c
-                        let ub = (-constant).to_i64().unwrap_or(0) as i32;
-                        let ts = self.get_typeset_const(var);
-                        let mask = Self::typeset_from_encoding_range(T_UNINIT as i32, ub);
-                        ts.is_subset_of(mask)
-                    } else if coeff.to_i64() == Some(-1) {
-                        // var >= c
-                        let lb = constant.to_i64().unwrap_or(0) as i32;
-                        let ts = self.get_typeset_const(var);
-                        let mask = Self::typeset_from_encoding_range(lb, T_SHARED as i32);
-                        ts.is_subset_of(mask)
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                }
-            }
-            ConstraintKind::LessThanZero => {
-                if terms.len() == 1 {
-                    let (&var, coeff) = terms.iter().next().unwrap();
-                    if coeff.to_i64() == Some(1) {
-                        // var < -c → var <= -c - 1
-                        let ub = (-constant).to_i64().unwrap_or(0) as i32 - 1;
-                        let ts = self.get_typeset_const(var);
-                        let mask = Self::typeset_from_encoding_range(T_UNINIT as i32, ub);
-                        ts.is_subset_of(mask)
-                    } else if coeff.to_i64() == Some(-1) {
-                        // var > c → var >= c + 1
-                        let lb = constant.to_i64().unwrap_or(0) as i32 + 1;
-                        let ts = self.get_typeset_const(var);
-                        let mask = Self::typeset_from_encoding_range(lb, T_SHARED as i32);
-                        ts.is_subset_of(mask)
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                }
-            }
-        }
+        self.get_typeset_const(v) == TypeSet::singleton(te)
     }
 
     /// Check whether the register's type may include a given type.

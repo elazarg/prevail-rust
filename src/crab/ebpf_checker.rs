@@ -13,10 +13,8 @@ use crate::cfg::label::Label;
 use crate::crab::ebpf_domain::{DomainContext, EbpfDomain, VerificationError};
 use crate::crab::interval::Interval;
 use crate::crab::rcp::reg_pack;
-use crate::crab::type_domain::{
-    type_is_not_number_cst, type_is_not_stack_cst, type_is_number_cst, type_is_pointer_cst,
-};
-use crate::crab::type_encoding::{DataKind, TypeEncoding, TypeGroup};
+use crate::crab::type_domain::reg_type;
+use crate::crab::type_encoding::{DataKind, T_NUM, T_STACK, TypeEncoding, TypeGroup, TypeSet};
 use crate::crab::var_registry::VariableRegistry;
 use crate::ir::assertions::get_assertions;
 use crate::ir::syntax::{
@@ -95,8 +93,14 @@ impl<'a> EbpfChecker<'a> {
         }
     }
 
-    fn require_type(&mut self, cst: LinearConstraint, msg: &str) -> Result<(), VerificationError> {
-        if !self.dom.rcp.types.entail_constraint(&cst) {
+    fn require_type_is(
+        &mut self,
+        reg: &crate::ir::syntax::Reg,
+        te: TypeEncoding,
+        msg: &str,
+    ) -> Result<(), VerificationError> {
+        let v = reg_type(reg, self.registry);
+        if !self.dom.rcp.types.entail_type(v, te) {
             self.throw_fail(msg)
         } else {
             Ok(())
@@ -205,10 +209,13 @@ impl<'a> EbpfChecker<'a> {
     // Handlers
 
     fn check_addable(&mut self, s: &Addable) -> Result<(), VerificationError> {
-        if !self.dom.rcp.types.implies(
-            &type_is_pointer_cst(&s.ptr, self.registry),
-            &type_is_number_cst(&s.num, self.registry),
-            self.registry,
+        let ptr_var = reg_type(&s.ptr, self.registry);
+        let num_var = reg_type(&s.num, self.registry);
+        if !self.dom.rcp.types.implies_group(
+            ptr_var,
+            TypeGroup::Pointer,
+            num_var,
+            TypeSet::singleton(T_NUM),
         ) {
             self.throw_fail("Only numbers can be added to pointers")
         } else {
@@ -235,8 +242,8 @@ impl<'a> EbpfChecker<'a> {
         if self.dom.rcp.types.same_type(&s.r1, &s.r2, self.registry) {
             // Same type. If both are numbers, that's okay. Otherwise:
             let mut non_number_types = self.dom.rcp.types.clone();
-            non_number_types
-                .add_constraint(&type_is_not_number_cst(&s.r2, self.registry), self.registry);
+            let r2_type_var = reg_type(&s.r2, self.registry);
+            non_number_types.remove_type(r2_type_var, T_NUM);
 
             // We must check that they belong to a singleton region:
             if !non_number_types.is_in_group(&s.r1, TypeGroup::SingletonPtr, self.registry)
@@ -266,8 +273,11 @@ impl<'a> EbpfChecker<'a> {
             Ok(())
         } else {
             // _Maybe_ different types, so r2 must be a number.
-            let cst = type_is_number_cst(&s.r2, self.registry);
-            self.require_type(cst, "Cannot subtract pointers to different regions")
+            self.require_type_is(
+                &s.r2,
+                T_NUM,
+                "Cannot subtract pointers to different regions",
+            )
         }
     }
 
@@ -308,10 +318,12 @@ impl<'a> EbpfChecker<'a> {
     }
 
     fn check_valid_divisor(&mut self, s: &ValidDivisor) -> Result<(), VerificationError> {
-        if !self.dom.rcp.types.implies(
-            &type_is_pointer_cst(&s.reg, self.registry),
-            &type_is_number_cst(&s.reg, self.registry),
-            self.registry,
+        let reg_var = reg_type(&s.reg, self.registry);
+        if !self.dom.rcp.types.implies_group(
+            reg_var,
+            TypeGroup::Pointer,
+            reg_var,
+            TypeSet::singleton(T_NUM),
         ) {
             return self.throw_fail("Only numbers can be used as divisors");
         }
@@ -604,10 +616,13 @@ impl<'a> EbpfChecker<'a> {
     }
 
     fn check_valid_store(&mut self, s: &ValidStore) -> Result<(), VerificationError> {
-        if !self.dom.rcp.types.implies(
-            &type_is_not_stack_cst(&s.mem, self.registry),
-            &type_is_number_cst(&s.val, self.registry),
-            self.registry,
+        let mem_var = reg_type(&s.mem, self.registry);
+        let val_var = reg_type(&s.val, self.registry);
+        if !self.dom.rcp.types.implies_not_type(
+            mem_var,
+            T_STACK,
+            val_var,
+            TypeSet::singleton(T_NUM),
         ) {
             self.throw_fail("Only numbers can be stored to externally-visible regions")
         } else {
