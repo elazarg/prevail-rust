@@ -28,10 +28,30 @@ pub fn reg_type(reg: &Reg, registry: &mut VariableRegistry) -> Variable {
 // TypeDomain
 // ============================================================================
 
+/// Number of sentinel DSU elements (one per `TypeEncoding`).
+const NUM_SENTINELS: usize = 8;
+
 /// Type abstract domain based on disjoint-set with `TypeSet` annotations.
 ///
 /// Tracks must-equality between type variables (partition into equivalence
 /// classes) and exact finite sets of possible types per class.
+///
+/// ## Singleton-merging invariant
+///
+/// The domain pre-allocates 8 *sentinel* DSU elements (IDs 0..7), one per
+/// `TypeEncoding` value. Sentinel `i` has `class_types[i] = {te}` where
+/// `type_to_bit(te) == i`. After every mutation that may narrow a class's
+/// `TypeSet` to a singleton, the class is merged with the corresponding
+/// sentinel via [`merge_if_singleton`]. This guarantees:
+///
+/// > **All DSU elements whose `TypeSet` is the singleton `{te}` belong to the
+/// > same equivalence class as sentinel `type_to_bit(te)`.**
+///
+/// Consequences:
+/// - `same_type(a, b)` reduces to a single DSU rep comparison (no TypeSet
+///   fallback needed).
+/// - `join` can use raw DSU reps as partition keys (no `singleton_key` hack).
+/// - `is_included_in` equality check is pure DSU (no singleton special-case).
 #[derive(Clone)]
 pub struct TypeDomain {
     dsu: DisjointSetUnion,
@@ -43,20 +63,29 @@ pub struct TypeDomain {
 
 impl TypeDomain {
     pub fn top() -> Self {
+        let dsu = DisjointSetUnion::new(NUM_SENTINELS);
+        let mut class_types = Vec::with_capacity(NUM_SENTINELS);
+        for te in TypeSet::all().iter() {
+            class_types.push(TypeSet::singleton(te));
+        }
         TypeDomain {
-            dsu: DisjointSetUnion::new(0),
+            dsu,
             var_to_id: BTreeMap::new(),
-            id_to_var: Vec::new(),
-            class_types: Vec::new(),
+            id_to_var: vec![None; NUM_SENTINELS],
+            class_types,
             is_bottom: false,
         }
     }
 
     pub fn set_to_top(&mut self) {
-        self.dsu = DisjointSetUnion::new(0);
+        self.dsu = DisjointSetUnion::new(NUM_SENTINELS);
         self.var_to_id.clear();
         self.id_to_var.clear();
+        self.id_to_var.resize(NUM_SENTINELS, None);
         self.class_types.clear();
+        for te in TypeSet::all().iter() {
+            self.class_types.push(TypeSet::singleton(te));
+        }
         self.is_bottom = false;
     }
 
@@ -71,6 +100,21 @@ impl TypeDomain {
     // ========================================================================
     // Internal helpers
     // ========================================================================
+
+    /// If the class containing `id` has a singleton TypeSet, merge it with the
+    /// corresponding sentinel element to maintain the singleton-merging invariant.
+    fn merge_if_singleton(&mut self, id: usize) {
+        let rep = self.dsu.find(id);
+        let ts = self.class_types[rep];
+        if let Some(te) = ts.as_singleton() {
+            let sentinel = type_to_bit(te) as usize;
+            let sentinel_rep = self.dsu.find(sentinel);
+            if rep != sentinel_rep {
+                let new_rep = self.dsu.union(rep, sentinel);
+                self.class_types[new_rep] = ts;
+            }
+        }
+    }
 
     /// Ensure a variable has a DSU element. Returns its id.
     fn ensure_var(&mut self, v: Variable) -> usize {
@@ -138,6 +182,8 @@ impl TypeDomain {
         self.class_types[rep] = result;
         if result.is_empty() {
             self.is_bottom = true;
+        } else {
+            self.merge_if_singleton(id);
         }
     }
 
@@ -176,8 +222,9 @@ impl TypeDomain {
             }
         }
 
-        // Check (2): for every pair in the same B-class, they must be in the same A-class
-        // (or both must be the same singleton, which is implicit equality)
+        // Check (2): for every pair in the same B-class, they must be in the same A-class.
+        // With the singleton-merging invariant, DSU rep equality is the single source
+        // of truth (no singleton fallback needed).
         for members in other.equivalence_classes().values() {
             if members.len() <= 1 {
                 continue;
@@ -194,17 +241,12 @@ impl TypeDomain {
                 continue;
             };
             let rep_a = self.dsu.find_const(first_id_a);
-            let ts_first = self.class_types[rep_a];
             for &m in &members[1..] {
                 let Some(&m_id_a) = self.var_to_id.get(&m) else {
                     return false;
                 };
                 if self.dsu.find_const(m_id_a) != rep_a {
-                    // Different DSU classes — still equal if both are the same singleton
-                    let ts_m = self.class_types[self.dsu.find_const(m_id_a)];
-                    if !ts_first.is_singleton() || ts_first != ts_m {
-                        return false;
-                    }
+                    return false;
                 }
             }
         }
@@ -253,30 +295,13 @@ impl TypeDomain {
             }
         }
 
-        // JoinKey: either a singleton type encoding (canonical for all variables with
-        // that singleton) or a DSU representative (for non-singleton classes).
-        // We encode this as: singleton → usize::MAX - bit_index, rep → rep.
-        // This is collision-free because reps are < dsu.len() which is much less than
-        // usize::MAX.
-        let singleton_key = |ts: TypeSet, _rep: usize| -> usize {
-            if let Some(te) = ts.as_singleton() {
-                usize::MAX - type_to_bit(te) as usize
-            } else {
-                _rep
-            }
-        };
-
-        // Compute keys.
+        // With the singleton-merging invariant, all variables sharing a singleton
+        // TypeSet in an operand already share the same DSU rep (the sentinel).
+        // So raw DSU reps partition correctly without a special singleton key.
         let mut keys: BTreeMap<(Option<usize>, Option<usize>), Vec<Variable>> = BTreeMap::new();
         for &v in &all_vars {
-            let key_a = self.var_to_id.get(&v).map(|&id| {
-                let rep = self.dsu.find_const(id);
-                singleton_key(self.class_types[rep], rep)
-            });
-            let key_b = other.var_to_id.get(&v).map(|&id| {
-                let rep = other.dsu.find_const(id);
-                singleton_key(other.class_types[rep], rep)
-            });
+            let key_a = self.var_to_id.get(&v).map(|&id| self.dsu.find_const(id));
+            let key_b = other.var_to_id.get(&v).map(|&id| other.dsu.find_const(id));
             keys.entry((key_a, key_b)).or_default().push(v);
         }
 
@@ -302,6 +327,10 @@ impl TypeDomain {
                 } else {
                     first_id = Some(id);
                 }
+            }
+            // Maintain singleton-merging invariant in result
+            if let Some(fid) = first_id {
+                result.merge_if_singleton(fid);
             }
         }
 
@@ -379,6 +408,7 @@ impl TypeDomain {
         self.detach(v);
         let id = self.var_to_id[&v];
         self.class_types[id] = TypeSet::singleton(encoding);
+        self.merge_if_singleton(id);
     }
 
     /// Assign the type of `rhs` to `lhs` (copy with equality tracking).
@@ -440,6 +470,7 @@ impl TypeDomain {
         let rhs_ts = self.class_types[self.dsu.find(rhs_id)];
         let new_rep = self.dsu.union(lhs_id, rhs_id);
         self.class_types[new_rep] = rhs_ts;
+        self.merge_if_singleton(lhs_id);
     }
 
     /// Interpret a linear expression as a type assignment source.
@@ -452,6 +483,7 @@ impl TypeDomain {
             let id = self.var_to_id[&lhs];
             if let Some(te) = int_to_type_encoding(val) {
                 self.class_types[id] = TypeSet::singleton(te);
+                self.merge_if_singleton(id);
             } else {
                 self.class_types[id] = TypeSet::all();
             }
@@ -465,6 +497,7 @@ impl TypeDomain {
                 let rhs_ts = self.class_types[self.dsu.find(rhs_id)];
                 let new_rep = self.dsu.union(lhs_id, rhs_id);
                 self.class_types[new_rep] = rhs_ts;
+                self.merge_if_singleton(lhs_id);
             } else {
                 // Complex expression: havoc
                 self.havoc_type_var(lhs);
@@ -576,6 +609,8 @@ impl TypeDomain {
         self.class_types[new_rep] = ts;
         if ts.is_empty() {
             self.is_bottom = true;
+        } else {
+            self.merge_if_singleton(id1);
         }
     }
 
@@ -590,6 +625,8 @@ impl TypeDomain {
         self.class_types[rep] = result;
         if result.is_empty() {
             self.is_bottom = true;
+        } else {
+            self.merge_if_singleton(id);
         }
     }
 
@@ -820,6 +857,10 @@ impl TypeDomain {
     }
 
     /// Check whether two registers have the same type.
+    ///
+    /// With the singleton-merging invariant, this is a pure DSU rep comparison:
+    /// if both variables have a singleton TypeSet `{te}`, they are already merged
+    /// with the same sentinel.
     pub fn same_type(&self, a: &Reg, b: &Reg, registry: &mut VariableRegistry) -> bool {
         if self.is_bottom {
             return true;
@@ -827,17 +868,7 @@ impl TypeDomain {
         let va = reg_type(a, registry);
         let vb = reg_type(b, registry);
         match (self.var_to_id.get(&va), self.var_to_id.get(&vb)) {
-            (Some(&id_a), Some(&id_b)) => {
-                let rep_a = self.dsu.find_const(id_a);
-                let rep_b = self.dsu.find_const(id_b);
-                if rep_a == rep_b {
-                    return true;
-                }
-                // Both are singletons with the same value
-                let ts_a = self.class_types[rep_a];
-                let ts_b = self.class_types[rep_b];
-                ts_a.is_singleton() && ts_a == ts_b
-            }
+            (Some(&id_a), Some(&id_b)) => self.dsu.find_const(id_a) == self.dsu.find_const(id_b),
             _ => false,
         }
     }
