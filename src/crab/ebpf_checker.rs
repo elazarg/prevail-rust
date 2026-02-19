@@ -21,12 +21,12 @@ use crate::crab::var_registry::VariableRegistry;
 use crate::ir::assertions::get_assertions;
 use crate::ir::syntax::{
     AccessType, Addable, Assertion, BoundedLoopCount, Comparable, FuncConstraint, Imm, Instruction,
-    TypeConstraint, ValidAccess, ValidCall, ValidDivisor, ValidMapKeyValue, ValidSize, ValidStore,
-    Value, ZeroCtxOffset,
+    TypeConstraint, ValidAccess, ValidDivisor, ValidMapKeyValue, ValidSize, ValidStore, Value,
+    ZeroCtxOffset,
 };
 use crate::ir::unmarshal::make_call;
 use crate::spec::ebpf_base::{
-    EBPF_SUBPROGRAM_STACK_SIZE, EBPF_TOTAL_STACK_SIZE, EbpfReturnType, MAX_CALL_STACK_FRAMES,
+    EBPF_SUBPROGRAM_STACK_SIZE, EBPF_TOTAL_STACK_SIZE, MAX_CALL_STACK_FRAMES,
 };
 use crate::spec::vm_isa::R10_STACK_POINTER;
 
@@ -72,7 +72,6 @@ impl<'a> EbpfChecker<'a> {
             Assertion::ValidDivisor(a) => self.check_valid_divisor(a),
             Assertion::TypeConstraint(a) => self.check_type_constraint(a),
             Assertion::ValidAccess(a) => self.check_valid_access(a),
-            Assertion::ValidCall(a) => self.check_valid_call(a),
             Assertion::ValidMapKeyValue(a) => self.check_valid_map_key_value(a),
             Assertion::ValidSize(a) => self.check_valid_size(a),
             Assertion::ValidStore(a) => self.check_valid_store(a),
@@ -472,16 +471,6 @@ impl<'a> EbpfChecker<'a> {
                 _ => {
                     return self.throw_fail("Invalid type");
                 }
-            }
-        }
-        Ok(())
-    }
-
-    fn check_valid_call(&mut self, s: &ValidCall) -> Result<(), VerificationError> {
-        if !s.stack_frame_prefix.is_empty() {
-            let proto = self.ctx.platform.get_helper_prototype(s.func);
-            if proto.return_type == EbpfReturnType::IntegerOrNoReturnIfSucceed {
-                return self.throw_fail("tail call not supported in subprogram");
             }
         }
         Ok(())

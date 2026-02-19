@@ -17,8 +17,8 @@ use super::syntax::{
     AccessType, Addable, ArgPairKind, ArgSingleKind, Assertion, Assume, Atomic, Bin, BinOp,
     BoundedLoopCount, Call, CallBtf, CallLocal, Callx, Comparable, Condition, ConditionOp, Exit,
     FuncConstraint, Imm, IncrementLoopCounter, Instruction, Jmp, LoadMapAddress, LoadMapFd,
-    LoadPseudo, Mem, Packet, Reg, TypeConstraint, Un, Undefined, ValidAccess, ValidCall,
-    ValidDivisor, ValidMapKeyValue, ValidSize, ValidStore, Value, ZeroCtxOffset,
+    LoadPseudo, Mem, Packet, Reg, TypeConstraint, Un, Undefined, ValidAccess, ValidDivisor,
+    ValidMapKeyValue, ValidSize, ValidStore, Value, ZeroCtxOffset,
 };
 
 // ---------------------------------------------------------------------------
@@ -129,12 +129,6 @@ fn assertions_exit(ins: &Exit, label: &Option<Label>) -> Vec<Assertion> {
 fn assertions_call(ins: &Call, info: &ProgramInfo, label: &Option<Label>) -> Vec<Assertion> {
     let mut res = Vec::new();
     let mut map_fd_reg: Option<Reg> = None;
-
-    res.push(Assertion::ValidCall(ValidCall {
-        func: ins.func,
-        name: ins.name.clone(),
-        stack_frame_prefix: ins.stack_frame_prefix.clone(),
-    }));
 
     for arg in &ins.singles {
         match arg.kind {

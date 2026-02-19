@@ -917,7 +917,6 @@ pub fn extract_assertion_registers(assertion: &Assertion) -> BTreeSet<Reg> {
         Assertion::ValidStore(vs) => BTreeSet::from([vs.mem, vs.val]),
         Assertion::ValidSize(vs) => BTreeSet::from([vs.reg]),
         Assertion::ValidMapKeyValue(vmkv) => BTreeSet::from([vmkv.access_reg, vmkv.map_fd_reg]),
-        Assertion::ValidCall(_) => BTreeSet::new(),
         Assertion::TypeConstraint(tc) => BTreeSet::from([tc.reg]),
         Assertion::FuncConstraint(fc) => BTreeSet::from([fc.reg]),
         Assertion::ZeroCtxOffset(zco) => BTreeSet::from([zco.reg]),

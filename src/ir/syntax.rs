@@ -410,14 +410,6 @@ pub struct ValidMapKeyValue {
     pub key: bool,
 }
 
-/// Check that a helper call is valid.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ValidCall {
-    pub func: i32,
-    pub name: Rc<str>,
-    pub stack_frame_prefix: Rc<str>,
-}
-
 /// Check that a store to memory is valid.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ValidStore {
@@ -465,7 +457,6 @@ pub enum Assertion {
     ValidStore(ValidStore),
     ValidSize(ValidSize),
     ValidMapKeyValue(ValidMapKeyValue),
-    ValidCall(ValidCall),
     TypeConstraint(TypeConstraint),
     FuncConstraint(FuncConstraint),
     ZeroCtxOffset(ZeroCtxOffset),

@@ -11,12 +11,12 @@ use std::rc::Rc;
 
 use crate::cfg::graph::Cfg;
 use crate::cfg::label::Label;
-use crate::cfg::wto::Wto;
+use crate::cfg::wto::{CycleOrLabel, Wto};
 use crate::ir::assertions::get_assertions;
 use crate::ir::syntax::{
-    ArgSingleKind, Assertion, Assume, BinOp, Condition, ConditionOp, IncrementLoopCounter,
-    Instruction, InstructionSeq, LoadMapAddress, LoadMapFd, LoadPseudo, Mem, PseudoAddressKind, Un,
-    UnOp, Undefined,
+    ArgSingleKind, Assertion, Assume, Bin, BinOp, Condition, ConditionOp, Imm,
+    IncrementLoopCounter, Instruction, InstructionSeq, LoadMapAddress, LoadMapFd, LoadPseudo, Mem,
+    PseudoAddressKind, Un, UnOp, Undefined, Value,
 };
 use crate::ir::unmarshal::conformance_groups;
 use crate::spec::config::EbpfVerifierOptions;
@@ -43,6 +43,221 @@ impl fmt::Display for InvalidControlFlow {
 }
 
 impl std::error::Error for InvalidControlFlow {}
+
+fn is_tail_call_helper(call: &crate::ir::syntax::Call) -> bool {
+    call.name.as_ref() == "tail_call"
+}
+
+fn is_tail_call_site(ins: &Instruction) -> bool {
+    match ins {
+        Instruction::Call(call) => is_tail_call_helper(call),
+        // At CFG-construction time callx targets are unknown.
+        // Conservatively treat callx as a potential tail-call site.
+        Instruction::Callx(_) => true,
+        _ => false,
+    }
+}
+
+fn collect_wto_labels(component: &CycleOrLabel, labels: &mut BTreeSet<Label>) {
+    match component {
+        CycleOrLabel::Label(label) => {
+            labels.insert(label.clone());
+        }
+        CycleOrLabel::Cycle(cycle) => {
+            for nested in cycle.iter() {
+                collect_wto_labels(nested, labels);
+            }
+        }
+    }
+}
+
+/// Enforce a global upper bound on tail-call chain length by counting
+/// tail-call sites over the reachable maximal-SCC DAG.
+fn validate_tail_call_chain_depth(prog: &Program, wto: &Wto) -> Result<(), InvalidControlFlow> {
+    const TAIL_CALL_CHAIN_LIMIT: i32 = 33;
+    const UNINITIALIZED_DEPTH: i32 = i32::MIN;
+
+    // WTO only covers labels reachable from entry.
+    let mut reachable = BTreeSet::new();
+    for component in wto.iter() {
+        collect_wto_labels(component, &mut reachable);
+    }
+
+    // Partition reachable labels by maximal SCC representative:
+    // outermost WTO cycle head, or the label itself if not in a cycle.
+    let mut maximal_scc_of: BTreeMap<Label, Label> = BTreeMap::new();
+    let mut maximal_scc_ids = BTreeSet::new();
+    for label in &reachable {
+        let scc_id = wto
+            .nesting(label)
+            .outermost_head()
+            .unwrap_or_else(|| label.clone());
+        maximal_scc_of.insert(label.clone(), scc_id.clone());
+        maximal_scc_ids.insert(scc_id);
+    }
+
+    let mut tail_sites_per_scc: BTreeMap<Label, i32> = BTreeMap::new();
+    let mut representative_tail_label: BTreeMap<Label, Option<Label>> = BTreeMap::new();
+    let mut dag_successors: BTreeMap<Label, BTreeSet<Label>> = BTreeMap::new();
+    let mut indegree: BTreeMap<Label, i32> = BTreeMap::new();
+
+    for scc_id in &maximal_scc_ids {
+        tail_sites_per_scc.insert(scc_id.clone(), 0);
+        representative_tail_label.insert(scc_id.clone(), None);
+        dag_successors.insert(scc_id.clone(), BTreeSet::new());
+        indegree.insert(scc_id.clone(), 0);
+    }
+
+    for label in &reachable {
+        let src_scc = maximal_scc_of
+            .get(label)
+            .expect("reachable label missing SCC");
+
+        if is_tail_call_site(prog.instruction_at(label)) {
+            *tail_sites_per_scc
+                .get_mut(src_scc)
+                .expect("missing SCC tail count") += 1;
+            let representative = representative_tail_label
+                .get_mut(src_scc)
+                .expect("missing SCC representative");
+            if representative.is_none() {
+                *representative = Some(label.clone());
+            }
+        }
+
+        for child in prog.cfg().children_of(label) {
+            if !reachable.contains(child) {
+                continue;
+            }
+            let dst_scc = maximal_scc_of
+                .get(child)
+                .expect("reachable child missing SCC");
+            if src_scc != dst_scc {
+                let inserted = dag_successors
+                    .get_mut(src_scc)
+                    .expect("missing SCC successors")
+                    .insert(dst_scc.clone());
+                if inserted {
+                    *indegree.get_mut(dst_scc).expect("missing SCC indegree") += 1;
+                }
+            }
+        }
+    }
+
+    let indegree_for_sources = indegree.clone();
+    let mut topo_order = Vec::with_capacity(maximal_scc_ids.len());
+    for scc_id in &maximal_scc_ids {
+        if *indegree.get(scc_id).expect("missing SCC indegree") == 0 {
+            topo_order.push(scc_id.clone());
+        }
+    }
+
+    let mut index = 0;
+    while index < topo_order.len() {
+        let scc_id = topo_order[index].clone();
+        index += 1;
+        let successors: Vec<Label> = dag_successors
+            .get(&scc_id)
+            .expect("missing SCC successors")
+            .iter()
+            .cloned()
+            .collect();
+        for succ in &successors {
+            let entry = indegree.get_mut(succ).expect("missing SCC indegree");
+            *entry -= 1;
+            if *entry == 0 {
+                topo_order.push(succ.clone());
+            }
+        }
+    }
+
+    if topo_order.len() != maximal_scc_ids.len() {
+        return Err(InvalidControlFlow {
+            message: "WTO-derived SCC graph must be acyclic".to_string(),
+        });
+    }
+
+    let mut max_tail_depth: BTreeMap<Label, i32> = BTreeMap::new();
+    let mut depth_label: BTreeMap<Label, Option<Label>> = BTreeMap::new();
+    for scc_id in &maximal_scc_ids {
+        max_tail_depth.insert(scc_id.clone(), UNINITIALIZED_DEPTH);
+        depth_label.insert(scc_id.clone(), None);
+        if *indegree_for_sources
+            .get(scc_id)
+            .expect("missing SCC indegree source")
+            == 0
+        {
+            max_tail_depth.insert(
+                scc_id.clone(),
+                *tail_sites_per_scc
+                    .get(scc_id)
+                    .expect("missing SCC tail count source"),
+            );
+            depth_label.insert(
+                scc_id.clone(),
+                representative_tail_label
+                    .get(scc_id)
+                    .expect("missing SCC representative source")
+                    .clone(),
+            );
+        }
+    }
+
+    for scc_id in &topo_order {
+        let current_depth = *max_tail_depth.get(scc_id).expect("missing SCC max depth");
+        if current_depth == UNINITIALIZED_DEPTH {
+            continue;
+        }
+        if current_depth > TAIL_CALL_CHAIN_LIMIT {
+            let at = depth_label
+                .get(scc_id)
+                .and_then(|x| x.clone())
+                .unwrap_or_else(|| scc_id.clone());
+            return Err(InvalidControlFlow {
+                message: format!(
+                    "tail call chain depth exceeds {} (at {})",
+                    TAIL_CALL_CHAIN_LIMIT, at
+                ),
+            });
+        }
+
+        let successors: Vec<Label> = dag_successors
+            .get(scc_id)
+            .expect("missing SCC successors")
+            .iter()
+            .cloned()
+            .collect();
+        for succ in &successors {
+            let candidate_depth = current_depth
+                + tail_sites_per_scc
+                    .get(succ)
+                    .expect("missing SCC tail count successor");
+            let succ_depth = *max_tail_depth
+                .get(succ)
+                .expect("missing SCC successor max depth");
+            if candidate_depth > succ_depth {
+                max_tail_depth.insert(succ.clone(), candidate_depth);
+                let representative = representative_tail_label
+                    .get(succ)
+                    .expect("missing SCC successor representative")
+                    .clone();
+                if representative.is_some() {
+                    depth_label.insert(succ.clone(), representative);
+                } else {
+                    depth_label.insert(
+                        succ.clone(),
+                        depth_label
+                            .get(scc_id)
+                            .expect("missing SCC depth label")
+                            .clone(),
+                    );
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
 
 // ---------------------------------------------------------------------------
 // Program
@@ -128,6 +343,9 @@ impl Program {
 
         // Convert the instruction sequence to a deterministic control-flow graph.
         let mut builder = instruction_seq_to_cfg(inst_seq, info, options.cfg_opts.must_have_exit)?;
+        let wto = Wto::new(&builder.prog.cfg);
+
+        validate_tail_call_chain_depth(&builder.prog, &wto)?;
 
         // Detect loops using Weak Topological Ordering (WTO) and insert counters
         // at loop entry points. WTO provides a hierarchical decomposition of the
@@ -135,7 +353,6 @@ impl Program {
         // entry points. These entry points serve as natural locations for loop
         // counters that help verify program termination.
         if options.cfg_opts.check_for_termination {
-            let wto = Wto::new(&builder.prog.cfg);
             let mut loop_heads = Vec::new();
             wto.for_each_loop_head(&mut |label| loop_heads.push(label.clone()));
             for label in loop_heads {
@@ -428,12 +645,11 @@ fn check_instruction_feature_support(
             return Some(reject_capability("requires conformance group base64"));
         }
         match lp.addr.kind {
-            // MAP_BY_IDX and MAP_VALUE_BY_IDX are resolved during CFG construction.
-            PseudoAddressKind::MapByIdx | PseudoAddressKind::MapValueByIdx => {}
-            PseudoAddressKind::VariableAddr => {
-                return Some(reject_not_impl("lddw variable_addr pseudo"));
-            }
-            PseudoAddressKind::CodeAddr => return Some(reject_not_impl("lddw code_addr pseudo")),
+            // All pseudo address kinds are lowered during CFG construction.
+            PseudoAddressKind::VariableAddr
+            | PseudoAddressKind::CodeAddr
+            | PseudoAddressKind::MapByIdx
+            | PseudoAddressKind::MapValueByIdx => {}
         }
     }
     if (matches!(ins, Instruction::LoadMapFd(_)) || matches!(ins, Instruction::LoadMapAddress(_)))
@@ -493,12 +709,30 @@ fn validate_instruction_feature_support(
 // instruction_seq_to_cfg
 // ---------------------------------------------------------------------------
 
-/// Resolve a `LoadPseudo` with map-by-index addressing to the concrete
-/// `LoadMapFd` or `LoadMapAddress` instruction.
-fn resolve_map_by_index(
+fn merge_imm32_to_u64(lo: i32, hi: i32) -> u64 {
+    (lo as u32 as u64) | ((hi as u32 as u64) << 32)
+}
+
+/// Resolve a `LoadPseudo` to a concrete instruction before abstract interpretation.
+fn resolve_pseudo_load(
     pseudo: &LoadPseudo,
     info: &ProgramInfo,
 ) -> Result<Instruction, InvalidControlFlow> {
+    if matches!(
+        pseudo.addr.kind,
+        PseudoAddressKind::VariableAddr | PseudoAddressKind::CodeAddr
+    ) {
+        return Ok(Instruction::Bin(Bin {
+            op: BinOp::MOV,
+            dst: pseudo.dst,
+            v: Value::Imm(Imm {
+                v: merge_imm32_to_u64(pseudo.addr.imm, pseudo.addr.next_imm),
+            }),
+            is64: true,
+            lddw: true,
+        }));
+    }
+
     let descriptors = &info.map_descriptors;
     if pseudo.addr.imm < 0 || (pseudo.addr.imm as usize) >= descriptors.len() {
         return Err(InvalidControlFlow {
@@ -520,7 +754,7 @@ fn resolve_map_by_index(
             mapfd,
             offset: pseudo.addr.next_imm,
         })),
-        _ => panic!("Invalid address kind: {:?}", pseudo.addr.kind),
+        _ => unreachable!("pseudo kind handled earlier: {:?}", pseudo.addr.kind),
     }
 }
 
@@ -541,9 +775,9 @@ fn instruction_seq_to_cfg(
         if matches!(inst, Instruction::Undefined(_)) {
             continue;
         }
-        // Resolve LoadPseudo MAP_BY_IDX/MAP_VALUE_BY_IDX to concrete instructions.
+        // Resolve pseudo loads to concrete instructions.
         if let Instruction::LoadPseudo(pseudo) = inst {
-            builder.insert(label.clone(), resolve_map_by_index(pseudo, info)?);
+            builder.insert(label.clone(), resolve_pseudo_load(pseudo, info)?);
         } else {
             builder.insert(label.clone(), inst.clone());
         }
@@ -893,9 +1127,13 @@ pub fn collect_stats(prog: &Program) -> BTreeMap<String, i32> {
 mod tests {
     use super::*;
     use crate::cfg::label::Label;
-    use crate::ir::syntax::{Bin, BinOp, InstructionSeq, Reg, Value};
+    use crate::ir::syntax::{
+        Bin, BinOp, Call, Exit, Instruction, InstructionSeq, LoadMapFd, LoadPseudo, PseudoAddress,
+        PseudoAddressKind, Reg, Value,
+    };
     use crate::spec::config::EbpfVerifierOptions;
-    use crate::spec::type_descriptors::ProgramInfo;
+    use crate::spec::type_descriptors::{EbpfMapDescriptor, ProgramInfo};
+    use std::rc::Rc;
 
     fn create_simple_seq() -> InstructionSeq {
         // 0: MOV r1, 10
@@ -964,5 +1202,166 @@ mod tests {
 
         let res = Program::from_sequence(&seq, &info, &opts);
         assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_lddw_variable_addr_is_lowered_to_mov_imm64() {
+        let seq = vec![
+            (
+                Label::new(0),
+                Instruction::LoadPseudo(LoadPseudo {
+                    dst: Reg { v: 1 },
+                    addr: PseudoAddress {
+                        kind: PseudoAddressKind::VariableAddr,
+                        imm: 0x5566_7788_u32 as i32,
+                        next_imm: 0x1122_3344_u32 as i32,
+                    },
+                }),
+                None,
+            ),
+            (
+                Label::new(1),
+                Instruction::Exit(Exit {
+                    stack_frame_prefix: Rc::from(""),
+                }),
+                None,
+            ),
+        ];
+
+        let info = ProgramInfo::default();
+        let opts = EbpfVerifierOptions::default();
+        let program = Program::from_sequence(&seq, &info, &opts).expect("expected valid CFG");
+
+        let lowered = program.instruction_at(&Label::new(0));
+        match lowered {
+            Instruction::Bin(bin) => {
+                assert_eq!(bin.op, BinOp::MOV);
+                assert!(bin.is64);
+                assert!(bin.lddw);
+                assert_eq!(bin.dst, Reg { v: 1 });
+                assert_eq!(
+                    bin.v,
+                    Value::Imm(crate::ir::syntax::Imm {
+                        v: 0x1122_3344_5566_7788
+                    })
+                );
+            }
+            _ => panic!("expected LoadPseudo to be lowered into Bin::MOV"),
+        }
+    }
+
+    #[test]
+    fn test_tail_call_chain_depth_above_33_is_rejected() {
+        let mut seq: InstructionSeq = Vec::new();
+        for i in 0..34 {
+            seq.push((
+                Label::new(i),
+                Instruction::Call(Call {
+                    func: 12,
+                    name: Rc::from("tail_call"),
+                    is_supported: true,
+                    unsupported_reason: Rc::from(""),
+                    is_map_lookup: false,
+                    reallocate_packet: false,
+                    singles: vec![],
+                    pairs: vec![],
+                    stack_frame_prefix: Rc::from(""),
+                }),
+                None,
+            ));
+        }
+        seq.push((
+            Label::new(34),
+            Instruction::Exit(Exit {
+                stack_frame_prefix: Rc::from(""),
+            }),
+            None,
+        ));
+
+        let info = ProgramInfo::default();
+        let opts = EbpfVerifierOptions::default();
+        let err = match Program::from_sequence(&seq, &info, &opts) {
+            Ok(_) => panic!("must reject >33 tail calls"),
+            Err(err) => err,
+        };
+        assert!(err.message.contains("tail call chain depth exceeds 33"));
+    }
+
+    #[test]
+    fn test_tail_call_chain_depth_of_33_is_accepted() {
+        let mut seq: InstructionSeq = Vec::new();
+        for i in 0..33 {
+            seq.push((
+                Label::new(i),
+                Instruction::Call(Call {
+                    func: 12,
+                    name: Rc::from("tail_call"),
+                    is_supported: true,
+                    unsupported_reason: Rc::from(""),
+                    is_map_lookup: false,
+                    reallocate_packet: false,
+                    singles: vec![],
+                    pairs: vec![],
+                    stack_frame_prefix: Rc::from(""),
+                }),
+                None,
+            ));
+        }
+        seq.push((
+            Label::new(33),
+            Instruction::Exit(Exit {
+                stack_frame_prefix: Rc::from(""),
+            }),
+            None,
+        ));
+
+        let info = ProgramInfo::default();
+        let opts = EbpfVerifierOptions::default();
+        Program::from_sequence(&seq, &info, &opts).expect("depth 33 should be accepted");
+    }
+
+    #[test]
+    fn test_lddw_map_by_index_still_resolves() {
+        let seq = vec![
+            (
+                Label::new(0),
+                Instruction::LoadPseudo(LoadPseudo {
+                    dst: Reg { v: 1 },
+                    addr: PseudoAddress {
+                        kind: PseudoAddressKind::MapByIdx,
+                        imm: 0,
+                        next_imm: 0,
+                    },
+                }),
+                None,
+            ),
+            (
+                Label::new(1),
+                Instruction::Exit(Exit {
+                    stack_frame_prefix: Rc::from(""),
+                }),
+                None,
+            ),
+        ];
+
+        let mut info = ProgramInfo::default();
+        info.map_descriptors.push(EbpfMapDescriptor {
+            original_fd: 123,
+            map_type: 1,
+            key_size: 4,
+            value_size: 8,
+            max_entries: 16,
+            inner_map_fd: 0,
+        });
+        let opts = EbpfVerifierOptions::default();
+        let program =
+            Program::from_sequence(&seq, &info, &opts).expect("map-by-index must resolve");
+        assert_eq!(
+            program.instruction_at(&Label::new(0)),
+            &Instruction::LoadMapFd(LoadMapFd {
+                dst: Reg { v: 1 },
+                mapfd: 123
+            })
+        );
     }
 }

@@ -116,6 +116,11 @@ impl WtoNesting {
         WtoNesting { heads }
     }
 
+    /// Return the outermost loop head containing this label, if any.
+    pub fn outermost_head(&self) -> Option<Label> {
+        self.heads.last().cloned()
+    }
+
     /// Test whether this nesting is a strict superset of another nesting.
     ///
     /// That is, this nesting contains all heads from `other` plus at least one more.

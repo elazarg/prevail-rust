@@ -17,8 +17,8 @@ use crate::ir::syntax::{
     AtomicOp, Bin, BinOp, BoundedLoopCount, BtfLineInfo, Call, CallBtf, CallLocal, Callx,
     Comparable, Condition, ConditionOp, Deref, Exit, FuncConstraint, Imm, IncrementLoopCounter,
     Instruction, InstructionSeq, Jmp, LoadMapAddress, LoadMapFd, LoadPseudo, Mem, Packet, Reg,
-    TypeConstraint, Un, UnOp, Undefined, ValidAccess, ValidCall, ValidDivisor, ValidMapKeyValue,
-    ValidSize, ValidStore, Value, ZeroCtxOffset,
+    TypeConstraint, Un, UnOp, Undefined, ValidAccess, ValidDivisor, ValidMapKeyValue, ValidSize,
+    ValidStore, Value, ZeroCtxOffset,
 };
 use crate::spec::type_descriptors::EbpfMapDescriptor;
 use crate::spec::vm_isa::AccessSize;
@@ -550,12 +550,6 @@ impl fmt::Display for ValidSize {
     }
 }
 
-impl fmt::Display for ValidCall {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "valid call({})", self.name)
-    }
-}
-
 impl fmt::Display for ValidMapKeyValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let field = if self.key { "key_size" } else { "value_size" };
@@ -638,7 +632,6 @@ impl fmt::Display for Assertion {
             Assertion::ValidStore(x) => write!(f, "{x}"),
             Assertion::ValidSize(x) => write!(f, "{x}"),
             Assertion::ValidMapKeyValue(x) => write!(f, "{x}"),
-            Assertion::ValidCall(x) => write!(f, "{x}"),
             Assertion::TypeConstraint(x) => write!(f, "{x}"),
             Assertion::FuncConstraint(x) => write!(f, "{x}"),
             Assertion::ZeroCtxOffset(x) => write!(f, "{x}"),
@@ -1830,16 +1823,6 @@ mod tests {
             val: Reg { v: 1 },
         };
         assert_eq!(format!("{vs}"), "r10.type != stack -> r1.type == number");
-    }
-
-    #[test]
-    fn test_display_valid_call() {
-        let vc = ValidCall {
-            func: 42,
-            name: Rc::from("some_helper"),
-            stack_frame_prefix: Rc::from(""),
-        };
-        assert_eq!(format!("{vc}"), "valid call(some_helper)");
     }
 
     #[test]
