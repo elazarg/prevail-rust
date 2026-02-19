@@ -1062,10 +1062,10 @@ fn to_arg_single_kind(t: EbpfArgumentType) -> ArgSingleKind {
     match t {
         EbpfArgumentType::Anything => Anything,
         EbpfArgumentType::PtrToStack | EbpfArgumentType::PtrToStackOrNull => PtrToStack,
-        EbpfArgumentType::PtrToMap => MapFd,
+        EbpfArgumentType::PtrToMap | EbpfArgumentType::ConstPtrToMap => MapFd,
         EbpfArgumentType::PtrToMapOfPrograms => MapFdPrograms,
         EbpfArgumentType::PtrToMapKey => PtrToMapKey,
-        EbpfArgumentType::PtrToMapValue => PtrToMapValue,
+        EbpfArgumentType::PtrToMapValue | EbpfArgumentType::PtrToUninitMapValue => PtrToMapValue,
         EbpfArgumentType::PtrToCtx | EbpfArgumentType::PtrToCtxOrNull => PtrToCtx,
         _ => Anything, // fallback (matches C++ default)
     }
@@ -1074,9 +1074,10 @@ fn to_arg_single_kind(t: EbpfArgumentType) -> ArgSingleKind {
 fn to_arg_pair_kind(t: EbpfArgumentType) -> ArgPairKind {
     use crate::ir::syntax::ArgPairKind::*;
     match t {
-        EbpfArgumentType::PtrToReadableMem | EbpfArgumentType::PtrToReadableMemOrNull => {
-            PtrToReadableMem
-        }
+        EbpfArgumentType::PtrToReadableMem
+        | EbpfArgumentType::PtrToReadableMemOrNull
+        | EbpfArgumentType::PtrToReadonlyMem
+        | EbpfArgumentType::PtrToReadonlyMemOrNull => PtrToReadableMem,
         EbpfArgumentType::PtrToWritableMem | EbpfArgumentType::PtrToWritableMemOrNull => {
             PtrToWritableMem
         }
@@ -1117,15 +1118,20 @@ pub fn make_call_result(imm: i32, platform: &dyn EbpfPlatform) -> Result<Call, S
         res.unsupported_reason = Rc::from(why);
     };
 
-    if proto.return_type == EbpfReturnType::Unsupported {
-        mark_unsupported(
-            &mut res,
-            format!(
-                "helper prototype is unavailable on this platform: {}",
-                proto.name
-            ),
-        );
-        return Ok(res);
+    match proto.return_type {
+        EbpfReturnType::Integer
+        | EbpfReturnType::PtrToMapValueOrNull
+        | EbpfReturnType::IntegerOrNoReturnIfSucceed => {}
+        _ => {
+            mark_unsupported(
+                &mut res,
+                format!(
+                    "helper prototype is unavailable on this platform: {}",
+                    proto.name
+                ),
+            );
+            return Ok(res);
+        }
     }
 
     // Build argument list: pad with DontCare sentinel on each end (matching C++ array layout)
@@ -1158,9 +1164,11 @@ pub fn make_call_result(imm: i32, platform: &dyn EbpfPlatform) -> Result<Call, S
             }
             EbpfArgumentType::Anything
             | EbpfArgumentType::PtrToMap
+            | EbpfArgumentType::ConstPtrToMap
             | EbpfArgumentType::PtrToMapOfPrograms
             | EbpfArgumentType::PtrToMapKey
             | EbpfArgumentType::PtrToMapValue
+            | EbpfArgumentType::PtrToUninitMapValue
             | EbpfArgumentType::PtrToStack
             | EbpfArgumentType::PtrToCtx => {
                 res.singles.push(ArgSingle {
@@ -1176,6 +1184,27 @@ pub fn make_call_result(imm: i32, platform: &dyn EbpfPlatform) -> Result<Call, S
                     reg: Reg { v: i as u8 },
                 });
             }
+            EbpfArgumentType::PtrToBtfIdSockCommon
+            | EbpfArgumentType::PtrToSpinLock
+            | EbpfArgumentType::PtrToSockCommon
+            | EbpfArgumentType::PtrToBtfId
+            | EbpfArgumentType::PtrToLong
+            | EbpfArgumentType::PtrToInt
+            | EbpfArgumentType::PtrToConstStr
+            | EbpfArgumentType::PtrToFunc
+            | EbpfArgumentType::ConstAllocSizeOrZero
+            | EbpfArgumentType::PtrToAllocMem
+            | EbpfArgumentType::PtrToTimer
+            | EbpfArgumentType::PtrToPercpuBtfId => {
+                mark_unsupported(
+                    &mut res,
+                    format!(
+                        "helper argument type is unavailable on this platform: {}",
+                        proto.name
+                    ),
+                );
+                return Ok(res);
+            }
             EbpfArgumentType::ConstSize | EbpfArgumentType::ConstSizeOrZero => {
                 // These should not appear without a preceding PTR_TO_*_MEM
                 mark_unsupported(
@@ -1189,6 +1218,8 @@ pub fn make_call_result(imm: i32, platform: &dyn EbpfPlatform) -> Result<Call, S
             }
             EbpfArgumentType::PtrToReadableMemOrNull
             | EbpfArgumentType::PtrToReadableMem
+            | EbpfArgumentType::PtrToReadonlyMemOrNull
+            | EbpfArgumentType::PtrToReadonlyMem
             | EbpfArgumentType::PtrToWritableMemOrNull
             | EbpfArgumentType::PtrToWritableMem => {
                 // Must be followed by ConstSize or ConstSizeOrZero
@@ -1216,6 +1247,7 @@ pub fn make_call_result(imm: i32, platform: &dyn EbpfPlatform) -> Result<Call, S
                 }
                 let can_be_zero = args[i + 1] == EbpfArgumentType::ConstSizeOrZero;
                 let or_null = args[i] == EbpfArgumentType::PtrToReadableMemOrNull
+                    || args[i] == EbpfArgumentType::PtrToReadonlyMemOrNull
                     || args[i] == EbpfArgumentType::PtrToWritableMemOrNull;
                 res.pairs.push(ArgPair {
                     kind: to_arg_pair_kind(args[i]),

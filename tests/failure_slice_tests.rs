@@ -69,7 +69,7 @@ fn analyze_with_deps(filename: &str, section: &str) -> AnalysisState {
     let raw_prog = &raw_progs[0];
 
     platform.map_descriptors = raw_prog.info.map_descriptors.clone();
-    platform.context_descriptor = raw_prog.info.program_type.context_descriptor;
+    platform.set_program_type(&raw_prog.info.program_type);
 
     let info = raw_prog.info.clone();
     let insts = &raw_prog.prog;

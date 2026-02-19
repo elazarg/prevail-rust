@@ -44,7 +44,7 @@ fn analyze_section(path: &str, section: &str, opts: &EbpfVerifierOptions) -> Vec
     let mut all_traces = Vec::new();
     for raw_prog in &raw_progs {
         platform.map_descriptors = raw_prog.info.map_descriptors.clone();
-        platform.context_descriptor = raw_prog.info.program_type.context_descriptor;
+        platform.set_program_type(&raw_prog.info.program_type);
 
         let info = &raw_prog.info;
         let insts = &raw_prog.prog;

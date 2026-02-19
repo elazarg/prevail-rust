@@ -10,9 +10,10 @@
 use crate::elf_loader::UnmarshalError;
 use crate::linux::spec_prototypes::{self, HelperPrototype};
 use crate::linux::spec_type_descriptors::{
-    CGROUP_DEV_DESCR, CGROUP_SOCK_DESCR, KPROBE_DESCR, LWT_INOUT_DESCR, LWT_XMIT_DESCR,
-    PERF_EVENT_DESCR, SCHED_DESCR, SK_MSG_MD, SK_SKB_DESCR, SOCK_OPS_DESCR, SOCKET_FILTER_DESCR,
-    TRACEPOINT_DESCR, UNSPEC_DESCR, XDP_DESCR,
+    CGROUP_DEV_DESCR, CGROUP_SOCK_DESCR, CGROUP_SYSCTL_DESCR, FLOW_DISSECTOR_DESCR, KPROBE_DESCR,
+    LWT_INOUT_DESCR, LWT_XMIT_DESCR, PERF_EVENT_DESCR, SCHED_DESCR, SK_LOOKUP_DESCR, SK_MSG_MD,
+    SK_REUSEPORT_DESCR, SK_SKB_DESCR, SOCK_ADDR_DESCR, SOCK_OPS_DESCR, SOCKET_FILTER_DESCR,
+    SOCKOPT_DESCR, TRACEPOINT_DESCR, UNSPEC_DESCR, XDP_DESCR,
 };
 use crate::platform::EbpfPlatform;
 use crate::spec::config::EbpfVerifierOptions;
@@ -41,7 +42,23 @@ mod bpf_prog_type {
     pub const SOCK_OPS: u64 = 13;
     pub const SK_SKB: u64 = 14;
     pub const CGROUP_DEVICE: u64 = 15;
-    // Types below are currently mapped to SOCKET_FILTER in the C++ table.
+    pub const SK_MSG: u64 = 16;
+    pub const RAW_TRACEPOINT: u64 = 17;
+    pub const CGROUP_SOCK_ADDR: u64 = 18;
+    pub const LWT_SEG6LOCAL: u64 = 19;
+    pub const LIRC_MODE2: u64 = 20;
+    pub const SK_REUSEPORT: u64 = 21;
+    pub const FLOW_DISSECTOR: u64 = 22;
+    pub const CGROUP_SYSCTL: u64 = 23;
+    pub const RAW_TRACEPOINT_WRITABLE: u64 = 24;
+    pub const CGROUP_SOCKOPT: u64 = 25;
+    pub const TRACING: u64 = 26;
+    pub const STRUCT_OPS: u64 = 27;
+    pub const EXT: u64 = 28;
+    pub const LSM: u64 = 29;
+    pub const SK_LOOKUP: u64 = 30;
+    pub const SYSCALL: u64 = 31;
+    pub const NETFILTER: u64 = 32;
 }
 
 // ── BPF map-type constants (from linux/bpf.h) ──────────────────────
@@ -72,6 +89,16 @@ mod bpf_map_type {
     pub const PERCPU_CGROUP_STORAGE: u32 = 21;
     pub const QUEUE: u32 = 22;
     pub const STACK: u32 = 23;
+    pub const SK_STORAGE: u32 = 24;
+    pub const DEVMAP_HASH: u32 = 25;
+    pub const STRUCT_OPS: u32 = 26;
+    pub const RINGBUF: u32 = 27;
+    pub const INODE_STORAGE: u32 = 28;
+    pub const TASK_STORAGE: u32 = 29;
+    pub const BLOOM_FILTER: u32 = 30;
+    pub const USER_RINGBUF: u32 = 31;
+    pub const CGRP_STORAGE: u32 = 32;
+    pub const ARENA: u32 = 33;
 }
 
 // ── Conformance-group bitmask (mirrors bpf_conformance_groups_t) ───
@@ -264,38 +291,117 @@ fn linux_program_types() -> Vec<EbpfProgramType> {
             bpf_prog_type::TRACEPOINT,
             &["tracepoint/"],
         ),
-        // The following types are currently mapped to the socket filter program
-        // type but should be mapped to the relevant native linux program type
-        // value.
+        ptype(
+            "cgroup_sockopt",
+            Some(&SOCKOPT_DESCR),
+            bpf_prog_type::CGROUP_SOCKOPT,
+            &["cgroup/getsockopt", "cgroup/setsockopt"],
+        ),
         ptype(
             "sk_msg",
             Some(&SK_MSG_MD),
-            bpf_prog_type::SOCKET_FILTER,
+            bpf_prog_type::SK_MSG,
             &["sk_msg"],
         ),
         ptype(
             "raw_tracepoint",
             Some(&TRACEPOINT_DESCR),
-            bpf_prog_type::SOCKET_FILTER,
-            &["raw_tracepoint/"],
+            bpf_prog_type::RAW_TRACEPOINT,
+            &["raw_tracepoint/", "raw_tp/"],
+        ),
+        ptype(
+            "raw_tracepoint_writable",
+            Some(&TRACEPOINT_DESCR),
+            bpf_prog_type::RAW_TRACEPOINT_WRITABLE,
+            &["raw_tracepoint.w/", "raw_tp.w/"],
         ),
         ptype(
             "cgroup_sock_addr",
-            Some(&CGROUP_SOCK_DESCR),
-            bpf_prog_type::SOCKET_FILTER,
-            &[],
+            Some(&SOCK_ADDR_DESCR),
+            bpf_prog_type::CGROUP_SOCK_ADDR,
+            &[
+                "cgroup/bind",
+                "cgroup/post_bind",
+                "cgroup/connect",
+                "cgroup/sendmsg",
+                "cgroup/recvmsg",
+                "cgroup/getpeername",
+                "cgroup/getsockname",
+            ],
         ),
         ptype(
             "lwt_seg6local",
             Some(LWT_XMIT_DESCR),
-            bpf_prog_type::SOCKET_FILTER,
+            bpf_prog_type::LWT_SEG6LOCAL,
             &["lwt_seg6local"],
         ),
         ptype(
             "lirc_mode2",
-            Some(&SK_MSG_MD),
-            bpf_prog_type::SOCKET_FILTER,
+            Some(&UNSPEC_DESCR),
+            bpf_prog_type::LIRC_MODE2,
             &["lirc_mode2"],
+        ),
+        ptype(
+            "sk_reuseport",
+            Some(&SK_REUSEPORT_DESCR),
+            bpf_prog_type::SK_REUSEPORT,
+            &["sk_reuseport/"],
+        ),
+        ptype(
+            "flow_dissector",
+            Some(&FLOW_DISSECTOR_DESCR),
+            bpf_prog_type::FLOW_DISSECTOR,
+            &["flow_dissector"],
+        ),
+        ptype(
+            "cgroup_sysctl",
+            Some(&CGROUP_SYSCTL_DESCR),
+            bpf_prog_type::CGROUP_SYSCTL,
+            &["cgroup/sysctl"],
+        ),
+        ptype(
+            "ext",
+            Some(&UNSPEC_DESCR),
+            bpf_prog_type::EXT,
+            &["freplace/"],
+        ),
+        ptype(
+            "tracing",
+            Some(&UNSPEC_DESCR),
+            bpf_prog_type::TRACING,
+            &[
+                "fentry/",
+                "fexit/",
+                "fmod_ret/",
+                "iter/",
+                "lsm.s/",
+                "tp_btf/",
+            ],
+        ),
+        ptype(
+            "struct_ops",
+            Some(&UNSPEC_DESCR),
+            bpf_prog_type::STRUCT_OPS,
+            &["struct_ops/"],
+        ),
+        ptype("lsm", Some(&UNSPEC_DESCR), bpf_prog_type::LSM, &["lsm/"]),
+        ptype(
+            "sk_lookup",
+            Some(&SK_LOOKUP_DESCR),
+            bpf_prog_type::SK_LOOKUP,
+            &["sk_lookup/"],
+        ),
+        ptype(
+            "syscall",
+            Some(&UNSPEC_DESCR),
+            bpf_prog_type::SYSCALL,
+            &["syscall"],
+        ),
+        ptype(
+            "netfilter",
+            Some(&UNSPEC_DESCR),
+            bpf_prog_type::NETFILTER,
+            &["netfilter/"],
         ),
     ]
 }
@@ -402,6 +508,16 @@ fn linux_map_types() -> Vec<EbpfMapType> {
         map_type_entry(PERCPU_CGROUP_STORAGE, "PERCPU_CGROUP_STORAGE"),
         map_type_entry(QUEUE, "QUEUE"),
         map_type_entry(STACK, "STACK"),
+        map_type_entry(SK_STORAGE, "SK_STORAGE"),
+        map_type_entry(DEVMAP_HASH, "DEVMAP_HASH"),
+        map_type_entry(STRUCT_OPS, "STRUCT_OPS"),
+        map_type_entry(RINGBUF, "RINGBUF"),
+        map_type_entry(INODE_STORAGE, "INODE_STORAGE"),
+        map_type_entry(TASK_STORAGE, "TASK_STORAGE"),
+        map_type_entry(BLOOM_FILTER, "BLOOM_FILTER"),
+        map_type_entry(USER_RINGBUF, "USER_RINGBUF"),
+        map_type_entry(CGRP_STORAGE, "CGRP_STORAGE"),
+        map_type_entry(ARENA, "ARENA"),
     ]
 }
 
@@ -630,6 +746,8 @@ pub struct LinuxPlatform {
     /// Context descriptor for the current program type.
     /// Set from `ProgramInfo.program_type.context_descriptor` before analysis.
     pub context_descriptor: Option<&'static EbpfContextDescriptor>,
+    /// Program type name for helper availability gating when context alone is ambiguous.
+    pub program_type_name: Option<String>,
 }
 
 impl LinuxPlatform {
@@ -639,7 +757,13 @@ impl LinuxPlatform {
             cache: std::collections::BTreeMap::new(),
             conformance_groups: conformance_groups::DEFAULT_GROUPS | conformance_groups::PACKET,
             context_descriptor: None,
+            program_type_name: None,
         }
+    }
+
+    pub fn set_program_type(&mut self, program_type: &EbpfProgramType) {
+        self.context_descriptor = program_type.context_descriptor;
+        self.program_type_name = Some(program_type.name.clone());
     }
 }
 
@@ -659,7 +783,11 @@ impl EbpfPlatform for LinuxPlatform {
     }
 
     fn is_helper_usable(&self, n: i32) -> bool {
-        spec_prototypes::is_helper_usable(n, self.context_descriptor)
+        spec_prototypes::is_helper_usable(
+            n,
+            self.context_descriptor,
+            self.program_type_name.as_deref(),
+        )
     }
 
     fn map_record_size(&self) -> usize {
@@ -701,5 +829,63 @@ impl EbpfPlatform for LinuxPlatform {
 
     fn supported_conformance_groups(&self) -> u32 {
         self.conformance_groups
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cgroup_sock_addr_prefixes_map_to_sock_addr_program_type() {
+        for section in [
+            "cgroup/bind4",
+            "cgroup/post_bind6",
+            "cgroup/connect6",
+            "cgroup/recvmsg4",
+            "cgroup/getpeername6",
+            "cgroup/getsockname4",
+        ] {
+            let program_type = get_program_type_linux(section, "");
+            assert_eq!(program_type.name, "cgroup_sock_addr");
+            assert_eq!(program_type.context_descriptor, Some(&SOCK_ADDR_DESCR));
+        }
+    }
+
+    #[test]
+    fn test_socket_cookie_helper_is_not_fully_context_agnostic() {
+        let mut platform = LinuxPlatform::new();
+
+        let cgroup_sock_addr = get_program_type_linux("cgroup/connect4", "");
+        platform.set_program_type(&cgroup_sock_addr);
+        assert!(platform.is_helper_usable(46)); // get_socket_cookie
+
+        let xdp = get_program_type_linux("xdp", "");
+        platform.set_program_type(&xdp);
+        assert!(!platform.is_helper_usable(46));
+
+        platform.set_program_type(&cgroup_sock_addr);
+        assert!(!platform.is_helper_usable(47)); // get_socket_uid remains skb-only
+    }
+
+    #[test]
+    fn test_new_linux_map_type_entries_are_present() {
+        let arena = get_map_type_linux(bpf_map_type::ARENA);
+        assert_eq!(arena.name, "ARENA");
+        assert_eq!(arena.platform_specific_type, bpf_map_type::ARENA);
+
+        let cgrp_storage = get_map_type_linux(bpf_map_type::CGRP_STORAGE);
+        assert_eq!(cgrp_storage.name, "CGRP_STORAGE");
+        assert_eq!(
+            cgrp_storage.platform_specific_type,
+            bpf_map_type::CGRP_STORAGE
+        );
+
+        let user_ringbuf = get_map_type_linux(bpf_map_type::USER_RINGBUF);
+        assert_eq!(user_ringbuf.name, "USER_RINGBUF");
+        assert_eq!(
+            user_ringbuf.platform_specific_type,
+            bpf_map_type::USER_RINGBUF
+        );
     }
 }

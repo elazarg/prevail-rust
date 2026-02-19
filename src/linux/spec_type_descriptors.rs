@@ -26,6 +26,12 @@ pub const LWT_REGIONS: i32 = 24 * 4;
 pub const CGROUP_SOCK_REGIONS: i32 = 12 * 4;
 pub const SOCK_OPS_REGIONS: i32 = 42 * 4 + 2 * 8;
 pub const SK_SKB_REGIONS: i32 = 36 * 4;
+pub const SOCK_ADDR_REGIONS: i32 = 72;
+pub const SOCKOPT_REGIONS: i32 = 40;
+pub const SK_LOOKUP_REGIONS: i32 = 72;
+pub const SK_REUSEPORT_REGIONS: i32 = 56;
+pub const FLOW_DISSECTOR_REGIONS: i32 = 56;
+pub const CGROUP_SYSCTL_REGIONS: i32 = 8;
 
 pub static SK_BUFF: EbpfContextDescriptor = EbpfContextDescriptor {
     size: SK_SKB_REGIONS,
@@ -97,6 +103,48 @@ pub static SOCK_OPS_DESCR: EbpfContextDescriptor = EbpfContextDescriptor {
     meta: -1,
 };
 
+pub static SOCK_ADDR_DESCR: EbpfContextDescriptor = EbpfContextDescriptor {
+    size: SOCK_ADDR_REGIONS,
+    data: -1,
+    end: -1,
+    meta: -1,
+};
+
+pub static SOCKOPT_DESCR: EbpfContextDescriptor = EbpfContextDescriptor {
+    size: SOCKOPT_REGIONS,
+    data: -1,
+    end: -1,
+    meta: -1,
+};
+
+pub static SK_LOOKUP_DESCR: EbpfContextDescriptor = EbpfContextDescriptor {
+    size: SK_LOOKUP_REGIONS,
+    data: -1,
+    end: -1,
+    meta: -1,
+};
+
+pub static SK_REUSEPORT_DESCR: EbpfContextDescriptor = EbpfContextDescriptor {
+    size: SK_REUSEPORT_REGIONS,
+    data: 0,
+    end: 8,
+    meta: -1,
+};
+
+pub static FLOW_DISSECTOR_DESCR: EbpfContextDescriptor = EbpfContextDescriptor {
+    size: FLOW_DISSECTOR_REGIONS,
+    data: -1,
+    end: -1,
+    meta: -1,
+};
+
+pub static CGROUP_SYSCTL_DESCR: EbpfContextDescriptor = EbpfContextDescriptor {
+    size: CGROUP_SYSCTL_REGIONS,
+    data: -1,
+    end: -1,
+    meta: -1,
+};
+
 // The following all use the SK_BUFF descriptor and so the ctx is apparently interchangeable.
 // In C++ these are #define aliases; in Rust, we just re-export references.
 pub static SOCKET_FILTER_DESCR: &EbpfContextDescriptor = &SK_BUFF;
@@ -107,3 +155,41 @@ pub static SK_SKB_DESCR: &EbpfContextDescriptor = &SK_BUFF;
 
 // And these are also interchangeable.
 pub static XDP_DESCR: &EbpfContextDescriptor = &XDP_MD;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_new_linux_context_descriptor_layouts() {
+        assert_eq!(SOCK_ADDR_DESCR.size, 72);
+        assert_eq!(SOCK_ADDR_DESCR.data, -1);
+        assert_eq!(SOCK_ADDR_DESCR.end, -1);
+        assert_eq!(SOCK_ADDR_DESCR.meta, -1);
+
+        assert_eq!(SOCKOPT_DESCR.size, 40);
+        assert_eq!(SOCKOPT_DESCR.data, -1);
+        assert_eq!(SOCKOPT_DESCR.end, -1);
+        assert_eq!(SOCKOPT_DESCR.meta, -1);
+
+        assert_eq!(SK_LOOKUP_DESCR.size, 72);
+        assert_eq!(SK_LOOKUP_DESCR.data, -1);
+        assert_eq!(SK_LOOKUP_DESCR.end, -1);
+        assert_eq!(SK_LOOKUP_DESCR.meta, -1);
+
+        assert_eq!(SK_REUSEPORT_DESCR.size, 56);
+        assert_eq!(SK_REUSEPORT_DESCR.data, 0);
+        assert_eq!(SK_REUSEPORT_DESCR.end, 8);
+        assert_eq!(SK_REUSEPORT_DESCR.meta, -1);
+
+        assert_eq!(FLOW_DISSECTOR_DESCR.size, 56);
+        assert_eq!(FLOW_DISSECTOR_DESCR.data, -1);
+        assert_eq!(FLOW_DISSECTOR_DESCR.end, -1);
+        assert_eq!(FLOW_DISSECTOR_DESCR.meta, -1);
+
+        assert_eq!(CGROUP_SYSCTL_DESCR.size, 8);
+        assert_eq!(CGROUP_SYSCTL_DESCR.data, -1);
+        assert_eq!(CGROUP_SYSCTL_DESCR.end, -1);
+        assert_eq!(CGROUP_SYSCTL_DESCR.meta, -1);
+    }
+}

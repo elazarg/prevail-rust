@@ -325,7 +325,7 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
         [PtrToWritableMem, ConstSizeOrZero, Anything]
     ),
     // 46: get_socket_cookie
-    proto!("get_socket_cookie", Integer, [PtrToCtx], ctx = &SK_BUFF),
+    proto!("get_socket_cookie", Integer, [PtrToCtx]),
     // 47: get_socket_uid
     proto!("get_socket_uid", Integer, [PtrToCtx], ctx = &SK_BUFF),
     // 48: set_hash
@@ -1286,7 +1286,11 @@ pub fn get_helper_prototype(n: i32) -> &'static HelperPrototype {
 /// `program_context` is the context descriptor of the program type being
 /// verified.  If null, context-dependent helpers are rejected.
 ///
-pub fn is_helper_usable(n: i32, program_context: Option<&EbpfContextDescriptor>) -> bool {
+pub fn is_helper_usable(
+    n: i32,
+    program_context: Option<&EbpfContextDescriptor>,
+    program_type_name: Option<&str>,
+) -> bool {
     if n < 0 || n >= PROTOTYPES.len() as i32 {
         return false;
     }
@@ -1295,6 +1299,30 @@ pub fn is_helper_usable(n: i32, program_context: Option<&EbpfContextDescriptor>)
     // Explicitly unsupported.
     if proto.unsupported {
         return false;
+    }
+
+    // Some helpers are available to a subset of program types that do not
+    // share a single context descriptor. Until attach-type-level modeling is
+    // available, gate these explicitly.
+    if n == 46 {
+        let allowed = matches!(
+            program_type_name,
+            Some(
+                "socket_filter"
+                    | "sched_act"
+                    | "sched_cls"
+                    | "sk_skb"
+                    | "cgroup_skb"
+                    | "cgroup_sock"
+                    | "cgroup_sock_addr"
+                    | "sock_ops"
+                    | "sk_reuseport"
+                    | "tracing"
+            )
+        );
+        if !allowed {
+            return false;
+        }
     }
 
     // If the helper requires a specific context, it must match.
@@ -1317,7 +1345,7 @@ pub fn is_helper_usable(n: i32, program_context: Option<&EbpfContextDescriptor>)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::linux::spec_type_descriptors::SK_SKB_REGIONS;
+    use crate::linux::spec_type_descriptors::{SK_SKB_REGIONS, SOCK_ADDR_DESCR};
 
     #[test]
     fn test_prototype_count() {
@@ -1398,31 +1426,31 @@ mod tests {
 
     #[test]
     fn test_is_helper_usable_out_of_range() {
-        assert!(!is_helper_usable(-1, None));
-        assert!(!is_helper_usable(212, None));
-        assert!(!is_helper_usable(i32::MAX, None));
+        assert!(!is_helper_usable(-1, None, None));
+        assert!(!is_helper_usable(212, None, None));
+        assert!(!is_helper_usable(i32::MAX, None, None));
     }
 
     #[test]
     fn test_is_helper_usable_unsupported() {
         // dynptr_from_mem (197) is explicitly unsupported
-        assert!(!is_helper_usable(197, None));
+        assert!(!is_helper_usable(197, None, None));
     }
 
     #[test]
     fn test_is_helper_usable_no_context_required() {
         // get_prandom_u32 (7) has no context requirement, should be usable
-        assert!(is_helper_usable(7, None));
+        assert!(is_helper_usable(7, None, None));
     }
 
     #[test]
     fn test_is_helper_usable_context_match() {
         // skb_store_bytes (9) requires SK_BUFF context
-        assert!(is_helper_usable(9, Some(&SK_BUFF)));
+        assert!(is_helper_usable(9, Some(&SK_BUFF), None));
         // Should fail with XDP context
-        assert!(!is_helper_usable(9, Some(&XDP_MD)));
+        assert!(!is_helper_usable(9, Some(&XDP_MD), None));
         // Should fail with null context
-        assert!(!is_helper_usable(9, None));
+        assert!(!is_helper_usable(9, None, None));
     }
 
     #[test]
@@ -1434,7 +1462,24 @@ mod tests {
             end: 20 * 4,
             meta: 35 * 4,
         };
-        assert!(is_helper_usable(9, Some(&matching_ctx)));
+        assert!(is_helper_usable(9, Some(&matching_ctx), None));
+    }
+
+    #[test]
+    fn test_socket_cookie_program_type_gating() {
+        assert!(is_helper_usable(46, Some(&SK_BUFF), Some("socket_filter")));
+        assert!(is_helper_usable(
+            46,
+            Some(&SOCK_ADDR_DESCR),
+            Some("cgroup_sock_addr")
+        ));
+        assert!(!is_helper_usable(46, Some(&XDP_MD), Some("xdp")));
+        assert!(!is_helper_usable(46, Some(&SK_BUFF), None));
+        assert!(!is_helper_usable(
+            47,
+            Some(&SOCK_ADDR_DESCR),
+            Some("cgroup_sock_addr")
+        ));
     }
 
     #[test]

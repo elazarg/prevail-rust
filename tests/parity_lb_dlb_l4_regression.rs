@@ -32,7 +32,7 @@ fn analyze_bpf_lb_dlb_l4_from_netdev() -> (prevail::result::AnalysisResult, Vari
     let raw_prog = &raw_progs[0];
 
     platform.map_descriptors = raw_prog.info.map_descriptors.clone();
-    platform.context_descriptor = raw_prog.info.program_type.context_descriptor;
+    platform.set_program_type(&raw_prog.info.program_type);
 
     let mut notes = Vec::new();
     let inst_seq =

@@ -273,7 +273,7 @@ fn run_conformance_test_case(data_file: &Path) -> ConformanceTestResult {
     // Build platform with callx support
     let mut platform = LinuxPlatform::new();
     platform.conformance_groups |= 0x80; // callx
-    platform.context_descriptor = info.program_type.context_descriptor;
+    platform.set_program_type(&info.program_type);
 
     let options = EbpfVerifierOptions::default();
 

@@ -42,7 +42,7 @@ fn verbose_output(elf_relative: &str, section: &str) -> String {
     let raw_prog = &raw_progs[0];
 
     platform.map_descriptors = raw_prog.info.map_descriptors.clone();
-    platform.context_descriptor = raw_prog.info.program_type.context_descriptor;
+    platform.set_program_type(&raw_prog.info.program_type);
 
     let info = &raw_prog.info;
     let insts = &raw_prog.prog;

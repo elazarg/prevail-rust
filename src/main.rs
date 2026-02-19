@@ -389,7 +389,7 @@ fn main() -> ExitCode {
 
     // Copy map descriptors and context descriptor to the platform for analysis.
     rust_platform.map_descriptors = raw_prog.info.map_descriptors.clone();
-    rust_platform.context_descriptor = raw_prog.info.program_type.context_descriptor;
+    rust_platform.set_program_type(&raw_prog.info.program_type);
 
     let info = &raw_prog.info;
     let insts = &raw_prog.prog;

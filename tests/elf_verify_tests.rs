@@ -41,7 +41,7 @@ fn verify_section(path: &str, section: &str, opts: &EbpfVerifierOptions) -> bool
     let raw_prog = &raw_progs[0];
 
     platform.map_descriptors = raw_prog.info.map_descriptors.clone();
-    platform.context_descriptor = raw_prog.info.program_type.context_descriptor;
+    platform.set_program_type(&raw_prog.info.program_type);
 
     let info = &raw_prog.info;
     let insts = &raw_prog.prog;
@@ -87,7 +87,7 @@ fn verify_program(
     for raw_prog in &raw_progs {
         if expected_count == 1 || raw_prog.function_name == program_name {
             platform.map_descriptors = raw_prog.info.map_descriptors.clone();
-            platform.context_descriptor = raw_prog.info.program_type.context_descriptor;
+            platform.set_program_type(&raw_prog.info.program_type);
 
             let info = &raw_prog.info;
             let insts = &raw_prog.prog;
@@ -2528,7 +2528,7 @@ fn fail_cilium_examples_uretprobe_bpf_x86_bpfel() {
     let raw_prog = &raw_progs[0];
     let mut platform2 = LinuxPlatform::new();
     platform2.map_descriptors = raw_prog.info.map_descriptors.clone();
-    platform2.context_descriptor = raw_prog.info.program_type.context_descriptor;
+    platform2.set_program_type(&raw_prog.info.program_type);
     let info = &raw_prog.info;
     let insts = &raw_prog.prog;
     let mut notes = Vec::new();

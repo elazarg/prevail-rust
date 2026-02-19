@@ -10,7 +10,15 @@ pub enum EbpfReturnType {
     Integer = 0,
     PtrToMapValueOrNull = 1,
     IntegerOrNoReturnIfSucceed = 2,
-    Unsupported = 3,
+    PtrToSockCommonOrNull = 3,
+    PtrToSocketOrNull = 4,
+    PtrToTcpSocketOrNull = 5,
+    PtrToAllocMemOrNull = 6,
+    PtrToBtfIdOrNull = 7,
+    PtrToMemOrBtfIdOrNull = 8,
+    PtrToBtfId = 9,
+    PtrToMemOrBtfId = 10,
+    Unsupported = 11,
 }
 
 #[repr(u32)]
@@ -32,7 +40,23 @@ pub enum EbpfArgumentType {
     PtrToStackOrNull = 13,
     PtrToCtxOrNull = 14,
     PtrToWritableMemOrNull = 15,
-    Unsupported = 16,
+    PtrToBtfIdSockCommon = 16,
+    PtrToSpinLock = 17,
+    PtrToSockCommon = 18,
+    PtrToBtfId = 19,
+    PtrToLong = 20,
+    PtrToInt = 21,
+    PtrToConstStr = 22,
+    PtrToFunc = 23,
+    ConstAllocSizeOrZero = 24,
+    PtrToAllocMem = 25,
+    PtrToTimer = 26,
+    PtrToPercpuBtfId = 27,
+    PtrToReadonlyMem = 28,
+    PtrToReadonlyMemOrNull = 29,
+    PtrToUninitMapValue = 30,
+    ConstPtrToMap = 31,
+    Unsupported = 32,
 }
 
 /// Describes how to access the layout in memory of the data (e.g. actual packet).
