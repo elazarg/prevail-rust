@@ -50,7 +50,8 @@ fn verify_section(path: &str, section: &str, opts: &EbpfVerifierOptions) -> bool
     let inst_seq = unmarshal::unmarshal(insts, &mut notes, info, &platform, opts)
         .expect("Failed to unmarshal");
 
-    let program = Program::from_sequence(&inst_seq, info, opts).expect("Failed to build CFG");
+    let program =
+        Program::from_sequence(&inst_seq, info, &platform, opts).expect("Failed to build CFG");
 
     let ctx = DomainContext {
         program_info: info,
@@ -96,8 +97,8 @@ fn verify_program(
             let inst_seq = unmarshal::unmarshal(insts, &mut notes, info, &platform, opts)
                 .expect("Failed to unmarshal");
 
-            let program =
-                Program::from_sequence(&inst_seq, info, opts).expect("Failed to build CFG");
+            let program = Program::from_sequence(&inst_seq, info, &platform, opts)
+                .expect("Failed to build CFG");
 
             let ctx = DomainContext {
                 program_info: info,
@@ -216,7 +217,7 @@ fn fail_unmarshal_wronghelper() {
     let inst_seq =
         unmarshal::unmarshal(&raw_prog.prog, &mut notes, &raw_prog.info, &platform, &opts)
             .expect("Expected unmarshal success for wronghelper.o");
-    match Program::from_sequence(&inst_seq, &raw_prog.info, &opts) {
+    match Program::from_sequence(&inst_seq, &raw_prog.info, &platform, &opts) {
         Ok(_) => panic!("Expected CFG validation rejection for wronghelper.o"),
         Err(err) => {
             assert!(
@@ -2534,7 +2535,7 @@ fn fail_cilium_examples_uretprobe_bpf_x86_bpfel() {
     let mut notes = Vec::new();
     let inst_seq =
         unmarshal::unmarshal(insts, &mut notes, info, &platform2, &opts).expect("unmarshal");
-    let program = Program::from_sequence(&inst_seq, info, &opts).expect("build CFG");
+    let program = Program::from_sequence(&inst_seq, info, &platform2, &opts).expect("build CFG");
     let ctx = DomainContext {
         program_info: info,
         options: &opts,

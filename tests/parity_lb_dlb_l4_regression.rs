@@ -38,8 +38,8 @@ fn analyze_bpf_lb_dlb_l4_from_netdev() -> (prevail::result::AnalysisResult, Vari
     let inst_seq =
         unmarshal::unmarshal(&raw_prog.prog, &mut notes, &raw_prog.info, &platform, &opts)
             .expect("failed to unmarshal");
-    let program =
-        Program::from_sequence(&inst_seq, &raw_prog.info, &opts).expect("failed CFG build");
+    let program = Program::from_sequence(&inst_seq, &raw_prog.info, &platform, &opts)
+        .expect("failed CFG build");
 
     let ctx = DomainContext {
         program_info: &raw_prog.info,

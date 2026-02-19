@@ -76,6 +76,13 @@ impl EbpfPlatform for TestPlatform {
     fn is_helper_usable(&self, n: i32) -> bool {
         self.linux.is_helper_usable(n)
     }
+    fn resolve_kfunc_call(
+        &self,
+        btf_id: i32,
+        info: &ProgramInfo,
+    ) -> Result<prevail::ir::syntax::Call, String> {
+        self.linux.resolve_kfunc_call(btf_id, info)
+    }
     fn map_record_size(&self) -> usize {
         0
     }
@@ -475,7 +482,7 @@ fn run_test_case(test_case: &TestCase, platform: &TestPlatform) -> Option<Failur
     let options = test_case.options;
 
     // Build program from instruction sequence
-    let prog = match Program::from_sequence(&test_case.instruction_seq, &info, &options) {
+    let prog = match Program::from_sequence(&test_case.instruction_seq, &info, platform, &options) {
         Ok(p) => p,
         Err(e) => {
             // InvalidControlFlow — check if expected

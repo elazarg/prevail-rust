@@ -454,7 +454,7 @@ fn main() -> ExitCode {
     }
 
     // Build CFG in Rust.
-    let program = match Program::from_sequence(&inst_seq, info, &opts) {
+    let program = match Program::from_sequence(&inst_seq, info, &rust_platform, &opts) {
         Ok(p) => p,
         Err(e) => {
             eprintln!("error: {}", e);

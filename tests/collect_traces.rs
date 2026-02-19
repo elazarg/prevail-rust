@@ -55,7 +55,7 @@ fn analyze_section(path: &str, section: &str, opts: &EbpfVerifierOptions) -> Vec
             Err(_) => continue,
         };
 
-        let program = match Program::from_sequence(&inst_seq, info, opts) {
+        let program = match Program::from_sequence(&inst_seq, info, &platform, opts) {
             Ok(p) => p,
             Err(_) => continue,
         };

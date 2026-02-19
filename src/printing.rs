@@ -1898,6 +1898,7 @@ mod tests {
     fn test_display_call() {
         let call = Call {
             func: 1,
+            kind: crate::ir::syntax::CallKind::Helper,
             name: Rc::from("bpf_map_lookup_elem"),
             is_supported: true,
             unsupported_reason: Rc::from(""),

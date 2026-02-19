@@ -8,9 +8,9 @@ use std::rc::Rc;
 use crate::cfg::label::Label;
 use crate::ir::syntax::{
     ArgPair, ArgPairKind, ArgSingle, ArgSingleKind, Atomic, AtomicOp, Bin, BinOp, Call, CallBtf,
-    CallLocal, Callx, Condition, ConditionOp, Deref, Exit, Imm, Instruction, InstructionSeq, Jmp,
-    LoadMapAddress, LoadMapFd, LoadPseudo, Mem, Packet, PseudoAddress, PseudoAddressKind, Reg, Un,
-    UnOp, Value,
+    CallKind, CallLocal, Callx, Condition, ConditionOp, Deref, Exit, Imm, Instruction,
+    InstructionSeq, Jmp, LoadMapAddress, LoadMapFd, LoadPseudo, Mem, Packet, PseudoAddress,
+    PseudoAddressKind, Reg, Un, UnOp, Value,
 };
 use crate::platform::EbpfPlatform;
 use crate::spec::config::EbpfVerifierOptions;
@@ -754,6 +754,7 @@ impl<'a> Unmarshaller<'a> {
                     let name = self.platform.get_helper_prototype(inst.imm).name;
                     return Ok(Instruction::Call(Call {
                         func: inst.imm,
+                        kind: CallKind::Helper,
                         name: Rc::from(name),
                         is_supported: false,
                         unsupported_reason: Rc::from(
@@ -1104,6 +1105,7 @@ pub fn make_call_result(imm: i32, platform: &dyn EbpfPlatform) -> Result<Call, S
 
     let mut res = Call {
         func: imm,
+        kind: CallKind::Helper,
         name,
         is_supported: true,
         unsupported_reason: Rc::from(""),

@@ -290,7 +290,7 @@ fn run_conformance_test_case(data_file: &Path) -> ConformanceTestResult {
     };
 
     // Build program
-    let prog = match Program::from_sequence(&inst_seq, &info, &options) {
+    let prog = match Program::from_sequence(&inst_seq, &info, &platform, &options) {
         Ok(p) => p,
         Err(_) => {
             return ConformanceTestResult {

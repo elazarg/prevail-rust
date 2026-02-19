@@ -8,6 +8,8 @@
 //! `EbpfPlatform` implementation.
 
 use crate::elf_loader::UnmarshalError;
+use crate::ir::syntax::Call;
+use crate::linux::kfunc;
 use crate::linux::spec_prototypes::{self, HelperPrototype};
 use crate::linux::spec_type_descriptors::{
     CGROUP_DEV_DESCR, CGROUP_SOCK_DESCR, CGROUP_SYSCTL_DESCR, FLOW_DISSECTOR_DESCR, KPROBE_DESCR,
@@ -19,7 +21,7 @@ use crate::platform::EbpfPlatform;
 use crate::spec::config::EbpfVerifierOptions;
 use crate::spec::ebpf_base::EbpfContextDescriptor;
 use crate::spec::type_descriptors::{
-    EbpfMapDescriptor, EbpfMapType, EbpfMapValueType, EbpfProgramType, EquivalenceKey,
+    EbpfMapDescriptor, EbpfMapType, EbpfMapValueType, EbpfProgramType, EquivalenceKey, ProgramInfo,
 };
 
 // ── BPF program-type constants (from linux/bpf.h) ──────────────────
@@ -788,6 +790,10 @@ impl EbpfPlatform for LinuxPlatform {
             self.context_descriptor,
             self.program_type_name.as_deref(),
         )
+    }
+
+    fn resolve_kfunc_call(&self, btf_id: i32, info: &ProgramInfo) -> Result<Call, String> {
+        kfunc::make_kfunc_call_result(btf_id, Some(info))
     }
 
     fn map_record_size(&self) -> usize {

@@ -40,7 +40,7 @@ fuzz_target!(|data: &[u8]| {
                 Err(_) => continue,
             };
 
-        let program = match Program::from_sequence(&inst_seq, info, &opts) {
+        let program = match Program::from_sequence(&inst_seq, info, &platform, &opts) {
             Ok(prog) => prog,
             Err(_) => continue,
         };

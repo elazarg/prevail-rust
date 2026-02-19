@@ -78,7 +78,8 @@ fn analyze_with_deps(filename: &str, section: &str) -> AnalysisState {
     let inst_seq = unmarshal::unmarshal(insts, &mut notes, &info, &platform, &opts)
         .expect("Failed to unmarshal");
 
-    let program = Program::from_sequence(&inst_seq, &info, &opts).expect("Failed to build CFG");
+    let program =
+        Program::from_sequence(&inst_seq, &info, &platform, &opts).expect("Failed to build CFG");
 
     let ctx = DomainContext {
         program_info: &info,

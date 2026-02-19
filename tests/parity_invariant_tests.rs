@@ -50,7 +50,8 @@ fn verbose_output(elf_relative: &str, section: &str) -> String {
     let mut notes = Vec::new();
     let inst_seq = unmarshal::unmarshal(insts, &mut notes, info, &platform, &opts)
         .expect("Failed to unmarshal");
-    let program = Program::from_sequence(&inst_seq, info, &opts).expect("Failed to build CFG");
+    let program =
+        Program::from_sequence(&inst_seq, info, &platform, &opts).expect("Failed to build CFG");
 
     let ctx = DomainContext {
         program_info: info,

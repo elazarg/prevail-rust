@@ -5,9 +5,10 @@
 //! Mirrors C++ `src/platform.hpp` (`ebpf_platform_t`).
 
 use crate::elf_loader::UnmarshalError;
+use crate::ir::syntax::Call;
 use crate::linux::spec_prototypes::HelperPrototype;
 use crate::spec::config::EbpfVerifierOptions;
-use crate::spec::type_descriptors::{EbpfMapDescriptor, EbpfMapType, EbpfProgramType};
+use crate::spec::type_descriptors::{EbpfMapDescriptor, EbpfMapType, EbpfProgramType, ProgramInfo};
 
 /// Trait abstracting platform-specific eBPF behavior.
 ///
@@ -23,6 +24,13 @@ pub trait EbpfPlatform {
 
     /// Whether helper number `n` is available on this platform.
     fn is_helper_usable(&self, n: i32) -> bool;
+
+    /// Resolve a kfunc BTF id into a call contract.
+    ///
+    /// Platforms that do not model kfuncs should return an error explaining why.
+    fn resolve_kfunc_call(&self, _btf_id: i32, _info: &ProgramInfo) -> Result<Call, String> {
+        Err("kfunc resolution is unavailable on this platform".to_string())
+    }
 
     /// Size of a single record in the legacy "maps" ELF section.
     fn map_record_size(&self) -> usize;

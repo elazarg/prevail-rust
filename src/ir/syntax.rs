@@ -213,10 +213,17 @@ pub enum ArgPairKind {
     PtrToWritableMem,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CallKind {
+    Helper,
+    Kfunc,
+}
+
 /// Helper function call.
 #[derive(Clone, Debug)]
 pub struct Call {
     pub func: i32,
+    pub kind: CallKind,
     pub name: Rc<str>,
     pub is_supported: bool,
     pub unsupported_reason: Rc<str>,
@@ -229,7 +236,7 @@ pub struct Call {
 
 impl PartialEq for Call {
     fn eq(&self, other: &Self) -> bool {
-        self.func == other.func
+        self.func == other.func && self.kind == other.kind
     }
 }
 

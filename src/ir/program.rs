@@ -14,11 +14,12 @@ use crate::cfg::label::Label;
 use crate::cfg::wto::{CycleOrLabel, Wto};
 use crate::ir::assertions::get_assertions;
 use crate::ir::syntax::{
-    ArgSingleKind, Assertion, Assume, Bin, BinOp, Condition, ConditionOp, Imm,
+    ArgSingleKind, Assertion, Assume, Bin, BinOp, Call, CallKind, Condition, ConditionOp, Imm,
     IncrementLoopCounter, Instruction, InstructionSeq, LoadMapAddress, LoadMapFd, LoadPseudo, Mem,
     PseudoAddressKind, Un, UnOp, Undefined, Value,
 };
 use crate::ir::unmarshal::conformance_groups;
+use crate::platform::EbpfPlatform;
 use crate::spec::config::EbpfVerifierOptions;
 use crate::spec::ebpf_base::MAX_CALL_STACK_FRAMES;
 use crate::spec::type_descriptors::ProgramInfo;
@@ -44,13 +45,20 @@ impl fmt::Display for InvalidControlFlow {
 
 impl std::error::Error for InvalidControlFlow {}
 
-fn is_tail_call_helper(call: &crate::ir::syntax::Call) -> bool {
-    call.name.as_ref() == "tail_call"
+fn is_tail_call_helper(call: &Call, platform: &dyn EbpfPlatform) -> bool {
+    if call.kind != CallKind::Helper {
+        return false;
+    }
+    if !platform.is_helper_usable(call.func) {
+        return false;
+    }
+    platform.get_helper_prototype(call.func).return_type
+        == crate::spec::ebpf_base::EbpfReturnType::IntegerOrNoReturnIfSucceed
 }
 
-fn is_tail_call_site(ins: &Instruction) -> bool {
+fn is_tail_call_site(ins: &Instruction, platform: &dyn EbpfPlatform) -> bool {
     match ins {
-        Instruction::Call(call) => is_tail_call_helper(call),
+        Instruction::Call(call) => is_tail_call_helper(call, platform),
         // At CFG-construction time callx targets are unknown.
         // Conservatively treat callx as a potential tail-call site.
         Instruction::Callx(_) => true,
@@ -73,7 +81,11 @@ fn collect_wto_labels(component: &CycleOrLabel, labels: &mut BTreeSet<Label>) {
 
 /// Enforce a global upper bound on tail-call chain length by counting
 /// tail-call sites over the reachable maximal-SCC DAG.
-fn validate_tail_call_chain_depth(prog: &Program, wto: &Wto) -> Result<(), InvalidControlFlow> {
+fn validate_tail_call_chain_depth(
+    prog: &Program,
+    wto: &Wto,
+    platform: &dyn EbpfPlatform,
+) -> Result<(), InvalidControlFlow> {
     const TAIL_CALL_CHAIN_LIMIT: i32 = 33;
     const UNINITIALIZED_DEPTH: i32 = i32::MIN;
 
@@ -113,7 +125,7 @@ fn validate_tail_call_chain_depth(prog: &Program, wto: &Wto) -> Result<(), Inval
             .get(label)
             .expect("reachable label missing SCC");
 
-        if is_tail_call_site(prog.instruction_at(label)) {
+        if is_tail_call_site(prog.instruction_at(label), platform) {
             *tail_sites_per_scc
                 .get_mut(src_scc)
                 .expect("missing SCC tail count") += 1;
@@ -337,15 +349,22 @@ impl Program {
     pub fn from_sequence(
         inst_seq: &InstructionSeq,
         info: &ProgramInfo,
+        platform: &dyn EbpfPlatform,
         options: &EbpfVerifierOptions,
     ) -> Result<Program, InvalidControlFlow> {
-        validate_instruction_feature_support(inst_seq, info)?;
+        let mut resolved_kfunc_calls = ResolvedKfuncCalls::new();
+        validate_instruction_feature_support(inst_seq, info, platform, &mut resolved_kfunc_calls)?;
 
         // Convert the instruction sequence to a deterministic control-flow graph.
-        let mut builder = instruction_seq_to_cfg(inst_seq, info, options.cfg_opts.must_have_exit)?;
+        let mut builder = instruction_seq_to_cfg(
+            inst_seq,
+            info,
+            options.cfg_opts.must_have_exit,
+            &resolved_kfunc_calls,
+        )?;
         let wto = Wto::new(&builder.prog.cfg);
 
-        validate_tail_call_chain_depth(&builder.prog, &wto)?;
+        validate_tail_call_chain_depth(&builder.prog, &wto, platform)?;
 
         // Detect loops using Weak Topological Ordering (WTO) and insert counters
         // at loop entry points. WTO provides a hierarchical decomposition of the
@@ -522,7 +541,6 @@ pub fn has_fall(ins: &Instruction) -> bool {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RejectKind {
-    NotImplemented,
     Capability,
 }
 
@@ -580,19 +598,12 @@ fn check_instruction_feature_support(
     ins: &Instruction,
     info: &ProgramInfo,
 ) -> Option<RejectionReason> {
-    let reject_not_impl = |detail: &str| RejectionReason {
-        kind: RejectKind::NotImplemented,
-        detail: detail.to_string(),
-    };
     let reject_capability = |detail: &str| RejectionReason {
         kind: RejectKind::Capability,
         detail: detail.to_string(),
     };
     let groups = info.supported_conformance_groups;
 
-    if matches!(ins, Instruction::CallBtf(_)) {
-        return Some(reject_not_impl("call helper by BTF id"));
-    }
     if let Instruction::Call(call) = ins
         && !call.is_supported
     {
@@ -606,6 +617,7 @@ fn check_instruction_feature_support(
     if (matches!(ins, Instruction::Call(_))
         || matches!(ins, Instruction::CallLocal(_))
         || matches!(ins, Instruction::Callx(_))
+        || matches!(ins, Instruction::CallBtf(_))
         || matches!(ins, Instruction::Exit(_)))
         && !supports(groups, conformance_groups::BASE32)
     {
@@ -686,20 +698,29 @@ fn check_instruction_feature_support(
     None
 }
 
+type ResolvedKfuncCalls = BTreeMap<Label, Call>;
+
 fn validate_instruction_feature_support(
     insts: &InstructionSeq,
     info: &ProgramInfo,
+    platform: &dyn EbpfPlatform,
+    resolved_kfunc_calls: &mut ResolvedKfuncCalls,
 ) -> Result<(), InvalidControlFlow> {
     for (label, inst, _) in insts {
         if let Some(reason) = check_instruction_feature_support(inst, info) {
             return Err(InvalidControlFlow {
                 message: match reason.kind {
-                    RejectKind::NotImplemented => {
-                        format!("not implemented: {} (at {})", reason.detail, label)
-                    }
                     RejectKind::Capability => format!("rejected: {} (at {})", reason.detail, label),
                 },
             });
+        }
+        if let Instruction::CallBtf(call_btf) = inst {
+            let call = platform
+                .resolve_kfunc_call(call_btf.btf_id, info)
+                .map_err(|why_not| InvalidControlFlow {
+                    message: format!("not implemented: {} (at {})", why_not, label),
+                })?;
+            resolved_kfunc_calls.insert(label.clone(), call);
         }
     }
     Ok(())
@@ -767,6 +788,7 @@ fn instruction_seq_to_cfg(
     insts: &InstructionSeq,
     info: &ProgramInfo,
     must_have_exit: bool,
+    resolved_kfunc_calls: &ResolvedKfuncCalls,
 ) -> Result<CfgBuilder, InvalidControlFlow> {
     let mut builder = CfgBuilder::new();
 
@@ -775,8 +797,19 @@ fn instruction_seq_to_cfg(
         if matches!(inst, Instruction::Undefined(_)) {
             continue;
         }
-        // Resolve pseudo loads to concrete instructions.
-        if let Instruction::LoadPseudo(pseudo) = inst {
+        if matches!(inst, Instruction::CallBtf(_)) {
+            let call = resolved_kfunc_calls
+                .get(label)
+                .ok_or_else(|| InvalidControlFlow {
+                    message: format!(
+                        "internal error: missing validated kfunc resolution (at {})",
+                        label
+                    ),
+                })?
+                .clone();
+            builder.insert(label.clone(), Instruction::Call(call));
+        } else if let Instruction::LoadPseudo(pseudo) = inst {
+            // Resolve pseudo loads to concrete instructions.
             builder.insert(label.clone(), resolve_pseudo_load(pseudo, info)?);
         } else {
             builder.insert(label.clone(), inst.clone());
@@ -1128,9 +1161,10 @@ mod tests {
     use super::*;
     use crate::cfg::label::Label;
     use crate::ir::syntax::{
-        Bin, BinOp, Call, Exit, Instruction, InstructionSeq, LoadMapFd, LoadPseudo, PseudoAddress,
-        PseudoAddressKind, Reg, Value,
+        Bin, BinOp, Call, CallBtf, CallKind, Exit, Instruction, InstructionSeq, LoadMapFd,
+        LoadPseudo, PseudoAddress, PseudoAddressKind, Reg, Value,
     };
+    use crate::linux::linux_platform::LinuxPlatform;
     use crate::spec::config::EbpfVerifierOptions;
     use crate::spec::type_descriptors::{EbpfMapDescriptor, ProgramInfo};
     use std::rc::Rc;
@@ -1164,9 +1198,11 @@ mod tests {
     fn test_program_from_sequence_simple() {
         let seq = create_simple_seq();
         let info = ProgramInfo::default();
+        let platform = LinuxPlatform::new();
         let opts = EbpfVerifierOptions::default();
 
-        let prog = Program::from_sequence(&seq, &info, &opts).expect("Result should be Ok");
+        let prog =
+            Program::from_sequence(&seq, &info, &platform, &opts).expect("Result should be Ok");
 
         // Check CFG structure
         // Entry -> 0 -> 1 -> Exit
@@ -1198,9 +1234,10 @@ mod tests {
     fn test_program_empty_error() {
         let seq: InstructionSeq = Vec::new();
         let info = ProgramInfo::default();
+        let platform = LinuxPlatform::new();
         let opts = EbpfVerifierOptions::default();
 
-        let res = Program::from_sequence(&seq, &info, &opts);
+        let res = Program::from_sequence(&seq, &info, &platform, &opts);
         assert!(res.is_err());
     }
 
@@ -1229,8 +1266,10 @@ mod tests {
         ];
 
         let info = ProgramInfo::default();
+        let platform = LinuxPlatform::new();
         let opts = EbpfVerifierOptions::default();
-        let program = Program::from_sequence(&seq, &info, &opts).expect("expected valid CFG");
+        let program =
+            Program::from_sequence(&seq, &info, &platform, &opts).expect("expected valid CFG");
 
         let lowered = program.instruction_at(&Label::new(0));
         match lowered {
@@ -1258,6 +1297,7 @@ mod tests {
                 Label::new(i),
                 Instruction::Call(Call {
                     func: 12,
+                    kind: CallKind::Helper,
                     name: Rc::from("tail_call"),
                     is_supported: true,
                     unsupported_reason: Rc::from(""),
@@ -1279,8 +1319,9 @@ mod tests {
         ));
 
         let info = ProgramInfo::default();
+        let platform = LinuxPlatform::new();
         let opts = EbpfVerifierOptions::default();
-        let err = match Program::from_sequence(&seq, &info, &opts) {
+        let err = match Program::from_sequence(&seq, &info, &platform, &opts) {
             Ok(_) => panic!("must reject >33 tail calls"),
             Err(err) => err,
         };
@@ -1295,6 +1336,7 @@ mod tests {
                 Label::new(i),
                 Instruction::Call(Call {
                     func: 12,
+                    kind: CallKind::Helper,
                     name: Rc::from("tail_call"),
                     is_supported: true,
                     unsupported_reason: Rc::from(""),
@@ -1316,8 +1358,9 @@ mod tests {
         ));
 
         let info = ProgramInfo::default();
+        let platform = LinuxPlatform::new();
         let opts = EbpfVerifierOptions::default();
-        Program::from_sequence(&seq, &info, &opts).expect("depth 33 should be accepted");
+        Program::from_sequence(&seq, &info, &platform, &opts).expect("depth 33 should be accepted");
     }
 
     #[test]
@@ -1353,9 +1396,10 @@ mod tests {
             max_entries: 16,
             inner_map_fd: 0,
         });
+        let platform = LinuxPlatform::new();
         let opts = EbpfVerifierOptions::default();
-        let program =
-            Program::from_sequence(&seq, &info, &opts).expect("map-by-index must resolve");
+        let program = Program::from_sequence(&seq, &info, &platform, &opts)
+            .expect("map-by-index must resolve");
         assert_eq!(
             program.instruction_at(&Label::new(0)),
             &Instruction::LoadMapFd(LoadMapFd {
@@ -1363,5 +1407,92 @@ mod tests {
                 mapfd: 123
             })
         );
+    }
+
+    #[test]
+    fn test_call_btf_unknown_kfunc_is_rejected() {
+        let seq = vec![
+            (
+                Label::new(0),
+                Instruction::CallBtf(CallBtf { btf_id: 1 }),
+                None,
+            ),
+            (
+                Label::new(1),
+                Instruction::Exit(Exit {
+                    stack_frame_prefix: Rc::from(""),
+                }),
+                None,
+            ),
+        ];
+
+        let info = ProgramInfo::default();
+        let platform = LinuxPlatform::new();
+        let opts = EbpfVerifierOptions::default();
+        let err = match Program::from_sequence(&seq, &info, &platform, &opts) {
+            Ok(_) => panic!("unknown kfunc id must be rejected"),
+            Err(err) => err,
+        };
+        assert!(
+            err.message
+                .contains("not implemented: kfunc prototype lookup failed for BTF id 1")
+        );
+        assert!(err.message.contains("(at 0)"));
+    }
+
+    #[test]
+    fn test_call_btf_known_kfunc_is_lowered_to_call() {
+        let seq = vec![
+            (
+                Label::new(0),
+                Instruction::CallBtf(CallBtf { btf_id: 1000 }),
+                None,
+            ),
+            (
+                Label::new(1),
+                Instruction::Exit(Exit {
+                    stack_frame_prefix: Rc::from(""),
+                }),
+                None,
+            ),
+        ];
+
+        let info = ProgramInfo::default();
+        let platform = LinuxPlatform::new();
+        let opts = EbpfVerifierOptions::default();
+        let program =
+            Program::from_sequence(&seq, &info, &platform, &opts).expect("known kfunc must pass");
+        match program.instruction_at(&Label::new(0)) {
+            Instruction::Call(call) => {
+                assert_eq!(call.kind, CallKind::Kfunc);
+                assert_eq!(call.func, 1000);
+            }
+            other => panic!("expected lowered kfunc call, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_kfunc_btf_id_overlap_with_tail_call_helper_is_not_misclassified() {
+        let mut seq: InstructionSeq = Vec::new();
+        for i in 0..34 {
+            seq.push((
+                Label::new(i),
+                Instruction::CallBtf(CallBtf { btf_id: 12 }),
+                None,
+            ));
+        }
+        seq.push((
+            Label::new(34),
+            Instruction::Exit(Exit {
+                stack_frame_prefix: Rc::from(""),
+            }),
+            None,
+        ));
+
+        let info = ProgramInfo::default();
+        let platform = LinuxPlatform::new();
+        let opts = EbpfVerifierOptions::default();
+        Program::from_sequence(&seq, &info, &platform, &opts)
+            .expect("kfunc id overlap must not trigger tail-call-depth rejection");
     }
 }
