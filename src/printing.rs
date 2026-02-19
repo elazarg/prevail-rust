@@ -185,6 +185,14 @@ impl fmt::Display for ArgSingleKind {
             ArgSingleKind::MapFdPrograms => write!(f, "map_fd_programs"),
             ArgSingleKind::PtrToMapKey => write!(f, "map_key"),
             ArgSingleKind::PtrToMapValue => write!(f, "map_value"),
+            ArgSingleKind::PtrToSocket => write!(f, "socket"),
+            ArgSingleKind::PtrToBtfId => write!(f, "btf_id"),
+            ArgSingleKind::PtrToAllocMem => write!(f, "alloc_mem"),
+            ArgSingleKind::PtrToSpinLock => write!(f, "spin_lock"),
+            ArgSingleKind::PtrToTimer => write!(f, "timer"),
+            ArgSingleKind::ConstSizeOrZero => write!(f, "size?"),
+            ArgSingleKind::PtrToWritableLong => write!(f, "out_long"),
+            ArgSingleKind::PtrToWritableInt => write!(f, "out_int"),
         }
     }
 }
@@ -1918,6 +1926,8 @@ mod tests {
             unsupported_reason: Rc::from(""),
             is_map_lookup: true,
             reallocate_packet: false,
+            return_ptr_type: None,
+            return_nullable: false,
             singles: vec![ArgSingle {
                 kind: ArgSingleKind::MapFd,
                 or_null: false,

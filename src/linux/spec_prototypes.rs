@@ -18,11 +18,17 @@ use crate::spec::ebpf_base::{EbpfArgumentType, EbpfContextDescriptor, EbpfReturn
 // unambiguous aliases.
 
 use EbpfArgumentType::{
-    Anything, ConstSize, ConstSizeOrZero, DontCare, PtrToCtx, PtrToCtxOrNull, PtrToFunc, PtrToMap,
-    PtrToMapKey, PtrToMapOfPrograms, PtrToMapValue, PtrToReadableMem, PtrToReadableMemOrNull,
-    PtrToStackOrNull, PtrToWritableMem, PtrToWritableMemOrNull,
+    Anything, ConstAllocSizeOrZero, ConstSize, ConstSizeOrZero, DontCare, PtrToAllocMem,
+    PtrToBtfId, PtrToBtfIdSockCommon, PtrToCtx, PtrToCtxOrNull, PtrToFunc, PtrToInt, PtrToLong,
+    PtrToMap, PtrToMapKey, PtrToMapOfPrograms, PtrToMapValue, PtrToPercpuBtfId, PtrToReadableMem,
+    PtrToReadableMemOrNull, PtrToSockCommon, PtrToSpinLock, PtrToStackOrNull, PtrToTimer,
+    PtrToWritableMem, PtrToWritableMemOrNull,
 };
-use EbpfReturnType::{Integer, IntegerOrNoReturnIfSucceed, PtrToMapValueOrNull};
+use EbpfReturnType::{
+    Integer, IntegerOrNoReturnIfSucceed, PtrToAllocMemOrNull, PtrToBtfIdOrNull,
+    PtrToMapValueOrNull, PtrToMemOrBtfId, PtrToMemOrBtfIdOrNull, PtrToSockCommonOrNull,
+    PtrToSocketOrNull, PtrToTcpSocketOrNull,
+};
 
 /// Return type: unsupported helper.
 const RET_UNSUPPORTED: EbpfReturnType = EbpfReturnType::Unsupported;
@@ -543,22 +549,22 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
         ctx = &SK_BUFF
     ),
     // 84: sk_lookup_tcp
-    // C++ return type: EBPF_RETURN_TYPE_PTR_TO_SOCK_COMMON_OR_NULL -> Unsupported
+    // C++ return type: EBPF_RETURN_TYPE_PTR_TO_SOCK_COMMON_OR_NULL
     proto!(
         "sk_lookup_tcp",
-        RET_UNSUPPORTED,
+        PtrToSockCommonOrNull,
         [PtrToCtx, PtrToReadableMem, ConstSize, Anything, Anything]
     ),
     // 85: sk_lookup_udp
-    // C++ return type: EBPF_RETURN_TYPE_PTR_TO_SOCKET_OR_NULL -> Unsupported
+    // C++ return type: EBPF_RETURN_TYPE_PTR_TO_SOCKET_OR_NULL
     proto!(
         "sk_lookup_udp",
-        RET_UNSUPPORTED,
+        PtrToSocketOrNull,
         [PtrToCtx, PtrToReadableMem, ConstSize, Anything, Anything]
     ),
     // 86: sk_release
-    // C++ arg: EBPF_ARGUMENT_TYPE_PTR_TO_BTF_ID_SOCK_COMMON -> Unsupported
-    proto!("sk_release", Integer, [ARG_UNSUPPORTED]),
+    // C++ arg: EBPF_ARGUMENT_TYPE_PTR_TO_BTF_ID_SOCK_COMMON
+    proto!("sk_release", Integer, [PtrToBtfIdSockCommon]),
     // 87: map_push_elem
     proto!(
         "map_push_elem",
@@ -588,36 +594,36 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
     // 92: rc_pointer_rel
     proto!("rc_pointer_rel", Integer, [PtrToCtx, Anything, Anything]),
     // 93: spin_lock
-    // C++ arg: EBPF_ARGUMENT_TYPE_PTR_TO_SPIN_LOCK -> Unsupported
-    proto!("spin_lock", Integer, [ARG_UNSUPPORTED]),
+    // C++ arg: EBPF_ARGUMENT_TYPE_PTR_TO_SPIN_LOCK
+    proto!("spin_lock", Integer, [PtrToSpinLock]),
     // 94: spin_unlock
-    // C++ arg: EBPF_ARGUMENT_TYPE_PTR_TO_SPIN_LOCK -> Unsupported
-    proto!("spin_unlock", Integer, [ARG_UNSUPPORTED]),
+    // C++ arg: EBPF_ARGUMENT_TYPE_PTR_TO_SPIN_LOCK
+    proto!("spin_unlock", Integer, [PtrToSpinLock]),
     // 95: sk_fullsock
-    // C++ return: PTR_TO_SOCKET_OR_NULL -> Unsupported; arg: PTR_TO_SOCK_COMMON -> Unsupported
-    proto!("sk_fullsock", RET_UNSUPPORTED, [ARG_UNSUPPORTED]),
+    // C++ return: PTR_TO_SOCKET_OR_NULL; arg: PTR_TO_SOCK_COMMON
+    proto!("sk_fullsock", PtrToSocketOrNull, [PtrToSockCommon]),
     // 96: tcp_sock
-    // C++ return: PTR_TO_TCP_SOCKET_OR_NULL -> Unsupported; arg: PTR_TO_SOCK_COMMON -> Unsupported
-    proto!("tcp_sock", RET_UNSUPPORTED, [ARG_UNSUPPORTED]),
+    // C++ return: PTR_TO_TCP_SOCKET_OR_NULL; arg: PTR_TO_SOCK_COMMON
+    proto!("tcp_sock", PtrToTcpSocketOrNull, [PtrToSockCommon]),
     // 97: skb_ecn_set_ce
     proto!("skb_ecn_set_ce", Integer, [PtrToCtx]),
     // 98: get_listener_sock
-    // C++ return: PTR_TO_TCP_SOCKET_OR_NULL -> Unsupported; arg: PTR_TO_SOCK_COMMON -> Unsupported
-    proto!("get_listener_sock", RET_UNSUPPORTED, [ARG_UNSUPPORTED]),
+    // C++ return: PTR_TO_TCP_SOCKET_OR_NULL; arg: PTR_TO_SOCK_COMMON
+    proto!("get_listener_sock", PtrToTcpSocketOrNull, [PtrToSockCommon]),
     // 99: skc_lookup_tcp
-    // C++ return: PTR_TO_SOCK_COMMON_OR_NULL -> Unsupported
+    // C++ return: PTR_TO_SOCK_COMMON_OR_NULL
     proto!(
         "skc_lookup_tcp",
-        RET_UNSUPPORTED,
+        PtrToSockCommonOrNull,
         [PtrToCtx, PtrToReadableMem, ConstSize, Anything, Anything]
     ),
     // 100: tcp_check_syncookie
-    // C++ arg1: PTR_TO_BTF_ID_SOCK_COMMON -> Unsupported; args 2,4: PTR_TO_READONLY_MEM -> PtrToReadableMem
+    // C++ arg1: PTR_TO_BTF_ID_SOCK_COMMON; args 2,4: PTR_TO_READONLY_MEM -> PtrToReadableMem
     proto!(
         "tcp_check_syncookie",
         Integer,
         [
-            ARG_UNSUPPORTED,
+            PtrToBtfIdSockCommon,
             PtrToReadableMem,
             ConstSize,
             PtrToReadableMem,
@@ -650,38 +656,42 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
         [PtrToCtx, PtrToReadableMem, ConstSize]
     ),
     // 105: strtol
-    // C++ args: PTR_TO_READONLY_MEM -> PtrToReadableMem; PTR_TO_LONG -> Unsupported
+    // C++ args: PTR_TO_READONLY_MEM -> PtrToReadableMem; PTR_TO_LONG
     proto!(
         "strtol",
         Integer,
-        [PtrToReadableMem, ConstSize, Anything, ARG_UNSUPPORTED]
+        [PtrToReadableMem, ConstSize, Anything, PtrToLong]
     ),
     // 106: strtoul
-    // C++ args: PTR_TO_READONLY_MEM -> PtrToReadableMem; PTR_TO_LONG -> Unsupported
+    // C++ args: PTR_TO_READONLY_MEM -> PtrToReadableMem; PTR_TO_LONG
     proto!(
         "strtoul",
         Integer,
-        [PtrToReadableMem, ConstSize, Anything, ARG_UNSUPPORTED]
+        [PtrToReadableMem, ConstSize, Anything, PtrToLong]
     ),
     // 107: sk_storage_get
-    // C++ args: PTR_TO_BTF_ID_SOCK_COMMON -> Unsupported; PTR_TO_MAP_VALUE_OR_NULL -> PtrToMapValue
+    // C++ args: PTR_TO_BTF_ID_SOCK_COMMON; PTR_TO_MAP_VALUE_OR_NULL -> PtrToMapValue
     proto!(
         "sk_storage_get",
         PtrToMapValueOrNull,
-        [PtrToMap, ARG_UNSUPPORTED, PtrToMapValue, Anything]
+        [PtrToMap, PtrToBtfIdSockCommon, PtrToMapValue, Anything]
     ),
     // 108: sk_storage_delete
-    // C++ arg: PTR_TO_BTF_ID_SOCK_COMMON -> Unsupported
-    proto!("sk_storage_delete", Integer, [PtrToMap, ARG_UNSUPPORTED]),
+    // C++ arg: PTR_TO_BTF_ID_SOCK_COMMON
+    proto!(
+        "sk_storage_delete",
+        Integer,
+        [PtrToMap, PtrToBtfIdSockCommon]
+    ),
     // 109: send_signal
     proto!("send_signal", Integer, [Anything]),
     // 110: tcp_gen_syncookie
-    // C++ arg1: PTR_TO_BTF_ID_SOCK_COMMON -> Unsupported; args 2,4: PTR_TO_READONLY_MEM -> PtrToReadableMem
+    // C++ arg1: PTR_TO_BTF_ID_SOCK_COMMON; args 2,4: PTR_TO_READONLY_MEM -> PtrToReadableMem
     proto!(
         "tcp_gen_syncookie",
         Integer,
         [
-            ARG_UNSUPPORTED,
+            PtrToBtfIdSockCommon,
             PtrToReadableMem,
             ConstSize,
             PtrToReadableMem,
@@ -689,12 +699,12 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
         ]
     ),
     // 111: skb_output (name = "skb_event_output")
-    // C++ arg1: PTR_TO_BTF_ID -> Unsupported
+    // C++ arg1: PTR_TO_BTF_ID
     proto!(
         "skb_event_output",
         Integer,
         [
-            ARG_UNSUPPORTED,
+            PtrToBtfId,
             PtrToMap,
             Anything,
             PtrToReadableMem,
@@ -726,8 +736,8 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
         [PtrToWritableMem, ConstSizeOrZero, Anything]
     ),
     // 116: tcp_send_ack
-    // C++ arg1: PTR_TO_BTF_ID -> Unsupported
-    proto!("tcp_send_ack", Integer, [ARG_UNSUPPORTED, Anything]),
+    // C++ arg1: PTR_TO_BTF_ID
+    proto!("tcp_send_ack", Integer, [PtrToBtfId, Anything]),
     // 117: send_signal_thread
     proto!("send_signal_thread", Integer, [Anything]),
     // 118: jiffies64
@@ -745,12 +755,12 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
         [Anything, Anything, PtrToWritableMemOrNull, ConstSize]
     ),
     // 121: xdp_output (name = "xdp_event_output")
-    // C++ arg1: PTR_TO_BTF_ID -> Unsupported; PTR_TO_READONLY_MEM -> PtrToReadableMem
+    // C++ arg1: PTR_TO_BTF_ID; PTR_TO_READONLY_MEM -> PtrToReadableMem
     proto!(
         "xdp_event_output",
         Integer,
         [
-            ARG_UNSUPPORTED,
+            PtrToBtfId,
             PtrToMap,
             Anything,
             PtrToReadableMem,
@@ -762,17 +772,21 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
     // 123: get_current_ancestor_cgroup_id
     proto!("get_current_ancestor_cgroup_id", Integer, [Anything]),
     // 124: sk_assign
-    // C++ arg2: PTR_TO_BTF_ID_SOCK_COMMON -> Unsupported
-    proto!("sk_assign", Integer, [PtrToCtx, ARG_UNSUPPORTED, Anything]),
+    // C++ arg2: PTR_TO_BTF_ID_SOCK_COMMON
+    proto!(
+        "sk_assign",
+        Integer,
+        [PtrToCtx, PtrToBtfIdSockCommon, Anything]
+    ),
     // 125: ktime_get_boot_ns
     proto!("ktime_get_boot_ns", Integer),
     // 126: seq_printf
-    // C++ arg1: PTR_TO_BTF_ID -> Unsupported
+    // C++ arg1: PTR_TO_BTF_ID
     proto!(
         "seq_printf",
         Integer,
         [
-            ARG_UNSUPPORTED,
+            PtrToBtfId,
             PtrToReadableMem,
             ConstSize,
             PtrToReadableMemOrNull,
@@ -780,21 +794,21 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
         ]
     ),
     // 127: seq_write
-    // C++ arg1: PTR_TO_BTF_ID -> Unsupported
+    // C++ arg1: PTR_TO_BTF_ID
     proto!(
         "seq_write",
         Integer,
-        [ARG_UNSUPPORTED, PtrToReadableMem, ConstSizeOrZero]
+        [PtrToBtfId, PtrToReadableMem, ConstSizeOrZero]
     ),
     // 128: sk_cgroup_id
-    // C++ arg: PTR_TO_BTF_ID_SOCK_COMMON -> Unsupported
-    proto!("sk_cgroup_id", Integer, [ARG_UNSUPPORTED]),
+    // C++ arg: PTR_TO_BTF_ID_SOCK_COMMON
+    proto!("sk_cgroup_id", Integer, [PtrToBtfIdSockCommon]),
     // 129: sk_ancestor_cgroup_id
-    // C++ arg1: PTR_TO_BTF_ID_SOCK_COMMON -> Unsupported
+    // C++ arg1: PTR_TO_BTF_ID_SOCK_COMMON
     proto!(
         "sk_ancestor_cgroup_id",
         Integer,
-        [ARG_UNSUPPORTED, Anything]
+        [PtrToBtfIdSockCommon, Anything]
     ),
     // 130: ringbuf_output
     proto!(
@@ -803,52 +817,52 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
         [PtrToMap, PtrToReadableMem, ConstSizeOrZero, Anything]
     ),
     // 131: ringbuf_reserve
-    // C++ return: PTR_TO_ALLOC_MEM_OR_NULL -> Unsupported; arg2: CONST_ALLOC_SIZE_OR_ZERO -> Unsupported
+    // C++ return: PTR_TO_ALLOC_MEM_OR_NULL; arg2: CONST_ALLOC_SIZE_OR_ZERO
     proto!(
         "ringbuf_reserve",
-        RET_UNSUPPORTED,
-        [PtrToMap, ARG_UNSUPPORTED, Anything]
+        PtrToAllocMemOrNull,
+        [PtrToMap, ConstAllocSizeOrZero, Anything]
     ),
     // 132: ringbuf_submit
-    // C++ arg1: PTR_TO_ALLOC_MEM -> Unsupported
-    proto!("ringbuf_submit", Integer, [ARG_UNSUPPORTED, Anything]),
+    // C++ arg1: PTR_TO_ALLOC_MEM
+    proto!("ringbuf_submit", Integer, [PtrToAllocMem, Anything]),
     // 133: ringbuf_discard
-    // C++ arg1: PTR_TO_ALLOC_MEM -> Unsupported
-    proto!("ringbuf_discard", Integer, [ARG_UNSUPPORTED, Anything]),
+    // C++ arg1: PTR_TO_ALLOC_MEM
+    proto!("ringbuf_discard", Integer, [PtrToAllocMem, Anything]),
     // 134: ringbuf_query
     // C++ arg: CONST_PTR_TO_MAP -> PtrToMap
     proto!("ringbuf_query", Integer, [PtrToMap, Anything]),
     // 135: csum_level
     proto!("csum_level", Integer, [PtrToCtx, Anything]),
     // 136: skc_to_tcp6_sock
-    // C++ return: PTR_TO_BTF_ID_OR_NULL -> Unsupported; arg: PTR_TO_BTF_ID_SOCK_COMMON -> Unsupported
-    proto!("skc_to_tcp6_sock", RET_UNSUPPORTED, [ARG_UNSUPPORTED]),
+    // C++ return: PTR_TO_BTF_ID_OR_NULL; arg: PTR_TO_BTF_ID_SOCK_COMMON
+    proto!("skc_to_tcp6_sock", PtrToBtfIdOrNull, [PtrToBtfIdSockCommon]),
     // 137: skc_to_tcp_sock
-    // C++ return: PTR_TO_BTF_ID_OR_NULL -> Unsupported; arg: PTR_TO_BTF_ID_SOCK_COMMON -> Unsupported
-    proto!("skc_to_tcp_sock", RET_UNSUPPORTED, [ARG_UNSUPPORTED]),
+    // C++ return: PTR_TO_BTF_ID_OR_NULL; arg: PTR_TO_BTF_ID_SOCK_COMMON
+    proto!("skc_to_tcp_sock", PtrToBtfIdOrNull, [PtrToBtfIdSockCommon]),
     // 138: skc_to_tcp_timewait_sock
-    // C++ return: PTR_TO_BTF_ID_OR_NULL -> Unsupported; arg: PTR_TO_BTF_ID_SOCK_COMMON -> Unsupported
+    // C++ return: PTR_TO_BTF_ID_OR_NULL; arg: PTR_TO_BTF_ID_SOCK_COMMON
     proto!(
         "skc_to_tcp_timewait_sock",
-        RET_UNSUPPORTED,
-        [ARG_UNSUPPORTED]
+        PtrToBtfIdOrNull,
+        [PtrToBtfIdSockCommon]
     ),
     // 139: skc_to_tcp_request_sock
-    // C++ return: PTR_TO_BTF_ID_OR_NULL -> Unsupported; arg: PTR_TO_BTF_ID_SOCK_COMMON -> Unsupported
+    // C++ return: PTR_TO_BTF_ID_OR_NULL; arg: PTR_TO_BTF_ID_SOCK_COMMON
     proto!(
         "skc_to_tcp_request_sock",
-        RET_UNSUPPORTED,
-        [ARG_UNSUPPORTED]
+        PtrToBtfIdOrNull,
+        [PtrToBtfIdSockCommon]
     ),
     // 140: skc_to_udp6_sock
-    // C++ return: PTR_TO_BTF_ID_OR_NULL -> Unsupported; arg: PTR_TO_BTF_ID_SOCK_COMMON -> Unsupported
-    proto!("skc_to_udp6_sock", RET_UNSUPPORTED, [ARG_UNSUPPORTED]),
+    // C++ return: PTR_TO_BTF_ID_OR_NULL; arg: PTR_TO_BTF_ID_SOCK_COMMON
+    proto!("skc_to_udp6_sock", PtrToBtfIdOrNull, [PtrToBtfIdSockCommon]),
     // 141: get_task_stack
-    // C++ arg1: PTR_TO_BTF_ID -> Unsupported
+    // C++ arg1: PTR_TO_BTF_ID
     proto!(
         "get_task_stack",
         Integer,
-        [ARG_UNSUPPORTED, PtrToWritableMem, ConstSizeOrZero, Anything]
+        [PtrToBtfId, PtrToWritableMem, ConstSizeOrZero, Anything]
     ),
     // 142: load_hdr_opt
     proto!(
@@ -872,21 +886,21 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
         ctx = &SOCK_OPS_DESCR
     ),
     // 145: inode_storage_get
-    // C++ arg2: PTR_TO_BTF_ID -> Unsupported; arg3: PTR_TO_MAP_VALUE_OR_NULL -> PtrToMapValue
+    // C++ arg2: PTR_TO_BTF_ID; arg3: PTR_TO_MAP_VALUE_OR_NULL -> PtrToMapValue
     proto!(
         "inode_storage_get",
         PtrToMapValueOrNull,
-        [PtrToMap, ARG_UNSUPPORTED, PtrToMapValue, Anything]
+        [PtrToMap, PtrToBtfId, PtrToMapValue, Anything]
     ),
     // 146: inode_storage_delete
-    // C++ arg2: PTR_TO_BTF_ID -> Unsupported
-    proto!("inode_storage_delete", Integer, [PtrToMap, ARG_UNSUPPORTED]),
+    // C++ arg2: PTR_TO_BTF_ID
+    proto!("inode_storage_delete", Integer, [PtrToMap, PtrToBtfId]),
     // 147: d_path
-    // C++ arg1: PTR_TO_BTF_ID -> Unsupported
+    // C++ arg1: PTR_TO_BTF_ID
     proto!(
         "d_path",
         Integer,
-        [ARG_UNSUPPORTED, PtrToReadableMem, ConstSizeOrZero]
+        [PtrToBtfId, PtrToReadableMem, ConstSizeOrZero]
     ),
     // 148: copy_from_user
     proto!(
@@ -907,11 +921,11 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
         ]
     ),
     // 150: seq_printf_btf
-    // C++ arg1: PTR_TO_BTF_ID -> Unsupported
+    // C++ arg1: PTR_TO_BTF_ID
     proto!(
         "seq_printf_btf",
         Integer,
-        [ARG_UNSUPPORTED, PtrToReadableMem, ConstSizeOrZero, Anything]
+        [PtrToBtfId, PtrToReadableMem, ConstSizeOrZero, Anything]
     ),
     // 151: skb_cgroup_classid
     proto!("skb_cgroup_classid", Integer, [PtrToCtx]),
@@ -922,47 +936,51 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
         [Anything, PtrToReadableMemOrNull, ConstSizeOrZero, Anything]
     ),
     // 153: per_cpu_ptr
-    // C++ return: PTR_TO_MEM_OR_BTF_ID_OR_NULL -> Unsupported; arg: PTR_TO_PERCPU_BTF_ID -> Unsupported
-    proto!("per_cpu_ptr", RET_UNSUPPORTED, [ARG_UNSUPPORTED, Anything]),
+    // C++ return: PTR_TO_MEM_OR_BTF_ID_OR_NULL; arg: PTR_TO_PERCPU_BTF_ID
+    proto!(
+        "per_cpu_ptr",
+        PtrToMemOrBtfIdOrNull,
+        [PtrToPercpuBtfId, Anything]
+    ),
     // 154: this_cpu_ptr
-    // C++ return: PTR_TO_MEM_OR_BTF_ID -> Unsupported; arg: PTR_TO_PERCPU_BTF_ID -> Unsupported
-    proto!("this_cpu_ptr", RET_UNSUPPORTED, [ARG_UNSUPPORTED]),
+    // C++ return: PTR_TO_MEM_OR_BTF_ID; arg: PTR_TO_PERCPU_BTF_ID
+    proto!("this_cpu_ptr", PtrToMemOrBtfId, [PtrToPercpuBtfId]),
     // 155: redirect_peer
     proto!("redirect_peer", Integer, [Anything, Anything]),
     // 156: task_storage_get
-    // C++ arg2: PTR_TO_BTF_ID -> Unsupported; arg3: PTR_TO_MAP_VALUE_OR_NULL -> PtrToMapValue
+    // C++ arg2: PTR_TO_BTF_ID; arg3: PTR_TO_MAP_VALUE_OR_NULL -> PtrToMapValue
     proto!(
         "task_storage_get",
         PtrToMapValueOrNull,
-        [PtrToMap, ARG_UNSUPPORTED, PtrToMapValue, Anything]
+        [PtrToMap, PtrToBtfId, PtrToMapValue, Anything]
     ),
     // 157: task_storage_delete
-    // C++ arg2: PTR_TO_BTF_ID -> Unsupported
-    proto!("task_storage_delete", Integer, [PtrToMap, ARG_UNSUPPORTED]),
+    // C++ arg2: PTR_TO_BTF_ID
+    proto!("task_storage_delete", Integer, [PtrToMap, PtrToBtfId]),
     // 158: get_current_task_btf
-    // C++ return: PTR_TO_BTF_ID -> Unsupported
-    proto!("get_current_task_btf", RET_UNSUPPORTED),
+    // C++ return: PTR_TO_BTF_ID
+    proto!("get_current_task_btf", EbpfReturnType::PtrToBtfId),
     // 159: bprm_opts_set
-    // C++ arg1: PTR_TO_BTF_ID -> Unsupported
-    proto!("bprm_opts_set", Integer, [ARG_UNSUPPORTED, Anything]),
+    // C++ arg1: PTR_TO_BTF_ID
+    proto!("bprm_opts_set", Integer, [PtrToBtfId, Anything]),
     // 160: ktime_get_coarse_ns
     proto!("ktime_get_coarse_ns", Integer),
     // 161: ima_inode_hash
-    // C++ arg1: PTR_TO_BTF_ID -> Unsupported
+    // C++ arg1: PTR_TO_BTF_ID
     proto!(
         "ima_inode_hash",
         Integer,
-        [ARG_UNSUPPORTED, PtrToWritableMem, ConstSize]
+        [PtrToBtfId, PtrToWritableMem, ConstSize]
     ),
     // 162: sock_from_file
-    // C++ return: PTR_TO_BTF_ID_OR_NULL -> Unsupported; arg: PTR_TO_BTF_ID -> Unsupported
-    proto!("sock_from_file", RET_UNSUPPORTED, [ARG_UNSUPPORTED]),
+    // C++ return: PTR_TO_BTF_ID_OR_NULL; arg: PTR_TO_BTF_ID
+    proto!("sock_from_file", PtrToBtfIdOrNull, [PtrToBtfId]),
     // 163: check_mtu
-    // C++ arg3: PTR_TO_INT -> Unsupported
+    // C++ arg3: PTR_TO_INT
     proto!(
         "check_mtu",
         Integer,
-        [PtrToCtx, Anything, ARG_UNSUPPORTED, Anything, Anything]
+        [PtrToCtx, Anything, PtrToInt, Anything, Anything]
     ),
     // 164: for_each_map_elem
     proto!(
@@ -996,28 +1014,24 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
     // 168: sys_close
     proto!("sys_close", Integer, [Anything]),
     // 169: timer_init
-    // C++ arg1: PTR_TO_TIMER -> Unsupported; arg2: CONST_PTR_TO_MAP -> PtrToMap
-    proto!("timer_init", Integer, [ARG_UNSUPPORTED, PtrToMap, Anything]),
+    // C++ arg1: PTR_TO_TIMER; arg2: CONST_PTR_TO_MAP -> PtrToMap
+    proto!("timer_init", Integer, [PtrToTimer, PtrToMap, Anything]),
     // 170: timer_set_callback
-    // C++ arg1: PTR_TO_TIMER -> Unsupported
-    proto!("timer_set_callback", Integer, [ARG_UNSUPPORTED, PtrToFunc]),
+    // C++ arg1: PTR_TO_TIMER
+    proto!("timer_set_callback", Integer, [PtrToTimer, PtrToFunc]),
     // 171: timer_start
-    // C++ arg1: PTR_TO_TIMER -> Unsupported
-    proto!(
-        "timer_start",
-        Integer,
-        [ARG_UNSUPPORTED, Anything, Anything]
-    ),
+    // C++ arg1: PTR_TO_TIMER
+    proto!("timer_start", Integer, [PtrToTimer, Anything, Anything]),
     // 172: timer_cancel
-    // C++ arg1: PTR_TO_TIMER -> Unsupported
-    proto!("timer_cancel", Integer, [ARG_UNSUPPORTED]),
+    // C++ arg1: PTR_TO_TIMER
+    proto!("timer_cancel", Integer, [PtrToTimer]),
     // 173: get_func_ip
     proto!("get_func_ip", Integer, [PtrToCtx]),
     // 174: get_attach_cookie
     proto!("get_attach_cookie", Integer, [PtrToCtx]),
     // 175: task_pt_regs
-    // C++ return: PTR_TO_BTF_ID -> Unsupported; arg: PTR_TO_BTF_ID -> Unsupported
-    proto!("task_pt_regs", RET_UNSUPPORTED, [ARG_UNSUPPORTED]),
+    // C++ return: PTR_TO_BTF_ID; arg: PTR_TO_BTF_ID
+    proto!("task_pt_regs", EbpfReturnType::PtrToBtfId, [PtrToBtfId]),
     // 176: get_branch_snapshot
     proto!(
         "get_branch_snapshot",
@@ -1037,27 +1051,21 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
         ]
     ),
     // 178: skc_to_unix_sock
-    // C++ return: PTR_TO_BTF_ID_OR_NULL -> Unsupported; arg: PTR_TO_BTF_ID_SOCK_COMMON -> Unsupported
-    proto!("skc_to_unix_sock", RET_UNSUPPORTED, [ARG_UNSUPPORTED]),
+    // C++ return: PTR_TO_BTF_ID_OR_NULL; arg: PTR_TO_BTF_ID_SOCK_COMMON
+    proto!("skc_to_unix_sock", PtrToBtfIdOrNull, [PtrToBtfIdSockCommon]),
     // 179: kallsyms_lookup_name
-    // C++ arg4: PTR_TO_LONG -> Unsupported
+    // C++ arg4: PTR_TO_LONG
     proto!(
         "kallsyms_lookup_name",
         Integer,
-        [PtrToReadableMem, ConstSizeOrZero, Anything, ARG_UNSUPPORTED]
+        [PtrToReadableMem, ConstSizeOrZero, Anything, PtrToLong]
     ),
     // 180: find_vma
-    // C++ arg1: PTR_TO_BTF_ID -> Unsupported
+    // C++ arg1: PTR_TO_BTF_ID
     proto!(
         "find_vma",
         Integer,
-        [
-            ARG_UNSUPPORTED,
-            Anything,
-            PtrToFunc,
-            PtrToStackOrNull,
-            Anything
-        ]
+        [PtrToBtfId, Anything, PtrToFunc, PtrToStackOrNull, Anything]
     ),
     // 181: loop
     proto!(
@@ -1073,15 +1081,11 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
         [PtrToReadableMem, ConstSize, ARG_UNSUPPORTED]
     ),
     // 183: get_func_arg
-    // C++ arg3: PTR_TO_LONG -> Unsupported
-    proto!(
-        "get_func_arg",
-        Integer,
-        [PtrToCtx, Anything, ARG_UNSUPPORTED]
-    ),
+    // C++ arg3: PTR_TO_LONG
+    proto!("get_func_arg", Integer, [PtrToCtx, Anything, PtrToLong]),
     // 184: get_func_ret
-    // C++ arg2: PTR_TO_LONG -> Unsupported
-    proto!("get_func_ret", Integer, [PtrToCtx, ARG_UNSUPPORTED]),
+    // C++ arg2: PTR_TO_LONG
+    proto!("get_func_ret", Integer, [PtrToCtx, PtrToLong]),
     // 185: get_func_arg_cnt
     proto!("get_func_arg_cnt", Integer, [PtrToCtx]),
     // 186: get_retval
@@ -1105,7 +1109,7 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
         ctx = &XDP_MD
     ),
     // 191: copy_from_user_task
-    // C++ arg4: PTR_TO_BTF_ID -> Unsupported
+    // C++ arg4: PTR_TO_BTF_ID
     proto!(
         "copy_from_user_task",
         Integer,
@@ -1113,7 +1117,7 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
             PtrToWritableMem,
             ConstSizeOrZero,
             Anything,
-            ARG_UNSUPPORTED,
+            PtrToBtfId,
             Anything
         ]
     ),
@@ -1125,19 +1129,15 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
         ctx = &SK_BUFF
     ),
     // 193: ima_file_hash
-    // C++ arg1: PTR_TO_BTF_ID -> Unsupported
+    // C++ arg1: PTR_TO_BTF_ID
     proto!(
         "ima_file_hash",
         Integer,
-        [ARG_UNSUPPORTED, PtrToWritableMem, ConstSize]
+        [PtrToBtfId, PtrToWritableMem, ConstSize]
     ),
     // 194: kptr_xchg
-    // C++ return: PTR_TO_BTF_ID_OR_NULL -> Unsupported; arg2: PTR_TO_BTF_ID -> Unsupported
-    proto!(
-        "kptr_xchg",
-        RET_UNSUPPORTED,
-        [PtrToMapValue, ARG_UNSUPPORTED]
-    ),
+    // C++ return: PTR_TO_BTF_ID_OR_NULL; arg2: PTR_TO_BTF_ID
+    proto!("kptr_xchg", PtrToBtfIdOrNull, [PtrToMapValue, PtrToBtfId]),
     // 195: map_lookup_percpu_elem
     proto!(
         "map_lookup_percpu_elem",
@@ -1145,8 +1145,12 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
         [PtrToMap, PtrToMapKey, Anything, DontCare, DontCare]
     ),
     // 196: skc_to_mptcp_sock
-    // C++ return: PTR_TO_BTF_ID_OR_NULL -> Unsupported; arg: PTR_TO_BTF_ID_SOCK_COMMON -> Unsupported
-    proto!("skc_to_mptcp_sock", RET_UNSUPPORTED, [ARG_UNSUPPORTED]),
+    // C++ return: PTR_TO_BTF_ID_OR_NULL; arg: PTR_TO_BTF_ID_SOCK_COMMON
+    proto!(
+        "skc_to_mptcp_sock",
+        PtrToBtfIdOrNull,
+        [PtrToBtfIdSockCommon]
+    ),
     // 197: dynptr_from_mem (unsupported = true)
     proto!(
         "dynptr_from_mem",
@@ -1155,10 +1159,10 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
         unsupported
     ),
     // 198: ringbuf_reserve_dynptr (unsupported = true)
-    // C++ return: PTR_TO_ALLOC_MEM_OR_NULL -> Unsupported
+    // C++ return: PTR_TO_ALLOC_MEM_OR_NULL
     proto!(
         "ringbuf_reserve_dynptr",
-        RET_UNSUPPORTED,
+        PtrToAllocMemOrNull,
         [PtrToMap, Anything, Anything, Anything],
         unsupported
     ),
@@ -1203,10 +1207,10 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
         unsupported
     ),
     // 203: dynptr_data (unsupported = true)
-    // C++ return: PTR_TO_MEM_OR_BTF_ID_OR_NULL -> Unsupported
+    // C++ return: PTR_TO_MEM_OR_BTF_ID_OR_NULL
     proto!(
         "dynptr_data",
-        RET_UNSUPPORTED,
+        PtrToMemOrBtfIdOrNull,
         [PtrToReadableMem, Anything, Anything],
         unsupported
     ),
@@ -1244,15 +1248,15 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
         unsupported
     ),
     // 210: cgrp_storage_get
-    // C++ arg2: PTR_TO_BTF_ID -> Unsupported
+    // C++ arg2: PTR_TO_BTF_ID
     proto!(
         "cgrp_storage_get",
         PtrToMapValueOrNull,
-        [PtrToMap, ARG_UNSUPPORTED, PtrToMapValue, Anything]
+        [PtrToMap, PtrToBtfId, PtrToMapValue, Anything]
     ),
     // 211: cgrp_storage_delete
-    // C++ arg2: PTR_TO_BTF_ID -> Unsupported
-    proto!("cgrp_storage_delete", Integer, [PtrToMap, ARG_UNSUPPORTED]),
+    // C++ arg2: PTR_TO_BTF_ID
+    proto!("cgrp_storage_delete", Integer, [PtrToMap, PtrToBtfId]),
 ];
 
 // ── Lookup functions ───────────────────────────────────────────────

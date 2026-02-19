@@ -84,7 +84,7 @@ pub enum AtomicOp {
 use std::rc::Rc;
 
 use crate::cfg::label::Label;
-use crate::crab::type_encoding::TypeGroup;
+use crate::crab::type_encoding::{TypeEncoding, TypeGroup};
 use crate::spec::vm_isa::AccessSize;
 
 /// Immediate argument.
@@ -196,6 +196,14 @@ pub enum ArgSingleKind {
     PtrToStack,
     PtrToFunc,
     Anything,
+    PtrToSocket,
+    PtrToBtfId,
+    PtrToAllocMem,
+    PtrToSpinLock,
+    PtrToTimer,
+    ConstSizeOrZero,
+    PtrToWritableLong,
+    PtrToWritableInt,
 }
 
 /// Pair of arguments (pointer + size) to a helper call.
@@ -230,6 +238,8 @@ pub struct Call {
     pub unsupported_reason: Rc<str>,
     pub is_map_lookup: bool,
     pub reallocate_packet: bool,
+    pub return_ptr_type: Option<TypeEncoding>,
+    pub return_nullable: bool,
     pub singles: Vec<ArgSingle>,
     pub pairs: Vec<ArgPair>,
     pub stack_frame_prefix: Rc<str>,

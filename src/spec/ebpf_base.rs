@@ -40,7 +40,6 @@ pub enum EbpfArgumentType {
     PtrToStackOrNull = 13,
     PtrToCtxOrNull = 14,
     PtrToWritableMemOrNull = 15,
-    Unsupported = 16,
     PtrToBtfIdSockCommon = 17,
     PtrToSpinLock = 18,
     PtrToSockCommon = 19,
@@ -57,6 +56,7 @@ pub enum EbpfArgumentType {
     PtrToReadonlyMemOrNull = 30,
     PtrToUninitMapValue = 31,
     ConstPtrToMap = 32,
+    Unsupported = 33,
 }
 
 /// Describes how to access the layout in memory of the data (e.g. actual packet).

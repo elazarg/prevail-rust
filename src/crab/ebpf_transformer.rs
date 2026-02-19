@@ -1582,8 +1582,49 @@ fn transform_call(
             | ArgSingleKind::PtrToMapValue
             | ArgSingleKind::PtrToFunc
             | ArgSingleKind::PtrToCtx
-            | ArgSingleKind::PtrToStack => {
+            | ArgSingleKind::PtrToStack
+            | ArgSingleKind::PtrToSocket
+            | ArgSingleKind::PtrToBtfId
+            | ArgSingleKind::PtrToAllocMem
+            | ArgSingleKind::PtrToSpinLock
+            | ArgSingleKind::PtrToTimer
+            | ArgSingleKind::ConstSizeOrZero => {
                 // Do nothing.
+            }
+            ArgSingleKind::PtrToWritableLong | ArgSingleKind::PtrToWritableInt => {
+                // Fixed-width writable pointer: helper may store a number there.
+                let width = if matches!(param.kind, ArgSingleKind::PtrToWritableLong) {
+                    Interval::from_i64(8)
+                } else {
+                    Interval::from_i64(4)
+                };
+                let reg = param.reg;
+                let big_endian = ctx.options.big_endian;
+                let stack = &mut dom.stack;
+                dom.state = dom
+                    .state
+                    .join_over_types(&reg, registry, |state, te, registry| {
+                        if te != T_STACK {
+                            return;
+                        }
+                        let Some(offset) = get_type_offset_variable(&reg, te, registry) else {
+                            return;
+                        };
+                        let addr = state.values.eval_interval_var(offset, registry);
+                        for kind in iterate_kinds() {
+                            stack.havoc(
+                                &mut state.values,
+                                kind,
+                                &addr,
+                                &width,
+                                registry,
+                                big_endian,
+                                array_map,
+                            );
+                        }
+                        // Keep numeric stack initialization scoped to stack-typed pointers only.
+                        stack.store_numbers(&addr, &width);
+                    });
             }
         }
     }
@@ -1682,6 +1723,11 @@ fn transform_call(
             .values
             .assign_i64(r0_pack.shared_offset, 0, registry);
         dom.state.assign_type_encoding(&r0_reg, T_SHARED, registry);
+    } else if let Some(return_ptr_type) = call.return_ptr_type {
+        assign_valid_ptr(dom, &r0_reg, call.return_nullable, registry);
+        dom.state
+            .assign_type_encoding(&r0_reg, return_ptr_type, registry);
+        dom.state.havoc_offsets(&r0_reg, registry);
     } else {
         dom.state.havoc_register_except_type(&r0_reg, registry);
         dom.state.assign_type_encoding(&r0_reg, T_NUM, registry);

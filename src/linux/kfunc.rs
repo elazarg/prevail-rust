@@ -3,6 +3,7 @@
 
 use std::rc::Rc;
 
+use crate::crab::type_encoding::{T_ALLOC_MEM, T_BTF_ID, T_SOCKET};
 use crate::ir::syntax::{ArgPair, ArgPairKind, ArgSingle, ArgSingleKind, Call, CallKind, Reg};
 use crate::linux::spec_prototypes::HelperPrototype;
 use crate::spec::ebpf_base::{EbpfArgumentType, EbpfReturnType};
@@ -221,6 +222,8 @@ pub fn make_kfunc_call_result(btf_id: i32, info: Option<&ProgramInfo>) -> Result
         unsupported_reason: Rc::from(""),
         is_map_lookup: proto.return_type == EbpfReturnType::PtrToMapValueOrNull,
         reallocate_packet: proto.reallocate_packet,
+        return_ptr_type: None,
+        return_nullable: false,
         singles: Vec::new(),
         pairs: Vec::new(),
         stack_frame_prefix: Rc::from(""),
@@ -255,13 +258,34 @@ pub fn make_kfunc_call_result(btf_id: i32, info: Option<&ProgramInfo>) -> Result
             proto.name
         ));
     }
-    if proto.return_type != EbpfReturnType::Integer
-        && proto.return_type != EbpfReturnType::PtrToMapValueOrNull
-    {
-        return Err(format!(
-            "kfunc return type is unsupported on this platform: {}",
-            proto.name
-        ));
+    match proto.return_type {
+        EbpfReturnType::Integer
+        | EbpfReturnType::PtrToMapValueOrNull
+        | EbpfReturnType::IntegerOrNoReturnIfSucceed => {}
+        EbpfReturnType::PtrToSockCommonOrNull
+        | EbpfReturnType::PtrToSocketOrNull
+        | EbpfReturnType::PtrToTcpSocketOrNull => {
+            res.return_ptr_type = Some(T_SOCKET);
+            res.return_nullable = true;
+        }
+        EbpfReturnType::PtrToAllocMemOrNull => {
+            res.return_ptr_type = Some(T_ALLOC_MEM);
+            res.return_nullable = true;
+        }
+        EbpfReturnType::PtrToBtfIdOrNull | EbpfReturnType::PtrToMemOrBtfIdOrNull => {
+            res.return_ptr_type = Some(T_BTF_ID);
+            res.return_nullable = true;
+        }
+        EbpfReturnType::PtrToBtfId | EbpfReturnType::PtrToMemOrBtfId => {
+            res.return_ptr_type = Some(T_BTF_ID);
+            res.return_nullable = false;
+        }
+        _ => {
+            return Err(format!(
+                "kfunc return type is unsupported on this platform: {}",
+                proto.name
+            ));
+        }
     }
 
     let args = [
@@ -308,6 +332,70 @@ pub fn make_kfunc_call_result(btf_id: i32, info: Option<&ProgramInfo>) -> Result
                 });
                 i += 1;
             }
+            EbpfArgumentType::PtrToBtfIdSockCommon | EbpfArgumentType::PtrToSockCommon => {
+                res.singles.push(ArgSingle {
+                    kind: ArgSingleKind::PtrToSocket,
+                    or_null: false,
+                    reg: Reg { v: i as u8 },
+                });
+                i += 1;
+            }
+            EbpfArgumentType::PtrToBtfId | EbpfArgumentType::PtrToPercpuBtfId => {
+                res.singles.push(ArgSingle {
+                    kind: ArgSingleKind::PtrToBtfId,
+                    or_null: false,
+                    reg: Reg { v: i as u8 },
+                });
+                i += 1;
+            }
+            EbpfArgumentType::PtrToAllocMem => {
+                res.singles.push(ArgSingle {
+                    kind: ArgSingleKind::PtrToAllocMem,
+                    or_null: false,
+                    reg: Reg { v: i as u8 },
+                });
+                i += 1;
+            }
+            EbpfArgumentType::PtrToSpinLock => {
+                res.singles.push(ArgSingle {
+                    kind: ArgSingleKind::PtrToSpinLock,
+                    or_null: false,
+                    reg: Reg { v: i as u8 },
+                });
+                i += 1;
+            }
+            EbpfArgumentType::PtrToTimer => {
+                res.singles.push(ArgSingle {
+                    kind: ArgSingleKind::PtrToTimer,
+                    or_null: false,
+                    reg: Reg { v: i as u8 },
+                });
+                i += 1;
+            }
+            EbpfArgumentType::ConstAllocSizeOrZero => {
+                res.singles.push(ArgSingle {
+                    kind: ArgSingleKind::ConstSizeOrZero,
+                    or_null: false,
+                    reg: Reg { v: i as u8 },
+                });
+                i += 1;
+            }
+            EbpfArgumentType::PtrToLong => {
+                res.singles.push(ArgSingle {
+                    kind: ArgSingleKind::PtrToWritableLong,
+                    or_null: false,
+                    reg: Reg { v: i as u8 },
+                });
+                i += 1;
+            }
+            EbpfArgumentType::PtrToInt => {
+                res.singles.push(ArgSingle {
+                    kind: ArgSingleKind::PtrToWritableInt,
+                    or_null: false,
+                    reg: Reg { v: i as u8 },
+                });
+                i += 1;
+            }
             EbpfArgumentType::ConstSize => {
                 return Err(format!(
                     "mismatched kfunc EBPF_ARGUMENT_TYPE_PTR_TO* and EBPF_ARGUMENT_TYPE_CONST_SIZE: {}",
@@ -346,6 +434,12 @@ pub fn make_kfunc_call_result(btf_id: i32, info: Option<&ProgramInfo>) -> Result
                     can_be_zero,
                 });
                 i += 2;
+            }
+            EbpfArgumentType::PtrToConstStr => {
+                return Err(format!(
+                    "kfunc argument type is unsupported on this platform: {}",
+                    proto.name
+                ));
             }
             _ => {
                 return Err(format!(

@@ -203,6 +203,68 @@ fn assertions_call(ins: &Call, info: &ProgramInfo, label: &Option<Label>) -> Vec
                     reg: arg.reg,
                 }));
             }
+            ArgSingleKind::PtrToSocket => {
+                res.push(Assertion::TypeConstraint(TypeConstraint {
+                    reg: arg.reg,
+                    types: TypeGroup::Socket,
+                }));
+            }
+            ArgSingleKind::PtrToBtfId => {
+                res.push(Assertion::TypeConstraint(TypeConstraint {
+                    reg: arg.reg,
+                    types: TypeGroup::BtfId,
+                }));
+            }
+            ArgSingleKind::PtrToAllocMem => {
+                res.push(Assertion::TypeConstraint(TypeConstraint {
+                    reg: arg.reg,
+                    types: TypeGroup::AllocMem,
+                }));
+            }
+            ArgSingleKind::PtrToSpinLock | ArgSingleKind::PtrToTimer => {
+                res.push(Assertion::TypeConstraint(TypeConstraint {
+                    reg: arg.reg,
+                    types: TypeGroup::Mem,
+                }));
+            }
+            ArgSingleKind::ConstSizeOrZero => {
+                res.push(Assertion::TypeConstraint(TypeConstraint {
+                    reg: arg.reg,
+                    types: TypeGroup::Number,
+                }));
+                res.push(Assertion::ValidSize(ValidSize {
+                    reg: arg.reg,
+                    can_be_zero: true,
+                }));
+            }
+            ArgSingleKind::PtrToWritableLong => {
+                res.push(Assertion::TypeConstraint(TypeConstraint {
+                    reg: arg.reg,
+                    types: TypeGroup::Mem,
+                }));
+                res.push(Assertion::ValidAccess(make_valid_access(
+                    label,
+                    arg.reg,
+                    0,
+                    Value::Imm(Imm { v: 8 }),
+                    false,
+                    AccessType::Write,
+                )));
+            }
+            ArgSingleKind::PtrToWritableInt => {
+                res.push(Assertion::TypeConstraint(TypeConstraint {
+                    reg: arg.reg,
+                    types: TypeGroup::Mem,
+                }));
+                res.push(Assertion::ValidAccess(make_valid_access(
+                    label,
+                    arg.reg,
+                    0,
+                    Value::Imm(Imm { v: 4 }),
+                    false,
+                    AccessType::Write,
+                )));
+            }
         }
     }
 

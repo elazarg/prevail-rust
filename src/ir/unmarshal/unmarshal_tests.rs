@@ -2,10 +2,14 @@
 // SPDX-License-Identifier: MIT
 
 use super::*;
+use crate::crab::type_encoding::{T_ALLOC_MEM, T_BTF_ID, T_SOCKET};
 use crate::ir::syntax::{ArgSingleKind, BinOp, ConditionOp};
 use crate::linux::linux_platform::LinuxPlatform;
 use crate::spec::config::{PrepareCfgOptions, VerbosityOptions};
-use crate::spec::vm_isa::{AccessSize, EbpfInst, INST_OP_EXIT};
+use crate::spec::vm_isa::{
+    AccessSize, EbpfInst, INST_LD_MODE_CODE_ADDR, INST_LD_MODE_MAP_BY_IDX, INST_LD_MODE_MAP_FD,
+    INST_LD_MODE_MAP_VALUE, INST_LD_MODE_VARIABLE_ADDR, INST_OP_EXIT, INST_OP_LDDW_IMM,
+};
 
 fn get_test_options() -> EbpfVerifierOptions {
     EbpfVerifierOptions {
@@ -197,6 +201,56 @@ fn test_unmarshal_exit() {
 }
 
 #[test]
+fn test_unmarshal_lddw_map_value_preserves_next_imm_payload() {
+    let platform = LinuxPlatform::new();
+    let info = ProgramInfo::default();
+    let options = get_test_options();
+    let mut notes = Vec::new();
+
+    let insts = vec![
+        EbpfInst::new(INST_OP_LDDW_IMM, 1, INST_LD_MODE_MAP_VALUE, 0, 7),
+        EbpfInst::new(0, 0, 0, 0, 11),
+        EbpfInst::new(INST_OP_EXIT, 0, 0, 0, 0),
+    ];
+    let prog = unmarshal(&insts, &mut notes, &info, &platform, &options).expect("lddw must parse");
+    match &prog[0].1 {
+        Instruction::LoadMapAddress(load) => {
+            assert_eq!(load.dst.v, 1);
+            assert_eq!(load.mapfd, 7);
+            assert_eq!(load.offset, 11);
+        }
+        other => panic!("Expected LoadMapAddress, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_unmarshal_lddw_rejects_reserved_next_imm_fields_for_pseudo_modes() {
+    let platform = LinuxPlatform::new();
+    let info = ProgramInfo::default();
+    let options = get_test_options();
+
+    for src in [
+        INST_LD_MODE_MAP_FD,
+        INST_LD_MODE_VARIABLE_ADDR,
+        INST_LD_MODE_CODE_ADDR,
+        INST_LD_MODE_MAP_BY_IDX,
+    ] {
+        let mut notes = Vec::new();
+        let insts = vec![
+            EbpfInst::new(INST_OP_LDDW_IMM, 1, src, 0, 7),
+            EbpfInst::new(0, 0, 0, 0, 1),
+            EbpfInst::new(INST_OP_EXIT, 0, 0, 0, 0),
+        ];
+        let err = unmarshal(&insts, &mut notes, &info, &platform, &options)
+            .expect_err("mode with reserved next_imm must fail");
+        assert!(
+            err.to_string().contains("lddw uses reserved fields"),
+            "unexpected error for src={src}: {err}"
+        );
+    }
+}
+
+#[test]
 fn test_make_call_supports_ptr_to_func_for_bpf_loop() {
     let platform = LinuxPlatform::new();
     let call = make_call_result(181, &platform).expect("bpf_loop helper must resolve");
@@ -206,4 +260,119 @@ fn test_make_call_supports_ptr_to_func_for_bpf_loop() {
             .iter()
             .any(|arg| arg.kind == ArgSingleKind::PtrToFunc && arg.reg.v == 2)
     );
+}
+
+#[test]
+fn test_make_call_maps_new_helper_abi_classes() {
+    let platform = LinuxPlatform::new();
+    let has_single = |call: &Call, kind: ArgSingleKind, reg: u8, or_null: bool| {
+        call.singles
+            .iter()
+            .any(|arg| arg.kind == kind && arg.reg.v == reg && arg.or_null == or_null)
+    };
+
+    let strtoul = make_call_result(106, &platform).expect("strtoul helper must resolve");
+    assert!(strtoul.is_supported, "{}", strtoul.unsupported_reason);
+    assert!(has_single(
+        &strtoul,
+        ArgSingleKind::PtrToWritableLong,
+        4,
+        false
+    ));
+
+    let ringbuf_reserve =
+        make_call_result(131, &platform).expect("ringbuf_reserve helper must resolve");
+    assert!(
+        ringbuf_reserve.is_supported,
+        "{}",
+        ringbuf_reserve.unsupported_reason
+    );
+    assert_eq!(ringbuf_reserve.return_ptr_type, Some(T_ALLOC_MEM));
+    assert!(ringbuf_reserve.return_nullable);
+    assert!(has_single(
+        &ringbuf_reserve,
+        ArgSingleKind::ConstSizeOrZero,
+        2,
+        false
+    ));
+
+    let ringbuf_submit =
+        make_call_result(132, &platform).expect("ringbuf_submit helper must resolve");
+    assert!(
+        ringbuf_submit.is_supported,
+        "{}",
+        ringbuf_submit.unsupported_reason
+    );
+    assert!(has_single(
+        &ringbuf_submit,
+        ArgSingleKind::PtrToAllocMem,
+        1,
+        false
+    ));
+
+    let per_cpu_ptr = make_call_result(153, &platform).expect("per_cpu_ptr helper must resolve");
+    assert!(
+        per_cpu_ptr.is_supported,
+        "{}",
+        per_cpu_ptr.unsupported_reason
+    );
+    assert_eq!(per_cpu_ptr.return_ptr_type, Some(T_BTF_ID));
+    assert!(per_cpu_ptr.return_nullable);
+    assert!(has_single(
+        &per_cpu_ptr,
+        ArgSingleKind::PtrToBtfId,
+        1,
+        false
+    ));
+
+    let this_cpu_ptr = make_call_result(154, &platform).expect("this_cpu_ptr helper must resolve");
+    assert!(
+        this_cpu_ptr.is_supported,
+        "{}",
+        this_cpu_ptr.unsupported_reason
+    );
+    assert_eq!(this_cpu_ptr.return_ptr_type, Some(T_BTF_ID));
+    assert!(!this_cpu_ptr.return_nullable);
+    assert!(has_single(
+        &this_cpu_ptr,
+        ArgSingleKind::PtrToBtfId,
+        1,
+        false
+    ));
+
+    let check_mtu = make_call_result(163, &platform).expect("check_mtu helper must resolve");
+    assert!(check_mtu.is_supported, "{}", check_mtu.unsupported_reason);
+    assert!(has_single(
+        &check_mtu,
+        ArgSingleKind::PtrToWritableInt,
+        3,
+        false
+    ));
+
+    let timer_init = make_call_result(169, &platform).expect("timer_init helper must resolve");
+    assert!(timer_init.is_supported, "{}", timer_init.unsupported_reason);
+    assert!(has_single(&timer_init, ArgSingleKind::PtrToTimer, 1, false));
+
+    let sk_fullsock = make_call_result(95, &platform).expect("sk_fullsock helper must resolve");
+    assert!(
+        sk_fullsock.is_supported,
+        "{}",
+        sk_fullsock.unsupported_reason
+    );
+    assert_eq!(sk_fullsock.return_ptr_type, Some(T_SOCKET));
+    assert!(sk_fullsock.return_nullable);
+    assert!(has_single(
+        &sk_fullsock,
+        ArgSingleKind::PtrToSocket,
+        1,
+        false
+    ));
+}
+
+#[test]
+fn test_make_call_keeps_ptr_to_const_str_unsupported() {
+    let platform = LinuxPlatform::new();
+    let strncmp = make_call_result(182, &platform).expect("strncmp helper must resolve");
+    assert!(!strncmp.is_supported);
+    assert!(!strncmp.unsupported_reason.is_empty());
 }

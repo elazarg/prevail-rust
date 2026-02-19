@@ -6,6 +6,7 @@
 use std::rc::Rc;
 
 use crate::cfg::label::Label;
+use crate::crab::type_encoding::{T_ALLOC_MEM, T_BTF_ID, T_SOCKET};
 use crate::ir::syntax::{
     ArgPair, ArgPairKind, ArgSingle, ArgSingleKind, Atomic, AtomicOp, Bin, BinOp, Call, CallBtf,
     CallKind, CallLocal, Callx, Condition, ConditionOp, Deref, Exit, Imm, Instruction,
@@ -762,6 +763,8 @@ impl<'a> Unmarshaller<'a> {
                         ),
                         is_map_lookup: false,
                         reallocate_packet: false,
+                        return_ptr_type: None,
+                        return_nullable: false,
                         singles: Vec::new(),
                         pairs: Vec::new(),
                         stack_frame_prefix: Rc::from(""),
@@ -1112,6 +1115,8 @@ pub fn make_call_result(imm: i32, platform: &dyn EbpfPlatform) -> Result<Call, S
         unsupported_reason: Rc::from(""),
         is_map_lookup: proto.return_type == EbpfReturnType::PtrToMapValueOrNull,
         reallocate_packet: proto.reallocate_packet,
+        return_ptr_type: None,
+        return_nullable: false,
         singles: vec![],
         pairs: vec![],
         stack_frame_prefix: Rc::from(""),
@@ -1125,6 +1130,24 @@ pub fn make_call_result(imm: i32, platform: &dyn EbpfPlatform) -> Result<Call, S
         EbpfReturnType::Integer
         | EbpfReturnType::PtrToMapValueOrNull
         | EbpfReturnType::IntegerOrNoReturnIfSucceed => {}
+        EbpfReturnType::PtrToSockCommonOrNull
+        | EbpfReturnType::PtrToSocketOrNull
+        | EbpfReturnType::PtrToTcpSocketOrNull => {
+            res.return_ptr_type = Some(T_SOCKET);
+            res.return_nullable = true;
+        }
+        EbpfReturnType::PtrToAllocMemOrNull => {
+            res.return_ptr_type = Some(T_ALLOC_MEM);
+            res.return_nullable = true;
+        }
+        EbpfReturnType::PtrToBtfIdOrNull | EbpfReturnType::PtrToMemOrBtfIdOrNull => {
+            res.return_ptr_type = Some(T_BTF_ID);
+            res.return_nullable = true;
+        }
+        EbpfReturnType::PtrToBtfId | EbpfReturnType::PtrToMemOrBtfId => {
+            res.return_ptr_type = Some(T_BTF_ID);
+            res.return_nullable = false;
+        }
         _ => {
             mark_unsupported(
                 &mut res,
@@ -1188,17 +1211,63 @@ pub fn make_call_result(imm: i32, platform: &dyn EbpfPlatform) -> Result<Call, S
                     reg: Reg { v: i as u8 },
                 });
             }
-            EbpfArgumentType::PtrToBtfIdSockCommon
-            | EbpfArgumentType::PtrToSpinLock
-            | EbpfArgumentType::PtrToSockCommon
-            | EbpfArgumentType::PtrToBtfId
-            | EbpfArgumentType::PtrToLong
-            | EbpfArgumentType::PtrToInt
-            | EbpfArgumentType::PtrToConstStr
-            | EbpfArgumentType::ConstAllocSizeOrZero
-            | EbpfArgumentType::PtrToAllocMem
-            | EbpfArgumentType::PtrToTimer
-            | EbpfArgumentType::PtrToPercpuBtfId => {
+            EbpfArgumentType::PtrToBtfIdSockCommon | EbpfArgumentType::PtrToSockCommon => {
+                res.singles.push(ArgSingle {
+                    kind: ArgSingleKind::PtrToSocket,
+                    or_null: false,
+                    reg: Reg { v: i as u8 },
+                });
+            }
+            EbpfArgumentType::PtrToBtfId | EbpfArgumentType::PtrToPercpuBtfId => {
+                res.singles.push(ArgSingle {
+                    kind: ArgSingleKind::PtrToBtfId,
+                    or_null: false,
+                    reg: Reg { v: i as u8 },
+                });
+            }
+            EbpfArgumentType::PtrToAllocMem => {
+                res.singles.push(ArgSingle {
+                    kind: ArgSingleKind::PtrToAllocMem,
+                    or_null: false,
+                    reg: Reg { v: i as u8 },
+                });
+            }
+            EbpfArgumentType::PtrToSpinLock => {
+                res.singles.push(ArgSingle {
+                    kind: ArgSingleKind::PtrToSpinLock,
+                    or_null: false,
+                    reg: Reg { v: i as u8 },
+                });
+            }
+            EbpfArgumentType::PtrToTimer => {
+                res.singles.push(ArgSingle {
+                    kind: ArgSingleKind::PtrToTimer,
+                    or_null: false,
+                    reg: Reg { v: i as u8 },
+                });
+            }
+            EbpfArgumentType::ConstAllocSizeOrZero => {
+                res.singles.push(ArgSingle {
+                    kind: ArgSingleKind::ConstSizeOrZero,
+                    or_null: false,
+                    reg: Reg { v: i as u8 },
+                });
+            }
+            EbpfArgumentType::PtrToLong => {
+                res.singles.push(ArgSingle {
+                    kind: ArgSingleKind::PtrToWritableLong,
+                    or_null: false,
+                    reg: Reg { v: i as u8 },
+                });
+            }
+            EbpfArgumentType::PtrToInt => {
+                res.singles.push(ArgSingle {
+                    kind: ArgSingleKind::PtrToWritableInt,
+                    or_null: false,
+                    reg: Reg { v: i as u8 },
+                });
+            }
+            EbpfArgumentType::PtrToConstStr => {
                 mark_unsupported(
                     &mut res,
                     format!(
