@@ -17,8 +17,8 @@ use crate::ir::syntax::{
     AtomicOp, Bin, BinOp, BoundedLoopCount, BtfLineInfo, Call, CallBtf, CallLocal, Callx,
     Comparable, Condition, ConditionOp, Deref, Exit, FuncConstraint, Imm, IncrementLoopCounter,
     Instruction, InstructionSeq, Jmp, LoadMapAddress, LoadMapFd, LoadPseudo, Mem, Packet, Reg,
-    TypeConstraint, Un, UnOp, Undefined, ValidAccess, ValidDivisor, ValidMapKeyValue, ValidSize,
-    ValidStore, Value, ZeroCtxOffset,
+    TypeConstraint, Un, UnOp, Undefined, ValidAccess, ValidCallbackTarget, ValidDivisor,
+    ValidMapKeyValue, ValidSize, ValidStore, Value, ZeroCtxOffset,
 };
 use crate::spec::type_descriptors::EbpfMapDescriptor;
 use crate::spec::vm_isa::AccessSize;
@@ -180,6 +180,7 @@ impl fmt::Display for ArgSingleKind {
             ArgSingleKind::Anything => write!(f, "uint64_t"),
             ArgSingleKind::PtrToCtx => write!(f, "ctx"),
             ArgSingleKind::PtrToStack => write!(f, "stack"),
+            ArgSingleKind::PtrToFunc => write!(f, "func"),
             ArgSingleKind::MapFd => write!(f, "map_fd"),
             ArgSingleKind::MapFdPrograms => write!(f, "map_fd_programs"),
             ArgSingleKind::PtrToMapKey => write!(f, "map_key"),
@@ -618,6 +619,12 @@ impl fmt::Display for FuncConstraint {
     }
 }
 
+impl fmt::Display for ValidCallbackTarget {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "valid_callback_target({})", self.reg)
+    }
+}
+
 // ============================================================================
 // Display for Assertion (sum type dispatch)
 // ============================================================================
@@ -632,6 +639,7 @@ impl fmt::Display for Assertion {
             Assertion::ValidStore(x) => write!(f, "{x}"),
             Assertion::ValidSize(x) => write!(f, "{x}"),
             Assertion::ValidMapKeyValue(x) => write!(f, "{x}"),
+            Assertion::ValidCallbackTarget(x) => write!(f, "{x}"),
             Assertion::TypeConstraint(x) => write!(f, "{x}"),
             Assertion::FuncConstraint(x) => write!(f, "{x}"),
             Assertion::ZeroCtxOffset(x) => write!(f, "{x}"),
@@ -1703,6 +1711,12 @@ mod tests {
     }
 
     #[test]
+    fn test_display_valid_callback_target() {
+        let vct = ValidCallbackTarget { reg: Reg { v: 2 } };
+        assert_eq!(format!("{vct}"), "valid_callback_target(r2)");
+    }
+
+    #[test]
     fn test_display_zero_ctx_offset() {
         let zco = ZeroCtxOffset {
             reg: Reg { v: 1 },
@@ -1943,6 +1957,7 @@ mod tests {
         assert_eq!(format!("{}", ArgSingleKind::Anything), "uint64_t");
         assert_eq!(format!("{}", ArgSingleKind::PtrToCtx), "ctx");
         assert_eq!(format!("{}", ArgSingleKind::PtrToStack), "stack");
+        assert_eq!(format!("{}", ArgSingleKind::PtrToFunc), "func");
         assert_eq!(format!("{}", ArgSingleKind::MapFd), "map_fd");
         assert_eq!(
             format!("{}", ArgSingleKind::MapFdPrograms),

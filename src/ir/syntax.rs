@@ -194,6 +194,7 @@ pub enum ArgSingleKind {
     PtrToMapValue,
     PtrToCtx,
     PtrToStack,
+    PtrToFunc,
     Anything,
 }
 
@@ -431,6 +432,12 @@ pub struct TypeConstraint {
     pub types: TypeGroup,
 }
 
+/// Check that a callback target register holds a valid top-level code label.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ValidCallbackTarget {
+    pub reg: Reg,
+}
+
 /// Check that a register holds a function pointer.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FuncConstraint {
@@ -464,6 +471,7 @@ pub enum Assertion {
     ValidStore(ValidStore),
     ValidSize(ValidSize),
     ValidMapKeyValue(ValidMapKeyValue),
+    ValidCallbackTarget(ValidCallbackTarget),
     TypeConstraint(TypeConstraint),
     FuncConstraint(FuncConstraint),
     ZeroCtxOffset(ZeroCtxOffset),

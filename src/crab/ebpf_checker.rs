@@ -21,8 +21,8 @@ use crate::crab::var_registry::VariableRegistry;
 use crate::ir::assertions::get_assertions;
 use crate::ir::syntax::{
     AccessType, Addable, Assertion, BoundedLoopCount, Comparable, FuncConstraint, Imm, Instruction,
-    TypeConstraint, ValidAccess, ValidDivisor, ValidMapKeyValue, ValidSize, ValidStore, Value,
-    ZeroCtxOffset,
+    TypeConstraint, ValidAccess, ValidCallbackTarget, ValidDivisor, ValidMapKeyValue, ValidSize,
+    ValidStore, Value, ZeroCtxOffset,
 };
 use crate::ir::unmarshal::make_call;
 use crate::spec::ebpf_base::{
@@ -72,6 +72,7 @@ impl<'a> EbpfChecker<'a> {
             Assertion::ValidDivisor(a) => self.check_valid_divisor(a),
             Assertion::TypeConstraint(a) => self.check_type_constraint(a),
             Assertion::ValidAccess(a) => self.check_valid_access(a),
+            Assertion::ValidCallbackTarget(a) => self.check_valid_callback_target(a),
             Assertion::ValidMapKeyValue(a) => self.check_valid_map_key_value(a),
             Assertion::ValidSize(a) => self.check_valid_size(a),
             Assertion::ValidStore(a) => self.check_valid_store(a),
@@ -626,6 +627,48 @@ impl<'a> EbpfChecker<'a> {
                 "Invalid size",
             )
         }
+    }
+
+    fn check_valid_callback_target(
+        &mut self,
+        s: &ValidCallbackTarget,
+    ) -> Result<(), VerificationError> {
+        let callback_interval = self
+            .dom
+            .state
+            .values
+            .eval_interval_var(reg_pack(&s.reg, self.registry).svalue, self.registry);
+        let callback_target = callback_interval.singleton().and_then(|n| n.to_i64());
+        if callback_target.is_none() {
+            return self.throw_fail("callback function pointer must be a singleton code address");
+        }
+
+        let callback_value = callback_target.unwrap();
+        if callback_value < i32::MIN as i64 || callback_value > i32::MAX as i64 {
+            return self.throw_fail("callback function pointer must be a singleton code address");
+        }
+        let callback_label = callback_value as i32;
+
+        if !self
+            .ctx
+            .program_info
+            .callback_target_labels
+            .borrow()
+            .contains(&callback_label)
+        {
+            return self
+                .throw_fail("callback function pointer does not reference a valid callback entry");
+        }
+        if !self
+            .ctx
+            .program_info
+            .callback_targets_with_exit
+            .borrow()
+            .contains(&callback_label)
+        {
+            return self.throw_fail("callback function does not have a reachable exit");
+        }
+        Ok(())
     }
 
     fn check_valid_store(&mut self, s: &ValidStore) -> Result<(), VerificationError> {

@@ -17,8 +17,8 @@ use super::syntax::{
     AccessType, Addable, ArgPairKind, ArgSingleKind, Assertion, Assume, Atomic, Bin, BinOp,
     BoundedLoopCount, Call, CallBtf, CallLocal, Callx, Comparable, Condition, ConditionOp, Exit,
     FuncConstraint, Imm, IncrementLoopCounter, Instruction, Jmp, LoadMapAddress, LoadMapFd,
-    LoadPseudo, Mem, Packet, Reg, TypeConstraint, Un, Undefined, ValidAccess, ValidDivisor,
-    ValidMapKeyValue, ValidSize, ValidStore, Value, ZeroCtxOffset,
+    LoadPseudo, Mem, Packet, Reg, TypeConstraint, Un, Undefined, ValidAccess, ValidCallbackTarget,
+    ValidDivisor, ValidMapKeyValue, ValidSize, ValidStore, Value, ZeroCtxOffset,
 };
 
 // ---------------------------------------------------------------------------
@@ -99,8 +99,15 @@ fn assertions_load_map_address(_ins: &LoadMapAddress) -> Vec<Assertion> {
     vec![]
 }
 
-fn assertions_load_pseudo(_ins: &LoadPseudo) -> Vec<Assertion> {
-    panic!("LoadPseudo should be rejected before assertion extraction");
+fn assertions_load_pseudo(ins: &LoadPseudo) -> Vec<Assertion> {
+    match ins.addr.kind {
+        crate::ir::syntax::PseudoAddressKind::CodeAddr => vec![],
+        crate::ir::syntax::PseudoAddressKind::VariableAddr
+        | crate::ir::syntax::PseudoAddressKind::MapByIdx
+        | crate::ir::syntax::PseudoAddressKind::MapValueByIdx => {
+            panic!("unexpected LoadPseudo kind after CFG construction")
+        }
+    }
 }
 
 /// Packet access implicitly uses R6, so verify that R6 still has a pointer to
@@ -186,6 +193,15 @@ fn assertions_call(ins: &Call, info: &ProgramInfo, label: &Option<Label>) -> Vec
                 for a in zero_offset_ctx(arg.reg, arg.or_null) {
                     res.push(a);
                 }
+            }
+            ArgSingleKind::PtrToFunc => {
+                res.push(Assertion::TypeConstraint(TypeConstraint {
+                    reg: arg.reg,
+                    types: TypeGroup::Func,
+                }));
+                res.push(Assertion::ValidCallbackTarget(ValidCallbackTarget {
+                    reg: arg.reg,
+                }));
             }
         }
     }

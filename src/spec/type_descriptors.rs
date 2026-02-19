@@ -3,7 +3,8 @@
 
 //! Shared type descriptors, mirroring `src/spec/type_descriptors.hpp`.
 
-use std::collections::BTreeMap;
+use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::ebpf_base::EbpfContextDescriptor;
 use super::vm_isa::EbpfInst;
@@ -88,6 +89,10 @@ pub struct ProgramInfo {
     pub cache: BTreeMap<EquivalenceKey, i32>,
     pub line_info: BTreeMap<usize, BtfLineInfo>,
     pub supported_conformance_groups: u32,
+    /// Valid top-level instruction labels usable as callback entries via PTR_TO_FUNC.
+    pub callback_target_labels: RefCell<BTreeSet<i32>>,
+    /// Subset of callback labels that can reach a top-level Exit.
+    pub callback_targets_with_exit: RefCell<BTreeSet<i32>>,
 }
 
 impl Default for ProgramInfo {
@@ -99,6 +104,8 @@ impl Default for ProgramInfo {
             line_info: BTreeMap::new(),
             // Unknown context defaults to permissive mask.
             supported_conformance_groups: u32::MAX,
+            callback_target_labels: RefCell::new(BTreeSet::new()),
+            callback_targets_with_exit: RefCell::new(BTreeSet::new()),
         }
     }
 }

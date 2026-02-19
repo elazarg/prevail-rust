@@ -1068,6 +1068,7 @@ fn to_arg_single_kind(t: EbpfArgumentType) -> ArgSingleKind {
         EbpfArgumentType::PtrToMapKey => PtrToMapKey,
         EbpfArgumentType::PtrToMapValue | EbpfArgumentType::PtrToUninitMapValue => PtrToMapValue,
         EbpfArgumentType::PtrToCtx | EbpfArgumentType::PtrToCtxOrNull => PtrToCtx,
+        EbpfArgumentType::PtrToFunc => PtrToFunc,
         _ => Anything, // fallback (matches C++ default)
     }
 }
@@ -1172,7 +1173,8 @@ pub fn make_call_result(imm: i32, platform: &dyn EbpfPlatform) -> Result<Call, S
             | EbpfArgumentType::PtrToMapValue
             | EbpfArgumentType::PtrToUninitMapValue
             | EbpfArgumentType::PtrToStack
-            | EbpfArgumentType::PtrToCtx => {
+            | EbpfArgumentType::PtrToCtx
+            | EbpfArgumentType::PtrToFunc => {
                 res.singles.push(ArgSingle {
                     kind: to_arg_single_kind(args[i]),
                     or_null: false,
@@ -1193,7 +1195,6 @@ pub fn make_call_result(imm: i32, platform: &dyn EbpfPlatform) -> Result<Call, S
             | EbpfArgumentType::PtrToLong
             | EbpfArgumentType::PtrToInt
             | EbpfArgumentType::PtrToConstStr
-            | EbpfArgumentType::PtrToFunc
             | EbpfArgumentType::ConstAllocSizeOrZero
             | EbpfArgumentType::PtrToAllocMem
             | EbpfArgumentType::PtrToTimer

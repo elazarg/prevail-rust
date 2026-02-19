@@ -18,7 +18,7 @@ use crate::spec::ebpf_base::{EbpfArgumentType, EbpfContextDescriptor, EbpfReturn
 // unambiguous aliases.
 
 use EbpfArgumentType::{
-    Anything, ConstSize, ConstSizeOrZero, DontCare, PtrToCtx, PtrToCtxOrNull, PtrToMap,
+    Anything, ConstSize, ConstSizeOrZero, DontCare, PtrToCtx, PtrToCtxOrNull, PtrToFunc, PtrToMap,
     PtrToMapKey, PtrToMapOfPrograms, PtrToMapValue, PtrToReadableMem, PtrToReadableMemOrNull,
     PtrToStackOrNull, PtrToWritableMem, PtrToWritableMemOrNull,
 };
@@ -965,11 +965,10 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
         [PtrToCtx, Anything, ARG_UNSUPPORTED, Anything, Anything]
     ),
     // 164: for_each_map_elem
-    // C++ arg2: PTR_TO_FUNC -> Unsupported
     proto!(
         "for_each_map_elem",
         Integer,
-        [PtrToMap, ARG_UNSUPPORTED, PtrToStackOrNull, Anything]
+        [PtrToMap, PtrToFunc, PtrToStackOrNull, Anything]
     ),
     // 165: snprintf
     // C++ arg3: PTR_TO_CONST_STR -> Unsupported; arg4: PTR_TO_READONLY_MEM_OR_NULL -> PtrToReadableMemOrNull
@@ -1000,12 +999,8 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
     // C++ arg1: PTR_TO_TIMER -> Unsupported; arg2: CONST_PTR_TO_MAP -> PtrToMap
     proto!("timer_init", Integer, [ARG_UNSUPPORTED, PtrToMap, Anything]),
     // 170: timer_set_callback
-    // C++ arg1: PTR_TO_TIMER -> Unsupported; arg2: PTR_TO_FUNC -> Unsupported
-    proto!(
-        "timer_set_callback",
-        Integer,
-        [ARG_UNSUPPORTED, ARG_UNSUPPORTED]
-    ),
+    // C++ arg1: PTR_TO_TIMER -> Unsupported
+    proto!("timer_set_callback", Integer, [ARG_UNSUPPORTED, PtrToFunc]),
     // 171: timer_start
     // C++ arg1: PTR_TO_TIMER -> Unsupported
     proto!(
@@ -1052,24 +1047,23 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
         [PtrToReadableMem, ConstSizeOrZero, Anything, ARG_UNSUPPORTED]
     ),
     // 180: find_vma
-    // C++ arg1: PTR_TO_BTF_ID -> Unsupported; arg3: PTR_TO_FUNC -> Unsupported
+    // C++ arg1: PTR_TO_BTF_ID -> Unsupported
     proto!(
         "find_vma",
         Integer,
         [
             ARG_UNSUPPORTED,
             Anything,
-            ARG_UNSUPPORTED,
+            PtrToFunc,
             PtrToStackOrNull,
             Anything
         ]
     ),
     // 181: loop
-    // C++ arg2: PTR_TO_FUNC -> Unsupported
     proto!(
         "loop",
         Integer,
-        [Anything, ARG_UNSUPPORTED, PtrToStackOrNull, Anything]
+        [Anything, PtrToFunc, PtrToStackOrNull, Anything]
     ),
     // 182: strncmp
     // C++ arg3: PTR_TO_CONST_STR -> Unsupported
@@ -1243,11 +1237,10 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
     // 208: ktime_get_tai_ns
     proto!("ktime_get_tai_ns", Integer),
     // 209: user_ringbuf_drain (unsupported = true)
-    // C++ arg2: PTR_TO_FUNC -> Unsupported
     proto!(
         "user_ringbuf_drain",
         Integer,
-        [PtrToMap, ARG_UNSUPPORTED, PtrToStackOrNull, Anything],
+        [PtrToMap, PtrToFunc, PtrToStackOrNull, Anything],
         unsupported
     ),
     // 210: cgrp_storage_get

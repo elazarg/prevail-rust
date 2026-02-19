@@ -138,9 +138,7 @@ pub fn ebpf_domain_transform(
         Instruction::Atomic(s) => transform_atomic(dom, s, ctx, registry, array_map),
         Instruction::LoadMapFd(s) => transform_load_map_fd(dom, s, ctx, registry),
         Instruction::LoadMapAddress(s) => transform_load_map_address(dom, s, ctx, registry),
-        Instruction::LoadPseudo(_) => {
-            panic!("LoadPseudo should be rejected before abstract transformation")
-        }
+        Instruction::LoadPseudo(s) => transform_load_pseudo(dom, s, registry),
         Instruction::Undefined(_) => { /* NOP */ }
         Instruction::IncrementLoopCounter(s) => {
             transform_increment_loop_counter(dom, s, ctx, registry)
@@ -349,6 +347,41 @@ fn do_load_map_address(
             .assign_i64(dst.shared_region_size, desc.value_size as i64, registry);
     }
     assign_valid_ptr(dom, dst_reg, false, registry);
+}
+
+fn merge_imm32_to_u64(lo: i32, hi: i32) -> u64 {
+    (lo as u32 as u64) | ((hi as u32 as u64) << 32)
+}
+
+fn transform_load_pseudo(
+    dom: &mut EbpfDomain,
+    pseudo: &LoadPseudo,
+    registry: &mut VariableRegistry,
+) {
+    match pseudo.addr.kind {
+        PseudoAddressKind::CodeAddr => {
+            let dst = reg_pack(&pseudo.dst, registry);
+            let imm64 = merge_imm32_to_u64(pseudo.addr.imm, pseudo.addr.next_imm);
+            dom.state
+                .values
+                .assign_i64(dst.svalue, imm64 as i64, registry);
+            dom.state
+                .values
+                .assign_i64(dst.uvalue, imm64 as i64, registry);
+            dom.state
+                .values
+                .inner_mut()
+                .overflow_bounds(dst.uvalue, 64, false, registry);
+            dom.state
+                .assign_type_encoding(&pseudo.dst, T_FUNC, registry);
+            dom.state.havoc_offsets(&pseudo.dst, registry);
+        }
+        PseudoAddressKind::VariableAddr
+        | PseudoAddressKind::MapByIdx
+        | PseudoAddressKind::MapValueByIdx => {
+            panic!("unexpected LoadPseudo kind during abstract transformation");
+        }
+    }
 }
 
 fn assign_valid_ptr(
@@ -1547,6 +1580,7 @@ fn transform_call(
             | ArgSingleKind::MapFdPrograms
             | ArgSingleKind::PtrToMapKey
             | ArgSingleKind::PtrToMapValue
+            | ArgSingleKind::PtrToFunc
             | ArgSingleKind::PtrToCtx
             | ArgSingleKind::PtrToStack => {
                 // Do nothing.

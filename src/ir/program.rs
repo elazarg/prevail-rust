@@ -366,6 +366,58 @@ impl Program {
 
         validate_tail_call_chain_depth(&builder.prog, &wto, platform)?;
 
+        // Record valid callback targets for PTR_TO_FUNC:
+        // top-level concrete instruction labels (no stack-frame prefix, no jump labels, no Exit).
+        let mut callback_target_labels = BTreeSet::new();
+        for label in builder.prog.labels() {
+            if *label == Label::entry()
+                || *label == Label::exit()
+                || label.isjump()
+                || !label.stack_frame_prefix.is_empty()
+            {
+                continue;
+            }
+            if matches!(builder.prog.instruction_at(label), Instruction::Exit(_)) {
+                continue;
+            }
+            callback_target_labels.insert(label.from);
+        }
+
+        // Callback bodies must be able to reach a top-level Exit.
+        let has_reachable_top_level_exit = |start: &Label, prog: &Program| -> bool {
+            let mut seen = BTreeSet::new();
+            let mut worklist = vec![start.clone()];
+            while let Some(label) = worklist.pop() {
+                if !seen.insert(label.clone()) {
+                    continue;
+                }
+                if label == Label::exit() {
+                    return true;
+                }
+                if label != Label::entry()
+                    && prog.cfg().contains(&label)
+                    && matches!(prog.instruction_at(&label), Instruction::Exit(_))
+                    && label.stack_frame_prefix.is_empty()
+                {
+                    return true;
+                }
+                for child in prog.cfg().children_of(&label) {
+                    worklist.push(child.clone());
+                }
+            }
+            false
+        };
+
+        let mut callback_targets_with_exit = BTreeSet::new();
+        for label_num in &callback_target_labels {
+            let label = Label::new(*label_num);
+            if has_reachable_top_level_exit(&label, &builder.prog) {
+                callback_targets_with_exit.insert(*label_num);
+            }
+        }
+        *info.callback_target_labels.borrow_mut() = callback_target_labels;
+        *info.callback_targets_with_exit.borrow_mut() = callback_targets_with_exit;
+
         // Detect loops using Weak Topological Ordering (WTO) and insert counters
         // at loop entry points. WTO provides a hierarchical decomposition of the
         // CFG that identifies all strongly connected components (cycles) and their
@@ -739,10 +791,7 @@ fn resolve_pseudo_load(
     pseudo: &LoadPseudo,
     info: &ProgramInfo,
 ) -> Result<Instruction, InvalidControlFlow> {
-    if matches!(
-        pseudo.addr.kind,
-        PseudoAddressKind::VariableAddr | PseudoAddressKind::CodeAddr
-    ) {
+    if matches!(pseudo.addr.kind, PseudoAddressKind::VariableAddr) {
         return Ok(Instruction::Bin(Bin {
             op: BinOp::MOV,
             dst: pseudo.dst,
@@ -809,8 +858,13 @@ fn instruction_seq_to_cfg(
                 .clone();
             builder.insert(label.clone(), Instruction::Call(call));
         } else if let Instruction::LoadPseudo(pseudo) = inst {
-            // Resolve pseudo loads to concrete instructions.
-            builder.insert(label.clone(), resolve_pseudo_load(pseudo, info)?);
+            if pseudo.addr.kind == PseudoAddressKind::CodeAddr {
+                // Keep CODE_ADDR pseudo intact so abstract transformation can type it as T_FUNC.
+                builder.insert(label.clone(), inst.clone());
+            } else {
+                // Resolve other pseudo loads to concrete instructions.
+                builder.insert(label.clone(), resolve_pseudo_load(pseudo, info)?);
+            }
         } else {
             builder.insert(label.clone(), inst.clone());
         }
@@ -1161,7 +1215,7 @@ mod tests {
     use super::*;
     use crate::cfg::label::Label;
     use crate::ir::syntax::{
-        Bin, BinOp, Call, CallBtf, CallKind, Exit, Instruction, InstructionSeq, LoadMapFd,
+        Bin, BinOp, Call, CallBtf, CallKind, Exit, Instruction, InstructionSeq, Jmp, LoadMapFd,
         LoadPseudo, PseudoAddress, PseudoAddressKind, Reg, Value,
     };
     use crate::linux::linux_platform::LinuxPlatform;
@@ -1287,6 +1341,91 @@ mod tests {
             }
             _ => panic!("expected LoadPseudo to be lowered into Bin::MOV"),
         }
+    }
+
+    #[test]
+    fn test_lddw_code_addr_is_preserved() {
+        let seq = vec![
+            (
+                Label::new(0),
+                Instruction::LoadPseudo(LoadPseudo {
+                    dst: Reg { v: 2 },
+                    addr: PseudoAddress {
+                        kind: PseudoAddressKind::CodeAddr,
+                        imm: 11,
+                        next_imm: 0,
+                    },
+                }),
+                None,
+            ),
+            (
+                Label::new(1),
+                Instruction::Exit(Exit {
+                    stack_frame_prefix: Rc::from(""),
+                }),
+                None,
+            ),
+        ];
+
+        let info = ProgramInfo::default();
+        let platform = LinuxPlatform::new();
+        let opts = EbpfVerifierOptions::default();
+        let program =
+            Program::from_sequence(&seq, &info, &platform, &opts).expect("expected valid CFG");
+
+        match program.instruction_at(&Label::new(0)) {
+            Instruction::LoadPseudo(pseudo) => {
+                assert_eq!(pseudo.dst, Reg { v: 2 });
+                assert_eq!(pseudo.addr.kind, PseudoAddressKind::CodeAddr);
+                assert_eq!(pseudo.addr.imm, 11);
+            }
+            other => panic!("expected code_addr LoadPseudo to be preserved, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_callback_target_sets_track_reachable_exit() {
+        let seq = vec![
+            (
+                Label::new(0),
+                Instruction::Bin(Bin {
+                    op: BinOp::MOV,
+                    dst: Reg { v: 0 },
+                    v: Value::Imm(crate::ir::syntax::Imm { v: 0 }),
+                    is64: true,
+                    lddw: false,
+                }),
+                None,
+            ),
+            (
+                Label::new(1),
+                Instruction::Exit(Exit {
+                    stack_frame_prefix: Rc::from(""),
+                }),
+                None,
+            ),
+            (
+                Label::new(2),
+                Instruction::Jmp(Jmp {
+                    cond: None,
+                    target: Label::new(2),
+                }),
+                None,
+            ),
+        ];
+
+        let info = ProgramInfo::default();
+        let platform = LinuxPlatform::new();
+        let opts = EbpfVerifierOptions::default();
+        Program::from_sequence(&seq, &info, &platform, &opts).expect("expected valid CFG");
+
+        let callback_targets = info.callback_target_labels.borrow();
+        assert!(callback_targets.contains(&0));
+        assert!(callback_targets.contains(&2));
+
+        let callback_targets_with_exit = info.callback_targets_with_exit.borrow();
+        assert!(callback_targets_with_exit.contains(&0));
+        assert!(!callback_targets_with_exit.contains(&2));
     }
 
     #[test]

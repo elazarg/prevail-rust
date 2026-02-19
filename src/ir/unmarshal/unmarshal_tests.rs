@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 use super::*;
-use crate::ir::syntax::{BinOp, ConditionOp};
+use crate::ir::syntax::{ArgSingleKind, BinOp, ConditionOp};
 use crate::linux::linux_platform::LinuxPlatform;
 use crate::spec::config::{PrepareCfgOptions, VerbosityOptions};
 use crate::spec::vm_isa::{AccessSize, EbpfInst, INST_OP_EXIT};
@@ -194,4 +194,16 @@ fn test_unmarshal_exit() {
         Instruction::Exit(_) => {}
         _ => panic!("Expected Exit instruction"),
     }
+}
+
+#[test]
+fn test_make_call_supports_ptr_to_func_for_bpf_loop() {
+    let platform = LinuxPlatform::new();
+    let call = make_call_result(181, &platform).expect("bpf_loop helper must resolve");
+    assert!(call.is_supported);
+    assert!(
+        call.singles
+            .iter()
+            .any(|arg| arg.kind == ArgSingleKind::PtrToFunc && arg.reg.v == 2)
+    );
 }
