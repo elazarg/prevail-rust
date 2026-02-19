@@ -4,7 +4,7 @@
 //! Type abstract domain for eBPF verification.
 //!
 //! Uses a disjoint-set (union-find) structure to track must-equality between
-//! type variables, with a `TypeSet` (u8 bitset) per equivalence class to track
+//! type variables, with a `TypeSet` (u16 bitset) per equivalence class to track
 //! the exact set of possible types. This replaces the earlier zone-based
 //! encoding where types were integer-valued variables in a `NumAbsDomain`.
 
@@ -38,7 +38,7 @@ const NUM_SENTINELS: usize = NUM_TYPE_ENCODINGS;
 ///
 /// ## Singleton-merging invariant
 ///
-/// The domain pre-allocates 8 *sentinel* DSU elements (IDs 0..7), one per
+/// The domain pre-allocates `NUM_TYPE_ENCODINGS` sentinel DSU elements, one per
 /// `TypeEncoding` value. Sentinel `i` has `class_types[i] = {te}` where
 /// `type_to_bit(te) == i`. After every mutation that may narrow a class's
 /// `TypeSet` to a singleton, the class is merged with the corresponding

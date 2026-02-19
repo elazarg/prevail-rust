@@ -22,14 +22,18 @@ pub enum DataKind {
     StackOffsets,
     SharedRegionSizes,
     StackNumericSizes,
+    SocketOffsets,
+    BtfIdOffsets,
+    AllocMemOffsets,
+    AllocMemSizes,
 }
 
 #[allow(dead_code)]
 pub const KIND_MIN: DataKind = DataKind::Types;
 pub const KIND_VALUE_MIN: DataKind = DataKind::Svalues;
-pub const KIND_MAX: DataKind = DataKind::StackNumericSizes;
+pub const KIND_MAX: DataKind = DataKind::AllocMemSizes;
 
-const ALL_KINDS: [DataKind; 11] = [
+const ALL_KINDS: [DataKind; 15] = [
     DataKind::Types,
     DataKind::Svalues,
     DataKind::Uvalues,
@@ -41,6 +45,10 @@ const ALL_KINDS: [DataKind; 11] = [
     DataKind::StackOffsets,
     DataKind::SharedRegionSizes,
     DataKind::StackNumericSizes,
+    DataKind::SocketOffsets,
+    DataKind::BtfIdOffsets,
+    DataKind::AllocMemOffsets,
+    DataKind::AllocMemSizes,
 ];
 
 /// Returns the string name used in variable names for the given kind.
@@ -57,6 +65,10 @@ pub fn name_of(kind: DataKind) -> &'static str {
         DataKind::StackOffsets => "stack_offset",
         DataKind::SharedRegionSizes => "shared_region_size",
         DataKind::StackNumericSizes => "stack_numeric_size",
+        DataKind::SocketOffsets => "socket_offset",
+        DataKind::BtfIdOffsets => "btf_id_offset",
+        DataKind::AllocMemOffsets => "alloc_mem_offset",
+        DataKind::AllocMemSizes => "alloc_mem_size",
     }
 }
 
@@ -74,6 +86,10 @@ pub fn regkind(s: &str) -> Option<DataKind> {
         "stack_offset" => Some(DataKind::StackOffsets),
         "shared_region_size" => Some(DataKind::SharedRegionSizes),
         "stack_numeric_size" => Some(DataKind::StackNumericSizes),
+        "socket_offset" => Some(DataKind::SocketOffsets),
+        "btf_id_offset" => Some(DataKind::BtfIdOffsets),
+        "alloc_mem_offset" => Some(DataKind::AllocMemOffsets),
+        "alloc_mem_size" => Some(DataKind::AllocMemSizes),
         _ => None,
     }
 }
@@ -95,7 +111,7 @@ pub fn iterate_kinds(lb: DataKind, ub: DataKind) -> Vec<DataKind> {
 
 /// eBPF type encoding values.
 ///
-/// Values are 0..7, one per bit position in [`TypeSet`].
+/// Values are 0..11, one per bit position in [`TypeSet`].
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[expect(clippy::enum_variant_names)] // T_ prefix matches upstream C++ naming.
@@ -108,6 +124,10 @@ pub enum TypeEncoding {
     TPacket = 5,
     TStack = 6,
     TShared = 7,
+    TSocket = 8,
+    TBtfId = 9,
+    TAllocMem = 10,
+    TFunc = 11,
 }
 
 pub const T_UNINIT: TypeEncoding = TypeEncoding::TUninit;
@@ -118,9 +138,17 @@ pub const T_CTX: TypeEncoding = TypeEncoding::TCtx;
 pub const T_PACKET: TypeEncoding = TypeEncoding::TPacket;
 pub const T_STACK: TypeEncoding = TypeEncoding::TStack;
 pub const T_SHARED: TypeEncoding = TypeEncoding::TShared;
+#[allow(dead_code)]
+pub const T_SOCKET: TypeEncoding = TypeEncoding::TSocket;
+#[allow(dead_code)]
+pub const T_BTF_ID: TypeEncoding = TypeEncoding::TBtfId;
+#[allow(dead_code)]
+pub const T_ALLOC_MEM: TypeEncoding = TypeEncoding::TAllocMem;
+#[allow(dead_code)]
+pub const T_FUNC: TypeEncoding = TypeEncoding::TFunc;
 
 /// Number of `TypeEncoding` variants.
-pub const NUM_TYPE_ENCODINGS: usize = 8;
+pub const NUM_TYPE_ENCODINGS: usize = 12;
 
 #[cfg(test)]
 const ALL_TYPE_ENCODINGS: [TypeEncoding; NUM_TYPE_ENCODINGS] = [
@@ -132,6 +160,10 @@ const ALL_TYPE_ENCODINGS: [TypeEncoding; NUM_TYPE_ENCODINGS] = [
     TypeEncoding::TPacket,
     TypeEncoding::TStack,
     TypeEncoding::TShared,
+    TypeEncoding::TSocket,
+    TypeEncoding::TBtfId,
+    TypeEncoding::TAllocMem,
+    TypeEncoding::TFunc,
 ];
 
 impl fmt::Display for TypeEncoding {
@@ -145,6 +177,10 @@ impl fmt::Display for TypeEncoding {
             TypeEncoding::TPacket => write!(f, "packet"),
             TypeEncoding::TStack => write!(f, "stack"),
             TypeEncoding::TShared => write!(f, "shared"),
+            TypeEncoding::TSocket => write!(f, "socket"),
+            TypeEncoding::TBtfId => write!(f, "btf_id"),
+            TypeEncoding::TAllocMem => write!(f, "alloc_mem"),
+            TypeEncoding::TFunc => write!(f, "func"),
         }
     }
 }
@@ -160,6 +196,10 @@ pub fn string_to_type_encoding(s: &str) -> Option<TypeEncoding> {
         "packet" => Some(TypeEncoding::TPacket),
         "stack" => Some(TypeEncoding::TStack),
         "shared" => Some(TypeEncoding::TShared),
+        "socket" => Some(TypeEncoding::TSocket),
+        "btf_id" => Some(TypeEncoding::TBtfId),
+        "alloc_mem" => Some(TypeEncoding::TAllocMem),
+        "func" => Some(TypeEncoding::TFunc),
         _ => None,
     }
 }
@@ -175,6 +215,10 @@ pub fn int_to_type_encoding(v: i32) -> Option<TypeEncoding> {
         5 => Some(TypeEncoding::TPacket),
         6 => Some(TypeEncoding::TStack),
         7 => Some(TypeEncoding::TShared),
+        8 => Some(TypeEncoding::TSocket),
+        9 => Some(TypeEncoding::TBtfId),
+        10 => Some(TypeEncoding::TAllocMem),
+        11 => Some(TypeEncoding::TFunc),
         _ => None,
     }
 }
@@ -186,16 +230,16 @@ pub fn typeset_to_string(items: &[TypeEncoding]) -> String {
 }
 
 // ============================================================================
-// TypeSet — u8 bitset over TypeEncoding values
+// TypeSet — u16 bitset over TypeEncoding values
 // ============================================================================
 
-/// A compact bitset over the 8 `TypeEncoding` values, stored as a `u8`.
+/// A compact bitset over the 12 `TypeEncoding` values, stored as a `u16`.
 ///
 /// Each bit position corresponds to a `TypeEncoding` variant (mapped via
 /// `type_to_bit`). This provides a non-convex representation of type sets,
 /// unlike the zone domain's interval-based encoding.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct TypeSet(u8);
+pub struct TypeSet(u16);
 
 /// Map a `TypeEncoding` to its bit position (0..7).
 pub(crate) const fn type_to_bit(te: TypeEncoding) -> u8 {
@@ -206,20 +250,20 @@ impl TypeSet {
     /// The empty set (no types).
     pub const EMPTY: TypeSet = TypeSet(0);
 
-    /// The full set (all 8 types).
-    pub const ALL: TypeSet = TypeSet(((1u16 << NUM_TYPE_ENCODINGS) - 1) as u8);
+    /// The full set (all known types).
+    pub const ALL: TypeSet = TypeSet((1u16 << NUM_TYPE_ENCODINGS) - 1);
 
     /// Create a singleton set containing exactly one type.
     pub const fn singleton(te: TypeEncoding) -> TypeSet {
-        TypeSet(1 << type_to_bit(te))
+        TypeSet(1u16 << type_to_bit(te))
     }
 
     /// Create a set from a slice of types. Usable in `const` contexts.
     pub const fn of(types: &[TypeEncoding]) -> TypeSet {
-        let mut bits = 0u8;
+        let mut bits = 0u16;
         let mut i = 0;
         while i < types.len() {
-            bits |= 1 << type_to_bit(types[i]);
+            bits |= 1u16 << type_to_bit(types[i]);
             i += 1;
         }
         TypeSet(bits)
@@ -247,7 +291,7 @@ impl TypeSet {
 
     /// Whether this set contains a given type.
     pub const fn contains(self, te: TypeEncoding) -> bool {
-        (self.0 & (1 << type_to_bit(te))) != 0
+        (self.0 & (1u16 << type_to_bit(te))) != 0
     }
 
     /// Set union.
@@ -262,7 +306,7 @@ impl TypeSet {
 
     /// Remove a single type from the set.
     pub const fn remove(self, te: TypeEncoding) -> TypeSet {
-        TypeSet(self.0 & !(1 << type_to_bit(te)))
+        TypeSet(self.0 & !(1u16 << type_to_bit(te)))
     }
 
     /// Whether `self` is a subset of `other`.
@@ -292,7 +336,7 @@ impl TypeSet {
 }
 
 /// Iterator over the types in a `TypeSet`.
-pub struct TypeSetIter(u8);
+pub struct TypeSetIter(u16);
 
 impl Iterator for TypeSetIter {
     type Item = TypeEncoding;
@@ -342,6 +386,12 @@ pub const TS_SINGLETON_PTR: TypeSet = TypeSet::of(&[TCtx, TPacket, TStack]);
 /// `{packet, stack, shared}` — memory-accessible pointer types
 #[allow(dead_code)]
 pub const TS_MEM: TypeSet = TypeSet::of(&[TPacket, TStack, TShared]);
+#[allow(dead_code)]
+pub const TS_SOCKET: TypeSet = TypeSet::singleton(TSocket);
+#[allow(dead_code)]
+pub const TS_BTF_ID: TypeSet = TypeSet::singleton(TBtfId);
+#[allow(dead_code)]
+pub const TS_ALLOC_MEM: TypeSet = TypeSet::singleton(TAllocMem);
 
 // ============================================================================
 // TypeGroup
@@ -365,6 +415,10 @@ pub enum TypeGroup {
     PtrOrNum,
     StackOrPacket,
     SingletonPtr,
+    Socket,
+    BtfId,
+    AllocMem,
+    Func,
 }
 
 impl TypeGroup {
@@ -379,6 +433,10 @@ impl TypeGroup {
                 | TypeGroup::Stack
                 | TypeGroup::Shared
                 | TypeGroup::MapFdPrograms
+                | TypeGroup::Socket
+                | TypeGroup::BtfId
+                | TypeGroup::AllocMem
+                | TypeGroup::Func
         )
     }
 
@@ -393,14 +451,18 @@ impl TypeGroup {
             TypeGroup::Stack => TypeSet::singleton(TStack),
             TypeGroup::Shared => TypeSet::singleton(TShared),
             TypeGroup::MapFdPrograms => TypeSet::singleton(TMapPrograms),
+            TypeGroup::Socket => TypeSet::singleton(TSocket),
+            TypeGroup::BtfId => TypeSet::singleton(TBtfId),
+            TypeGroup::AllocMem => TypeSet::singleton(TAllocMem),
+            TypeGroup::Func => TypeSet::singleton(TFunc),
             TypeGroup::CtxOrNum => TypeSet::of(&[TNum, TCtx]),
             TypeGroup::StackOrNum => TypeSet::of(&[TNum, TStack]),
-            TypeGroup::Mem => TypeSet::of(&[TPacket, TStack, TShared]),
-            TypeGroup::MemOrNum => TypeSet::of(&[TNum, TPacket, TStack, TShared]),
-            TypeGroup::Pointer => TypeSet::of(&[TCtx, TPacket, TStack, TShared]),
-            TypeGroup::PtrOrNum => TypeSet::of(&[TNum, TCtx, TPacket, TStack, TShared]),
+            TypeGroup::Mem => TS_MEM,
+            TypeGroup::MemOrNum => TS_MEM.union(TS_NUM),
+            TypeGroup::Pointer => TS_POINTER,
+            TypeGroup::PtrOrNum => TS_POINTER.union(TS_NUM),
             TypeGroup::StackOrPacket => TypeSet::of(&[TStack, TPacket]),
-            TypeGroup::SingletonPtr => TypeSet::of(&[TCtx, TPacket, TStack]),
+            TypeGroup::SingletonPtr => TS_SINGLETON_PTR,
         }
     }
 }
@@ -416,6 +478,10 @@ impl fmt::Display for TypeGroup {
             TypeGroup::Stack => write!(f, "stack"),
             TypeGroup::Shared => write!(f, "shared"),
             TypeGroup::MapFdPrograms => write!(f, "map_fd_programs"),
+            TypeGroup::Socket => write!(f, "socket"),
+            TypeGroup::BtfId => write!(f, "btf_id"),
+            TypeGroup::AllocMem => write!(f, "alloc_mem"),
+            TypeGroup::Func => write!(f, "func"),
             // Compound groups expand to type sets
             TypeGroup::CtxOrNum => write!(f, "{}", typeset_to_string(&[TNum, TCtx])),
             TypeGroup::StackOrNum => write!(f, "{}", typeset_to_string(&[TNum, TStack])),
@@ -464,6 +530,10 @@ mod tests {
         assert_eq!(name_of(DataKind::StackOffsets), "stack_offset");
         assert_eq!(name_of(DataKind::SharedRegionSizes), "shared_region_size");
         assert_eq!(name_of(DataKind::StackNumericSizes), "stack_numeric_size");
+        assert_eq!(name_of(DataKind::SocketOffsets), "socket_offset");
+        assert_eq!(name_of(DataKind::BtfIdOffsets), "btf_id_offset");
+        assert_eq!(name_of(DataKind::AllocMemOffsets), "alloc_mem_offset");
+        assert_eq!(name_of(DataKind::AllocMemSizes), "alloc_mem_size");
     }
 
     #[test]
@@ -483,15 +553,15 @@ mod tests {
     #[test]
     fn test_iterate_kinds_full_range() {
         let all = iterate_kinds(KIND_MIN, KIND_MAX);
-        assert_eq!(all.len(), 11);
+        assert_eq!(all.len(), 15);
         assert_eq!(all[0], DataKind::Types);
-        assert_eq!(all[10], DataKind::StackNumericSizes);
+        assert_eq!(all[14], DataKind::AllocMemSizes);
     }
 
     #[test]
     fn test_iterate_kinds_value_range() {
         let values = iterate_kinds(KIND_VALUE_MIN, KIND_MAX);
-        assert_eq!(values.len(), 10);
+        assert_eq!(values.len(), 14);
         assert_eq!(values[0], DataKind::Svalues);
     }
 
@@ -530,8 +600,8 @@ mod tests {
         let s = TypeSet::all();
         assert!(!s.is_empty());
         assert!(!s.is_singleton());
-        assert_eq!(s.len(), 8);
-        assert_eq!(s.iter().count(), 8);
+        assert_eq!(s.len(), 12);
+        assert_eq!(s.iter().count(), 12);
     }
 
     #[test]
@@ -586,7 +656,7 @@ mod tests {
     fn test_typeset_iter_order() {
         let s = TypeSet::all();
         let items: Vec<TypeEncoding> = s.iter().collect();
-        // Should iterate in TypeEncoding order (TUninit first, TShared last)
+        // Should iterate in TypeEncoding order (TUninit first, TFunc last)
         assert_eq!(items, ALL_TYPE_ENCODINGS.to_vec());
     }
 
@@ -619,5 +689,8 @@ mod tests {
         assert_eq!(TS_POINTER, TypeGroup::Pointer.to_typeset());
         assert_eq!(TS_SINGLETON_PTR, TypeGroup::SingletonPtr.to_typeset());
         assert_eq!(TS_MEM, TypeGroup::Mem.to_typeset());
+        assert_eq!(TS_SOCKET, TypeGroup::Socket.to_typeset());
+        assert_eq!(TS_BTF_ID, TypeGroup::BtfId.to_typeset());
+        assert_eq!(TS_ALLOC_MEM, TypeGroup::AllocMem.to_typeset());
     }
 }

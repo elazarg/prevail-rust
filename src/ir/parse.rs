@@ -48,11 +48,12 @@ const TYPE_SET: &str = r"\s*\{\s*([^}]*)\s*\}\s*";
 const CMPOP: &str = r"\s*(&?[=!]=|s?[<>]=?)\s*";
 const LABEL_PAT: &str = r"(<\w[a-zA-Z_0-9]*>)";
 const SPECIAL_VAR: &str = r"\s*(packet_size|meta_offset)\s*";
-const KIND: &str = r"\s*(svalue|uvalue|ctx_offset|map_fd|map_fd_programs|packet_offset|shared_offset|stack_offset|shared_region_size|stack_numeric_size)\s*";
+const KIND: &str = r"\s*(svalue|uvalue|ctx_offset|map_fd|map_fd_programs|packet_offset|shared_offset|stack_offset|shared_region_size|stack_numeric_size|socket_offset|btf_id_offset|alloc_mem_offset|alloc_mem_size)\s*";
 const INTERVAL: &str = r"\s*\[([-+]?\d+),\s*([-+]?\d+)\]?\s*";
 const ARRAY_RANGE: &str = r"\s*\[([-+]?\d+)\.\.\.\s*([-+]?\d+)\]?\s*";
 const DOT: &str = r"[.]";
-const TYPE_PAT: &str = r"\s*(shared|number|packet|stack|ctx|map_fd|map_fd_programs)\s*";
+const TYPE_PAT: &str =
+    r"\s*(shared|number|packet|stack|ctx|map_fd|map_fd_programs|socket|btf_id|alloc_mem|func)\s*";
 const MAP_VAL: &str = r"\s*map_val\((\d+)\)\s*\+\s*(\d+)\s*";
 
 fn wrapped_label() -> String {

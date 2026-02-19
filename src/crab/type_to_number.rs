@@ -38,6 +38,10 @@ pub struct RegPack {
     pub stack_offset: Variable,
     pub shared_region_size: Variable,
     pub stack_numeric_size: Variable,
+    pub socket_offset: Variable,
+    pub btf_id_offset: Variable,
+    pub alloc_mem_offset: Variable,
+    pub alloc_mem_size: Variable,
 }
 
 impl RegPack {
@@ -55,6 +59,10 @@ impl RegPack {
             DataKind::StackOffsets => self.stack_offset,
             DataKind::SharedRegionSizes => self.shared_region_size,
             DataKind::StackNumericSizes => self.stack_numeric_size,
+            DataKind::SocketOffsets => self.socket_offset,
+            DataKind::BtfIdOffsets => self.btf_id_offset,
+            DataKind::AllocMemOffsets => self.alloc_mem_offset,
+            DataKind::AllocMemSizes => self.alloc_mem_size,
             DataKind::Types => panic!("RegPack does not hold Types; use reg_type()"),
         }
     }
@@ -75,6 +83,10 @@ pub fn reg_pack(r: &Reg, registry: &VariableRegistry) -> RegPack {
         stack_offset: registry.reg_ref(DataKind::StackOffsets, i),
         shared_region_size: registry.reg_ref(DataKind::SharedRegionSizes, i),
         stack_numeric_size: registry.reg_ref(DataKind::StackNumericSizes, i),
+        socket_offset: registry.reg_ref(DataKind::SocketOffsets, i),
+        btf_id_offset: registry.reg_ref(DataKind::BtfIdOffsets, i),
+        alloc_mem_offset: registry.reg_ref(DataKind::AllocMemOffsets, i),
+        alloc_mem_size: registry.reg_ref(DataKind::AllocMemSizes, i),
     }
 }
 
@@ -91,19 +103,26 @@ pub fn type_to_kinds(te: TypeEncoding) -> &'static [DataKind] {
         TypeEncoding::TPacket => &[DataKind::PacketOffsets],
         TypeEncoding::TShared => &[DataKind::SharedOffsets, DataKind::SharedRegionSizes],
         TypeEncoding::TStack => &[DataKind::StackOffsets, DataKind::StackNumericSizes],
+        TypeEncoding::TSocket => &[DataKind::SocketOffsets],
+        TypeEncoding::TBtfId => &[DataKind::BtfIdOffsets],
+        TypeEncoding::TAllocMem => &[DataKind::AllocMemOffsets, DataKind::AllocMemSizes],
+        TypeEncoding::TFunc => &[],
         TypeEncoding::TNum => &[],
         TypeEncoding::TUninit => &[],
     }
 }
 
 /// All type encodings that have associated kinds.
-const TYPES_WITH_KINDS: [TypeEncoding; 6] = [
+const TYPES_WITH_KINDS: [TypeEncoding; 9] = [
     TypeEncoding::TCtx,
     TypeEncoding::TMap,
     TypeEncoding::TMapPrograms,
     TypeEncoding::TPacket,
     TypeEncoding::TShared,
     TypeEncoding::TStack,
+    TypeEncoding::TSocket,
+    TypeEncoding::TBtfId,
+    TypeEncoding::TAllocMem,
 ];
 
 /// Map a type encoding to its primary offset DataKind, if any.
@@ -115,6 +134,9 @@ pub fn type_to_offset_kind(te: TypeEncoding) -> Option<DataKind> {
         TypeEncoding::TPacket => Some(DataKind::PacketOffsets),
         TypeEncoding::TShared => Some(DataKind::SharedOffsets),
         TypeEncoding::TStack => Some(DataKind::StackOffsets),
+        TypeEncoding::TSocket => Some(DataKind::SocketOffsets),
+        TypeEncoding::TBtfId => Some(DataKind::BtfIdOffsets),
+        TypeEncoding::TAllocMem => Some(DataKind::AllocMemOffsets),
         _ => None,
     }
 }
@@ -498,6 +520,10 @@ impl TypeToNumDomain {
         self.values.havoc(r.shared_region_size);
         self.values.havoc(r.stack_offset);
         self.values.havoc(r.stack_numeric_size);
+        self.values.havoc(r.socket_offset);
+        self.values.havoc(r.btf_id_offset);
+        self.values.havoc(r.alloc_mem_offset);
+        self.values.havoc(r.alloc_mem_size);
     }
 
     /// Havoc all register values except the type.

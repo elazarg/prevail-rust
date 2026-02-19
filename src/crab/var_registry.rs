@@ -28,7 +28,7 @@ struct VarMetadata {
 
 /// A factory that maps string names to [`Variable`] IDs.
 ///
-/// Construction pre-fills 136 default register-derived names. Additional names are
+/// Construction pre-fills 184 default register-derived names. Additional names are
 /// interned on demand via the various `make`/`reg`/`cell_var`/… methods.
 ///
 /// Unlike the C++ version this is **not** a thread-local singleton. Consumers pass
@@ -39,8 +39,8 @@ pub struct VariableRegistry {
     index: HashMap<String, u64>,
 }
 
-/// The 11 per-register data kinds used in the default variable list, in order.
-const DEFAULT_REG_KINDS: [DataKind; 11] = [
+/// The per-register data kinds used in the default variable list, in order.
+const DEFAULT_REG_KINDS: [DataKind; 15] = [
     DataKind::Svalues,
     DataKind::Uvalues,
     DataKind::CtxOffsets,
@@ -52,12 +52,16 @@ const DEFAULT_REG_KINDS: [DataKind; 11] = [
     DataKind::Types,
     DataKind::SharedRegionSizes,
     DataKind::StackNumericSizes,
+    DataKind::SocketOffsets,
+    DataKind::BtfIdOffsets,
+    DataKind::AllocMemOffsets,
+    DataKind::AllocMemSizes,
 ];
 
 fn default_variables() -> (Vec<String>, Vec<VarMetadata>) {
-    // 12 registers (r0-r10 + r11 atomic scratch) × 11 kinds + 4 specials = 136
-    let mut names = Vec::with_capacity(136);
-    let mut metadata = Vec::with_capacity(136);
+    // 12 registers (r0-r10 + r11 atomic scratch) × 15 kinds + 4 specials = 184
+    let mut names = Vec::with_capacity(184);
+    let mut metadata = Vec::with_capacity(184);
     for i in 0..=11 {
         for &kind in &DEFAULT_REG_KINDS {
             names.push(format!("r{i}.{}", name_of(kind)));
@@ -67,7 +71,9 @@ fn default_variables() -> (Vec<String>, Vec<VarMetadata>) {
                 is_loop_counter: false,
                 is_min_only: matches!(
                     kind,
-                    DataKind::StackNumericSizes | DataKind::SharedRegionSizes
+                    DataKind::StackNumericSizes
+                        | DataKind::SharedRegionSizes
+                        | DataKind::AllocMemSizes
                 ),
             });
         }
@@ -81,8 +87,8 @@ fn default_variables() -> (Vec<String>, Vec<VarMetadata>) {
         is_min_only: true,
         ..VarMetadata::default()
     });
-    debug_assert_eq!(names.len(), 136);
-    debug_assert_eq!(metadata.len(), 136);
+    debug_assert_eq!(names.len(), 184);
+    debug_assert_eq!(metadata.len(), 184);
     (names, metadata)
 }
 
@@ -148,7 +154,7 @@ impl VariableRegistry {
             is_loop_counter: false,
             is_min_only: matches!(
                 kind,
-                DataKind::StackNumericSizes | DataKind::SharedRegionSizes
+                DataKind::StackNumericSizes | DataKind::SharedRegionSizes | DataKind::AllocMemSizes
             ),
         }
     }
@@ -295,21 +301,21 @@ mod tests {
     #[test]
     fn test_default_construction_size() {
         let reg = VariableRegistry::new();
-        assert_eq!(reg.names.len(), 136);
-        assert_eq!(reg.metadata.len(), 136);
+        assert_eq!(reg.names.len(), 184);
+        assert_eq!(reg.metadata.len(), 184);
     }
 
     #[test]
     fn test_default_first_and_last() {
         let reg = VariableRegistry::new();
         assert_eq!(reg.names[0], "r0.svalue");
-        assert_eq!(reg.names[135], "packet_size");
+        assert_eq!(reg.names[183], "packet_size");
     }
 
     #[test]
     fn test_default_r0_kinds() {
         let reg = VariableRegistry::new();
-        let r0_names: Vec<&str> = reg.names[0..11].iter().map(|s| s.as_str()).collect();
+        let r0_names: Vec<&str> = reg.names[0..15].iter().map(|s| s.as_str()).collect();
         assert_eq!(
             r0_names,
             vec![
@@ -324,6 +330,10 @@ mod tests {
                 "r0.type",
                 "r0.shared_region_size",
                 "r0.stack_numeric_size",
+                "r0.socket_offset",
+                "r0.btf_id_offset",
+                "r0.alloc_mem_offset",
+                "r0.alloc_mem_size",
             ]
         );
     }
@@ -331,10 +341,10 @@ mod tests {
     #[test]
     fn test_default_trailer_names() {
         let reg = VariableRegistry::new();
-        assert_eq!(reg.names[132], "data_size");
-        assert_eq!(reg.names[133], "meta_size");
-        assert_eq!(reg.names[134], "meta_offset");
-        assert_eq!(reg.names[135], "packet_size");
+        assert_eq!(reg.names[180], "data_size");
+        assert_eq!(reg.names[181], "meta_size");
+        assert_eq!(reg.names[182], "meta_offset");
+        assert_eq!(reg.names[183], "packet_size");
     }
 
     #[test]
@@ -395,14 +405,14 @@ mod tests {
         let a = reg.make("r0.svalue");
         let b = reg.make("r0.svalue");
         assert_eq!(a, b);
-        assert_eq!(reg.names.len(), 136); // no new entries (125 defaults)
+        assert_eq!(reg.names.len(), 184); // no new entries
     }
 
     #[test]
     fn test_make_new_name() {
         let mut reg = VariableRegistry::new();
         let v = reg.make("custom_var");
-        assert_eq!(v.id(), 136);
+        assert_eq!(v.id(), 184);
         assert_eq!(reg.name(v), "custom_var");
     }
 
@@ -412,7 +422,7 @@ mod tests {
         let v = reg.meta_offset();
         assert_eq!(reg.name(v), "meta_offset");
         // Should reuse the pre-existing entry.
-        assert_eq!(v.id(), 134);
+        assert_eq!(v.id(), 182);
     }
 
     #[test]
@@ -420,7 +430,7 @@ mod tests {
         let mut reg = VariableRegistry::new();
         let v = reg.packet_size();
         assert_eq!(reg.name(v), "packet_size");
-        assert_eq!(v.id(), 135);
+        assert_eq!(v.id(), 183);
     }
 
     #[test]
@@ -462,11 +472,13 @@ mod tests {
         let mut reg = VariableRegistry::new();
         let stack_num = reg.reg(DataKind::StackNumericSizes, 0);
         let shared_reg = reg.reg(DataKind::SharedRegionSizes, 0);
+        let alloc_mem = reg.reg(DataKind::AllocMemSizes, 0);
         let pkt = reg.packet_size();
         let sval = reg.reg(DataKind::Svalues, 0);
 
         assert!(reg.is_min_only(stack_num));
         assert!(reg.is_min_only(shared_reg));
+        assert!(reg.is_min_only(alloc_mem));
         assert!(reg.is_min_only(pkt));
         assert!(!reg.is_min_only(sval));
     }
@@ -513,13 +525,15 @@ mod tests {
         assert_eq!(reg.metadata[0].kind, Some(DataKind::Svalues));
         assert!(!reg.metadata[0].is_stack_cell);
         assert!(!reg.metadata[0].is_min_only);
-        // r0.type → kind=Types (index 8 with 11 kinds per register)
+        // r0.type → kind=Types (index 8 with 15 kinds per register)
         assert_eq!(reg.metadata[8].kind, Some(DataKind::Types));
         // r0.stack_numeric_size → min_only (index 10)
         assert!(reg.metadata[10].is_min_only);
-        // packet_size → min_only, no kind (index 135)
-        assert!(reg.metadata[135].is_min_only);
-        assert_eq!(reg.metadata[135].kind, None);
+        // r0.alloc_mem_size → min_only (index 14)
+        assert!(reg.metadata[14].is_min_only);
+        // packet_size → min_only, no kind (index 183)
+        assert!(reg.metadata[183].is_min_only);
+        assert_eq!(reg.metadata[183].kind, None);
     }
 
     #[test]

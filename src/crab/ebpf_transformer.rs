@@ -655,7 +655,8 @@ fn do_load(
                 TypeEncoding::TUninit
                 | TypeEncoding::TMap
                 | TypeEncoding::TMapPrograms
-                | TypeEncoding::TNum => {
+                | TypeEncoding::TNum
+                | TypeEncoding::TFunc => {
                     // no-op
                 }
                 TypeEncoding::TCtx => {
@@ -684,6 +685,10 @@ fn do_load(
                     do_load_packet_or_shared(state, target_reg, width, b.is_signed, registry);
                 }
                 TypeEncoding::TShared => {
+                    do_load_packet_or_shared(state, target_reg, width, b.is_signed, registry);
+                }
+                TypeEncoding::TSocket | TypeEncoding::TBtfId | TypeEncoding::TAllocMem => {
+                    // Upstream parity: placeholders until dedicated load semantics land.
                     do_load_packet_or_shared(state, target_reg, width, b.is_signed, registry);
                 }
             }

@@ -449,6 +449,26 @@ impl<'a> EbpfChecker<'a> {
                         return self.throw_fail("FDs cannot be dereferenced directly");
                     }
                 }
+                TypeEncoding::TSocket | TypeEncoding::TBtfId => {
+                    if !is_comparison_check {
+                        return self.throw_fail("Unsupported pointer type for memory access");
+                    }
+                }
+                TypeEncoding::TAllocMem => {
+                    let (lb, ub) = self.lb_ub_access_pair(s, r.alloc_mem_offset);
+                    self.check_access_shared(lb, ub, r.alloc_mem_size)?;
+                    if !is_comparison_check && !s.or_null {
+                        self.require_value(
+                            lt(LinearExpression::from(0), LinearExpression::from(r.svalue)),
+                            "Possible null access",
+                        )?;
+                    }
+                }
+                TypeEncoding::TFunc => {
+                    if !is_comparison_check {
+                        return self.throw_fail("Function pointers cannot be dereferenced");
+                    }
+                }
                 _ => {
                     return self.throw_fail("Invalid type");
                 }
