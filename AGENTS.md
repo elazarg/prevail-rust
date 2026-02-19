@@ -1,11 +1,11 @@
 # Prevail repository guide for AI agents
 
 ## Soundness-first analysis principles
-- **Soundness beats throughput.** When updating the analyser or verifier, favour transfer functions and abstractions with explicit, auditable invariants over heuristic shortcuts. If a micro-optimisation risks dropping constraints that protect against false negatives, keep the precise version and document why it is safe.
+- **Soundness beats throughput.** When updating the analyzer or verifier, favor transfer functions and abstractions with explicit, auditable invariants over heuristic shortcuts. If a micro-optimization risks dropping constraints that protect against false negatives, keep the precise version and document why it is safe.
 - **Prove invariants when possible.** Encode the assumptions an analysis relies on—preconditions, lattice properties, monotonicity—directly in types, assertions, or tests before trusting experiments. When you need executable evidence, add deterministic tests or YAML fixtures that demonstrate both the sound and the unsound outcomes you are ruling out.
 - **Narrate the reasoning.** Any change that affects analysis results should spell out the argument for soundness: what inputs are assumed, what invariants are maintained, and how the change preserves them. Prefer control flow that makes this reasoning self-evident to future auditors.
-- **Default to conservative behaviour.** Introduce new analysis features behind flags or with stricter defaults until you can show they do not compromise soundness; never silently relax checks or widen abstractions without justification.
-- **Optimise for auditability.** Choose designs that are easy to step through and review by hand—even if they are marginally slower or more verbose—so that a future engineer can re-establish the soundness argument quickly.
+- **Default to conservative behavior.** Introduce new analysis features behind flags or with stricter defaults until you can show they do not compromise soundness; never silently relax checks or widen abstractions without justification.
+- **Optimize for auditability.** Choose designs that are easy to step through and review by hand—even if they are marginally slower or more verbose—so that a future engineer can re-establish the soundness argument quickly.
 
 ## Quick project facts
 - **Language:** Pure Rust, ported from the [upstream C++ verifier](https://github.com/vbpf/prevail).
@@ -55,7 +55,7 @@ upstream parity testing, performance profiling, and upstream sync workflow.
 ## Working efficiently
 - When touching YAML-driven fixtures, update schemas in `tests/upstream/test-schema.yaml` if new fields are introduced.
 - Keep runtime/tooling flags documented by updating `README.md` if you introduce new CLI options.
-- When in doubt, favour explicit error handling and early returns to surface problems instead of deferring to implicit behaviour.
+- When in doubt, favor explicit error handling and early returns to surface problems instead of deferring to implicit behavior.
 - The upstream C++ source is available in the `tests/upstream` submodule and should be used as the canonical reference for parity work.
 - Canonical divergence list for bumping lives in `README.md` under `Known Divergences From Upstream`.
 

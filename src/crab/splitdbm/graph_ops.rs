@@ -42,6 +42,7 @@ pub struct ScratchSpace {
     edge_marks: Vec<u8>,
     dual_queue: Vec<VertId>,
     vert_marks: Vec<i32>,
+    stability: Vec<u8>,
     scratch_sz: usize,
 
     /// Distance array — uses `Cell` for interior mutability so that
@@ -59,6 +60,7 @@ impl ScratchSpace {
             edge_marks: Vec::new(),
             dual_queue: Vec::new(),
             vert_marks: Vec::new(),
+            stability: Vec::new(),
             scratch_sz: 0,
             dists: Vec::new(),
             dists_alt: Vec::new(),
@@ -84,6 +86,7 @@ impl ScratchSpace {
         self.edge_marks.resize(new_sz * new_sz, 0);
         self.dual_queue.resize(2 * new_sz, 0);
         self.vert_marks.resize(new_sz, 0);
+        self.stability.resize(new_sz, 0);
         self.scratch_sz = new_sz;
 
         self.dists
@@ -372,7 +375,7 @@ fn dijkstra_build_heap<'a>(
 }
 
 /// Chromatic Dijkstra for `close_after_meet`.
-fn chrome_dijkstra(
+fn chromatic_dijkstra(
     scratch: &mut ScratchSpace,
     g: &dyn ReadableGraph,
     p: PotentialFunction,
@@ -671,7 +674,7 @@ pub fn close_after_meet(
     let mut delta = EdgeVector::new();
     for v in g.verts() {
         adjs.clear();
-        chrome_dijkstra(scratch, g, pots, &colour_succs, v, &mut adjs);
+        chromatic_dijkstra(scratch, g, pots, &colour_succs, v, &mut adjs);
 
         for (d, w) in &adjs {
             delta.push((v, *d, *w));
@@ -690,18 +693,18 @@ pub fn close_after_widen(
     let sz = g.size();
     scratch.grow(sz);
 
-    // Build stability array in edge_marks
+    // Build stability array in dedicated field
     let verts: Vec<VertId> = g.verts().collect();
     for &v in &verts {
-        scratch.edge_marks[v as usize] = if unstable.contains(&v) {
+        scratch.stability[v as usize] = if unstable.contains(&v) {
             V_UNSTABLE as u8
         } else {
             V_STABLE as u8
         };
     }
 
-    // Copy edge_marks to a separate buffer so we can pass scratch mutably
-    let stability: Vec<u8> = scratch.edge_marks[..sz].to_vec();
+    // Copy to a separate buffer so we can pass scratch mutably
+    let stability: Vec<u8> = scratch.stability[..sz].to_vec();
 
     let mut delta = EdgeVector::new();
     for &v in &verts {

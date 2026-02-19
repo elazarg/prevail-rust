@@ -50,6 +50,45 @@ fn pot_func(p: &[Weight]) -> impl Fn(VertId) -> Weight + '_ {
     move |v: VertId| p[v as usize]
 }
 
+/// Compute deferred relations: for each non-zero edge s→d in `g_rel`,
+/// if `g_bounds` has edges s→0 and 0→d, emit edge s→d with weight ws+wd.
+fn compute_deferred(g_bounds: &dyn ReadableGraph, g_rel: &dyn ReadableGraph, sz: usize) -> Graph {
+    let mut g_deferred = Graph::new();
+    g_deferred.grow_to(sz);
+    for s in g_rel.verts() {
+        if s == 0 {
+            continue;
+        }
+        for d in g_rel.succs(s) {
+            if d == 0 {
+                continue;
+            }
+            if let Some(ws) = g_bounds.lookup(s, 0)
+                && let Some(wd) = g_bounds.lookup(0, d)
+            {
+                g_deferred.add_edge(s, ws + wd, d);
+            }
+        }
+    }
+    g_deferred
+}
+
+/// Meet `g_base` with `g_deferred`, then close the result.
+fn close_deferred(
+    scratch: &mut ScratchSpace,
+    g_base: &dyn ReadableGraph,
+    g_deferred: &Graph,
+    pot: &[Weight],
+) -> Graph {
+    let (mut g_closed, is_closed) = graph_meet(g_base, g_deferred);
+    if !is_closed {
+        let sg = SubGraph::new(&g_closed, 0);
+        let delta = close_after_meet(scratch, &sg, &pot_func(pot), g_base, g_deferred);
+        graph_ops::apply_delta(&mut g_closed, &delta);
+    }
+    g_closed
+}
+
 impl SplitDBM {
     /// Create a new SplitDBM with only vertex 0 allocated.
     pub fn new() -> Self {
@@ -422,71 +461,14 @@ impl SplitDBM {
         let gx = GraphPerm::new(perm_x, &left.g);
         let gy = GraphPerm::new(perm_y, &right.g);
 
-        // Compute deferred relations: bounds from left applied to relations from right
-        let mut g_deferred_right = Graph::new();
-        g_deferred_right.grow_to(sz);
-        for s in gy.verts() {
-            if s == 0 {
-                continue;
-            }
-            for d in gy.succs(s) {
-                if d == 0 {
-                    continue;
-                }
-                if let Some(ws) = gx.lookup(s, 0)
-                    && let Some(wd) = gx.lookup(0, d)
-                {
-                    g_deferred_right.add_edge(s, ws + wd, d);
-                }
-            }
-        }
-
-        // Meet + close left side
+        // Compute and close deferred relations for each side
         let mut scratch = ScratchSpace::new();
-        let (mut g_closed_left, is_closed) = graph_meet(&gx, &g_deferred_right);
-        if !is_closed {
-            let sg = SubGraph::new(&g_closed_left, 0);
-            let delta = close_after_meet(
-                &mut scratch,
-                &sg,
-                &pot_func(&pot_left),
-                &gx,
-                &g_deferred_right,
-            );
-            graph_ops::apply_delta(&mut g_closed_left, &delta);
-        }
 
-        // Compute deferred relations: bounds from right applied to relations from left
-        let mut g_deferred_left = Graph::new();
-        g_deferred_left.grow_to(sz);
-        for s in gx.verts() {
-            if s == 0 {
-                continue;
-            }
-            for d in gx.succs(s) {
-                if d == 0 {
-                    continue;
-                }
-                if let Some(ws) = gy.lookup(s, 0)
-                    && let Some(wd) = gy.lookup(0, d)
-                {
-                    g_deferred_left.add_edge(s, ws + wd, d);
-                }
-            }
-        }
+        let g_deferred_right = compute_deferred(&gx, &gy, sz);
+        let g_closed_left = close_deferred(&mut scratch, &gx, &g_deferred_right, &pot_left);
 
-        let (mut g_closed_right, is_closed) = graph_meet(&gy, &g_deferred_left);
-        if !is_closed {
-            let sg = SubGraph::new(&g_closed_right, 0);
-            let delta = close_after_meet(
-                &mut scratch,
-                &sg,
-                &pot_func(&pot_right),
-                &gy,
-                &g_deferred_left,
-            );
-            graph_ops::apply_delta(&mut g_closed_right, &delta);
-        }
+        let g_deferred_left = compute_deferred(&gy, &gx, sz);
+        let g_closed_right = close_deferred(&mut scratch, &gy, &g_deferred_left, &pot_right);
 
         // Syntactic join of the closed graphs
         let mut result_g = graph_join(&g_closed_left, &g_closed_right);
