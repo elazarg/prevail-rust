@@ -97,6 +97,7 @@ impl UnmarshalError {
 
 struct Unmarshaller<'a> {
     notes: &'a mut Vec<Vec<String>>,
+    info: &'a ProgramInfo,
     platform: &'a dyn EbpfPlatform,
 }
 
@@ -751,8 +752,40 @@ impl<'a> Unmarshaller<'a> {
                     ));
                 }
 
+                if self.info.builtin_call_offsets.contains(&pc) {
+                    if let Some(builtin_call) = self.platform.get_builtin_call(inst.imm) {
+                        return Ok(Instruction::Call(builtin_call));
+                    }
+                    return Ok(Instruction::Call(Call {
+                        func: inst.imm,
+                        kind: CallKind::Helper,
+                        name: Rc::from(inst.imm.to_string()),
+                        is_supported: false,
+                        unsupported_reason: Rc::from(
+                            "helper function is unavailable on this platform",
+                        ),
+                        is_map_lookup: false,
+                        reallocate_packet: false,
+                        return_ptr_type: None,
+                        return_nullable: false,
+                        singles: Vec::new(),
+                        pairs: Vec::new(),
+                        stack_frame_prefix: Rc::from(""),
+                    }));
+                }
+
                 if !self.platform.is_helper_usable(inst.imm) {
-                    let name = self.platform.get_helper_prototype(inst.imm).name;
+                    let name = if inst.imm < 0 {
+                        inst.imm.to_string()
+                    } else {
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            self.platform
+                                .get_helper_prototype(inst.imm)
+                                .name
+                                .to_string()
+                        }))
+                        .unwrap_or_else(|_| inst.imm.to_string())
+                    };
                     return Ok(Instruction::Call(Call {
                         func: inst.imm,
                         kind: CallKind::Helper,
@@ -1048,11 +1081,16 @@ impl<'a> Unmarshaller<'a> {
 pub fn unmarshal(
     insts: &[EbpfInst],
     notes: &mut Vec<Vec<String>>,
-    _info: &ProgramInfo,
+    info: &ProgramInfo,
     platform: &dyn EbpfPlatform,
     options: &EbpfVerifierOptions,
 ) -> Result<InstructionSeq, UnmarshalError> {
-    Unmarshaller { notes, platform }.unmarshal(insts, options)
+    Unmarshaller {
+        notes,
+        info,
+        platform,
+    }
+    .unmarshal(insts, options)
 }
 
 // ============================================================================

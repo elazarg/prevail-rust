@@ -93,6 +93,8 @@ pub struct ProgramInfo {
     pub callback_target_labels: RefCell<BTreeSet<i32>>,
     /// Subset of callback labels that can reach a top-level Exit.
     pub callback_targets_with_exit: RefCell<BTreeSet<i32>>,
+    /// Per-program instruction indices rewritten from builtin relocations.
+    pub builtin_call_offsets: BTreeSet<usize>,
 }
 
 impl Default for ProgramInfo {
@@ -106,6 +108,7 @@ impl Default for ProgramInfo {
             supported_conformance_groups: u32::MAX,
             callback_target_labels: RefCell::new(BTreeSet::new()),
             callback_targets_with_exit: RefCell::new(BTreeSet::new()),
+            builtin_call_offsets: BTreeSet::new(),
         }
     }
 }

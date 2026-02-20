@@ -2,8 +2,13 @@
 // SPDX-License-Identifier: MIT
 
 use super::*;
+use crate::crab::type_encoding::TypeGroup;
 use crate::crab::type_encoding::{T_ALLOC_MEM, T_BTF_ID, T_SOCKET};
-use crate::ir::syntax::{ArgSingleKind, BinOp, ConditionOp};
+use crate::ir::assertions::get_assertions;
+use crate::ir::syntax::{
+    AccessType, ArgPairKind, ArgSingleKind, Assertion, BinOp, ConditionOp, Instruction, Reg,
+    TypeConstraint, ValidAccess, ValidSize, Value,
+};
 use crate::linux::linux_platform::LinuxPlatform;
 use crate::spec::config::{PrepareCfgOptions, VerbosityOptions};
 use crate::spec::vm_isa::{
@@ -375,4 +380,93 @@ fn test_make_call_keeps_ptr_to_const_str_unsupported() {
     let strncmp = make_call_result(182, &platform).expect("strncmp helper must resolve");
     assert!(!strncmp.is_supported);
     assert!(!strncmp.unsupported_reason.is_empty());
+}
+
+#[test]
+fn test_unmarshal_builtin_calls_only_when_relocation_gated() {
+    let platform = LinuxPlatform::new();
+    let memset_id = platform
+        .resolve_builtin_call("memset")
+        .expect("memset builtin id should exist");
+
+    let call_memset = EbpfInst::new(INST_OP_CALL, 0, INST_CALL_STATIC_HELPER, 0, memset_id);
+    let exit = EbpfInst::new(INST_OP_EXIT, 0, 0, 0, 0);
+    let insts = vec![call_memset, exit, exit];
+    let opts = get_test_options();
+    let mut notes = Vec::new();
+
+    let info = ProgramInfo {
+        program_type: platform.get_program_type("unspec", ""),
+        ..ProgramInfo::default()
+    };
+    let ungated = unmarshal(&insts, &mut notes, &info, &platform, &opts).expect("must unmarshal");
+    let Instruction::Call(ungated_call) = &ungated[0].1 else {
+        panic!("expected Call")
+    };
+    assert!(!ungated_call.is_supported);
+    assert_eq!(
+        &*ungated_call.unsupported_reason,
+        "helper function is unavailable on this platform"
+    );
+
+    let mut gated_info = ProgramInfo {
+        program_type: platform.get_program_type("unspec", ""),
+        ..ProgramInfo::default()
+    };
+    gated_info.builtin_call_offsets.insert(0);
+    let gated =
+        unmarshal(&insts, &mut notes, &gated_info, &platform, &opts).expect("must unmarshal");
+    let Instruction::Call(gated_call) = &gated[0].1 else {
+        panic!("expected Call")
+    };
+    assert!(gated_call.is_supported);
+    assert_eq!(&*gated_call.name, "memset");
+    assert_eq!(gated_call.func, memset_id);
+    assert_eq!(gated_call.singles.len(), 1);
+    assert_eq!(gated_call.pairs.len(), 1);
+    assert_eq!(gated_call.singles[0].kind, ArgSingleKind::Anything);
+    assert_eq!(gated_call.singles[0].reg.v, 2);
+    assert_eq!(gated_call.pairs[0].kind, ArgPairKind::PtrToWritableMem);
+    assert_eq!(gated_call.pairs[0].mem.v, 1);
+    assert_eq!(gated_call.pairs[0].size.v, 3);
+
+    let assertions = get_assertions(
+        &Instruction::Call(gated_call.clone()),
+        &gated_info,
+        &Some(Label::new(0)),
+    );
+    assert!(assertions.iter().any(|a| {
+        *a == Assertion::TypeConstraint(TypeConstraint {
+            reg: Reg { v: 1 },
+            types: TypeGroup::Mem,
+        })
+    }));
+    assert!(assertions.iter().any(|a| {
+        *a == Assertion::TypeConstraint(TypeConstraint {
+            reg: Reg { v: 2 },
+            types: TypeGroup::Number,
+        })
+    }));
+    assert!(assertions.iter().any(|a| {
+        *a == Assertion::TypeConstraint(TypeConstraint {
+            reg: Reg { v: 3 },
+            types: TypeGroup::Number,
+        })
+    }));
+    assert!(assertions.iter().any(|a| {
+        *a == Assertion::ValidSize(ValidSize {
+            reg: Reg { v: 3 },
+            can_be_zero: false,
+        })
+    }));
+    assert!(assertions.iter().any(|a| {
+        *a == Assertion::ValidAccess(ValidAccess {
+            call_stack_depth: 1,
+            reg: Reg { v: 1 },
+            offset: 0,
+            width: Value::Reg(Reg { v: 3 }),
+            or_null: false,
+            access_type: AccessType::Write,
+        })
+    }));
 }

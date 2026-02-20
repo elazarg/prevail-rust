@@ -482,38 +482,57 @@ impl Interval {
         if self.is_bottom() || x.is_bottom() {
             return Interval::bottom();
         }
-        debug_assert!(self.is_top() || self.lb >= Bound::Finite(Number::from(0i64)));
-        debug_assert!(x.is_top() || x.lb >= Bound::Finite(Number::from(0i64)));
 
-        if *self == Interval::from_i64(0) || *x == Interval::from_i64(0) {
+        // Bitwise operations model unsigned machine values.
+        // If an interval currently has a negative lower bound, conservatively
+        // reinterpret it as unsigned 64-bit before applying bitwise transfer.
+        let mut left = *self;
+        let mut right = *x;
+        if !left.is_top() && left.lb < Bound::Finite(Number::from(0i64)) {
+            left = left.zero_extend(64);
+        }
+        if !right.is_top() && right.lb < Bound::Finite(Number::from(0i64)) {
+            right = right.zero_extend(64);
+        }
+
+        debug_assert!(left.is_top() || left.lb >= Bound::Finite(Number::from(0i64)));
+        debug_assert!(right.is_top() || right.lb >= Bound::Finite(Number::from(0i64)));
+
+        if left == Interval::from_i64(0) || right == Interval::from_i64(0) {
             return Interval::from_i64(0);
         }
 
-        if let Some(right) = x.singleton()
-            && let Some(left) = self.singleton()
+        if let Some(right_singleton) = right.singleton()
+            && let Some(left_singleton) = left.singleton()
         {
-            return Interval::from_number(left & right);
+            return Interval::from_number(left_singleton & right_singleton);
         }
-        if let Some(right) = x.singleton() {
-            if *right == Number::max_uint(32) {
-                return self.zero_extend(32);
+        if let Some(right_singleton) = right.singleton() {
+            if *right_singleton == Number::max_uint(64) {
+                return left.truncate_to_unsigned(64);
             }
-            if *right == Number::max_uint(16) {
-                return self.zero_extend(16);
+            if *right_singleton == Number::max_uint(32) {
+                return left.zero_extend(32);
             }
-            if *right == Number::max_uint(8) {
-                return self.zero_extend(8);
+            if *right_singleton == Number::max_uint(16) {
+                return left.zero_extend(16);
+            }
+            if *right_singleton == Number::max_uint(8) {
+                return left.zero_extend(8);
             }
         }
-        if x.contains(&Number::from(u64::MAX)) {
-            return self.truncate_to_unsigned(64);
+        if right.contains(&Number::from(u64::MAX)) {
+            return Interval::new(
+                Bound::Finite(Number::from(0i64)),
+                left.truncate_to_unsigned(64).ub,
+            );
         }
-        if !self.is_top() && !x.is_top() {
-            return Interval::new(Bound::Finite(Number::from(0i64)), min(self.ub, x.ub));
-        } else if !x.is_top() {
-            return Interval::new(Bound::Finite(Number::from(0i64)), x.ub);
-        } else if !self.is_top() {
-            return Interval::new(Bound::Finite(Number::from(0i64)), self.ub);
+        if !left.is_top() && !right.is_top() {
+            return Interval::new(Bound::Finite(Number::from(0i64)), min(left.ub, right.ub));
+        } else if !right.is_top() {
+            return Interval::new(Bound::Finite(Number::from(0i64)), right.ub);
+        } else if !left.is_top() {
+            return Interval::new(Bound::Finite(Number::from(0i64)), left.ub);
         }
         Interval::top()
     }
@@ -964,5 +983,22 @@ mod tests {
         assert_eq!(format!("{}", Interval::from_i64_pair(1, 5)), "[1, 5]");
         assert_eq!(format!("{}", Interval::bottom()), "_|_");
         assert_eq!(format!("{}", Interval::top()), "[-oo, +oo]");
+    }
+
+    #[test]
+    fn test_bitwise_and_singleton_all_ones_preserves_lhs() {
+        let left = Interval::from_i64_pair(5, 100);
+        let right = Interval::from_u64(u64::MAX);
+        assert_eq!(left.bitwise_and(&right), Interval::from_i64_pair(5, 100));
+    }
+
+    #[test]
+    fn test_bitwise_and_non_singleton_containing_all_ones_includes_zero() {
+        let left = Interval::from_i64_pair(5, 100);
+        let anomalous_right = Interval::from_i64_pair(-5, 5);
+        assert_eq!(
+            left.bitwise_and(&anomalous_right),
+            Interval::from_i64_pair(0, 100)
+        );
     }
 }

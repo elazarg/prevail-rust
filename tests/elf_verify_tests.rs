@@ -1257,9 +1257,7 @@ verify_section_expected_fail!(
     "xdp_prog"
 );
 
-// ── falco/ (12 sections) ────────────────────────────────────────────
-// NOTE: ~80 additional falco probe.o sections are commented out in C++
-// due to "call -1" instructions (Subprogram not found: memset). Not ported.
+// ── falco/ ──────────────────────────────────────────────────────────
 verify_section_pass!(
     falco_probe_raw_tracepoint_filler_sys_accept4_e,
     "falco",
@@ -1332,6 +1330,122 @@ verify_section_pass!(
     "probe.o",
     "raw_tracepoint/signal_deliver"
 );
+
+#[test]
+fn falco_additional_sections_pass_with_builtin_call_modeling() {
+    let opts = default_opts();
+    let path = "ebpf-samples/falco/probe.o";
+    let sections = [
+        "raw_tracepoint/filler/sys_access_e",
+        "raw_tracepoint/filler/sys_bpf_x",
+        "raw_tracepoint/filler/sys_brk_munmap_mmap_x",
+        "raw_tracepoint/filler/sys_eventfd_e",
+        "raw_tracepoint/filler/sys_execve_e",
+        "raw_tracepoint/filler/sys_generic",
+        "raw_tracepoint/filler/sys_getrlimit_setrlimit_e",
+        "raw_tracepoint/filler/sys_getrlimit_setrlrimit_x",
+        "raw_tracepoint/filler/sys_mount_e",
+        "raw_tracepoint/filler/sys_pagefault_e",
+        "raw_tracepoint/filler/sys_procexit_e",
+        "raw_tracepoint/filler/sys_single",
+        "raw_tracepoint/filler/sys_unshare_e",
+        "raw_tracepoint/sched_process_exit",
+        "raw_tracepoint/filler/sys_chmod_x",
+        "raw_tracepoint/filler/sys_fchmod_x",
+        "raw_tracepoint/filler/sys_fcntl_e",
+        "raw_tracepoint/filler/sys_flock_e",
+        "raw_tracepoint/filler/sys_prlimit_e",
+        "raw_tracepoint/filler/sys_prlimit_x",
+        "raw_tracepoint/filler/sys_ptrace_e",
+        "raw_tracepoint/filler/sys_quotactl_e",
+        "raw_tracepoint/filler/sys_semop_x",
+        "raw_tracepoint/filler/sys_send_e",
+        "raw_tracepoint/filler/sys_sendfile_x",
+        "raw_tracepoint/filler/sys_setns_e",
+        "raw_tracepoint/filler/sys_shutdown_e",
+        "raw_tracepoint/filler/sys_fchmodat_x",
+        "raw_tracepoint/filler/sys_futex_e",
+        "raw_tracepoint/filler/sys_lseek_e",
+        "raw_tracepoint/filler/sys_mkdirat_x",
+        "raw_tracepoint/filler/sys_ptrace_x",
+        "raw_tracepoint/filler/sys_quotactl_x",
+        "raw_tracepoint/filler/sys_semget_e",
+        "raw_tracepoint/filler/sys_signaldeliver_e",
+        "raw_tracepoint/filler/sys_symlinkat_x",
+        "raw_tracepoint/filler/sys_unlinkat_x",
+        "raw_tracepoint/filler/sys_writev_e",
+        "raw_tracepoint/filler/sys_llseek_e",
+        "raw_tracepoint/filler/sys_pwritev_e",
+        "raw_tracepoint/filler/sys_renameat_x",
+        "raw_tracepoint/filler/sys_semctl_e",
+        "raw_tracepoint/filler/sched_switch_e",
+        "raw_tracepoint/filler/sys_linkat_x",
+        "raw_tracepoint/filler/sys_renameat2_x",
+        "raw_tracepoint/filler/sys_sendfile_e",
+        "raw_tracepoint/filler/sys_setsockopt_x",
+        "raw_tracepoint/filler/sys_getresuid_and_gid_x",
+        "raw_tracepoint/filler/sys_mmap_e",
+        "raw_tracepoint/filler/sys_socket_x",
+        "raw_tracepoint/sys_enter",
+        "raw_tracepoint/sys_exit",
+        "raw_tracepoint/filler/sys_pipe_x",
+        "raw_tracepoint/filler/sys_socketpair_x",
+        "raw_tracepoint/filler/sys_creat_x",
+        "raw_tracepoint/filler/sys_open_x",
+        "raw_tracepoint/filler/sys_openat_x",
+        "raw_tracepoint/filler/sys_autofill",
+        "raw_tracepoint/filler/proc_startupdate_3",
+        "raw_tracepoint/filler/proc_startupdate",
+        "raw_tracepoint/filler/proc_startupdate_2",
+    ];
+    for section in sections {
+        assert!(
+            verify_section(path, section, &opts),
+            "Expected falco probe.o {section} to pass",
+        );
+    }
+}
+
+#[test]
+fn falco_expected_fail_sections_remain_known_imprecision() {
+    let opts = default_opts();
+    let path = "ebpf-samples/falco/probe.o";
+
+    // Group A: offset lower-bound loss at joins.
+    let group_a = [
+        "raw_tracepoint/filler/sys_nanosleep_e",
+        "raw_tracepoint/filler/sys_poll_x",
+        "raw_tracepoint/filler/sys_poll_e",
+        "raw_tracepoint/filler/sys_ppoll_e",
+        "raw_tracepoint/filler/sys_getsockopt_x",
+    ];
+
+    // Group B: size lower-bound loss at correlated joins.
+    let group_b = [
+        "raw_tracepoint/filler/sys_socket_bind_x",
+        "raw_tracepoint/filler/sys_recvmsg_x_2",
+        "raw_tracepoint/filler/sys_sendmsg_e",
+        "raw_tracepoint/filler/sys_connect_x",
+        "raw_tracepoint/filler/sys_sendto_e",
+        "raw_tracepoint/filler/sys_accept_x",
+        "raw_tracepoint/filler/sys_read_x",
+        "raw_tracepoint/filler/sys_recv_x",
+        "raw_tracepoint/filler/sys_recvmsg_x",
+        "raw_tracepoint/filler/sys_send_x",
+        "raw_tracepoint/filler/sys_readv_preadv_x",
+        "raw_tracepoint/filler/sys_write_x",
+        "raw_tracepoint/filler/sys_writev_pwritev_x",
+        "raw_tracepoint/filler/sys_sendmsg_x",
+        "raw_tracepoint/filler/sys_recvfrom_x",
+    ];
+
+    for section in group_a.into_iter().chain(group_b) {
+        assert!(
+            !verify_section(path, section, &opts),
+            "Expected known imprecision for falco probe.o {section}",
+        );
+    }
+}
 
 // ── linux/ (114 sections) ──────────────────────────────────────────
 verify_section_pass!(

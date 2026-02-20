@@ -20,8 +20,8 @@ use crate::platform::EbpfPlatform;
 use crate::spec::config::EbpfVerifierOptions;
 use crate::spec::type_descriptors::{BtfLineInfo, EbpfMapDescriptor, ProgramInfo, RawProgram};
 use crate::spec::vm_isa::{
-    EbpfInst, INST_CALL_LOCAL, INST_CLS_LD, INST_CLS_MASK, INST_LD_MODE_MAP_FD,
-    INST_LD_MODE_MAP_VALUE, INST_OP_CALL,
+    EbpfInst, INST_CALL_LOCAL, INST_CALL_STATIC_HELPER, INST_CLS_LD, INST_CLS_MASK,
+    INST_LD_MODE_MAP_FD, INST_LD_MODE_MAP_VALUE, INST_OP_CALL,
 };
 
 // ── Convenience aliases ─────────────────────────────────────────────
@@ -513,6 +513,7 @@ struct ProgramReader<'a> {
     raw_programs: Vec<RawProgram>,
     function_relocations: Vec<FunctionRelocation>,
     unresolved_symbol_errors: Vec<String>,
+    builtin_offsets_for_current_program: BTreeSet<usize>,
 }
 
 #[expect(clippy::too_many_arguments)]
@@ -541,6 +542,7 @@ impl<'a> ProgramReader<'a> {
             raw_programs: Vec::new(),
             function_relocations: Vec::new(),
             unresolved_symbol_errors: Vec::new(),
+            builtin_offsets_for_current_program: BTreeSet::new(),
         }
     }
 
@@ -659,7 +661,18 @@ impl<'a> ProgramReader<'a> {
         let inst = &instructions[location];
 
         // Handle local function calls.
+        // Builtins such as memset/memcpy may be encoded as local calls
+        // against undefined symbols; those are rewritten to static helpers
+        // and gated via ProgramInfo::builtin_call_offsets.
         if inst.opcode == INST_OP_CALL && inst.src_raw() == INST_CALL_LOCAL {
+            if symbol_section_index == elf::SHN_UNDEF as usize
+                && let Some(builtin_id) = self.platform.resolve_builtin_call(symbol_name)
+            {
+                instructions[location].set_src(INST_CALL_STATIC_HELPER);
+                instructions[location].imm = builtin_id;
+                self.builtin_offsets_for_current_program.insert(location);
+                return Ok(true);
+            }
             let prog_index = self.raw_programs.len();
             self.function_relocations.push(FunctionRelocation {
                 prog_index,
@@ -1068,6 +1081,12 @@ impl<'a> ProgramReader<'a> {
                             .line_info
                             .extend(sub_line_info);
                     }
+                    let sub_builtin_offsets =
+                        self.raw_programs[sub_idx].info.builtin_call_offsets.clone();
+                    self.raw_programs[prog_idx]
+                        .info
+                        .builtin_call_offsets
+                        .extend(sub_builtin_offsets.into_iter().map(|off| base + off));
 
                     self.raw_programs[prog_idx]
                         .prog
@@ -1116,6 +1135,7 @@ impl<'a> ProgramReader<'a> {
 
             let mut offset: u64 = 0;
             while offset < sec_size {
+                self.builtin_offsets_for_current_program.clear();
                 let (name, size) = get_program_name_and_size(
                     sec_idx,
                     sec_name,
@@ -1148,6 +1168,9 @@ impl<'a> ProgramReader<'a> {
                         map_descriptors: self.global.map_descriptors.clone(),
                         program_type: prog_type.clone(),
                         supported_conformance_groups: self.platform.supported_conformance_groups(),
+                        builtin_call_offsets: std::mem::take(
+                            &mut self.builtin_offsets_for_current_program,
+                        ),
                         ..Default::default()
                     },
                 });

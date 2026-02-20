@@ -25,6 +25,20 @@ pub trait EbpfPlatform {
     /// Whether helper number `n` is available on this platform.
     fn is_helper_usable(&self, n: i32) -> bool;
 
+    /// Resolve a builtin libc call name (e.g. `memset`) into a synthetic call id.
+    ///
+    /// Platforms that do not model builtin call relocation should return `None`.
+    fn resolve_builtin_call(&self, _name: &str) -> Option<i32> {
+        None
+    }
+
+    /// Return the modeled call contract for a builtin call id.
+    ///
+    /// Platforms that do not model builtin call relocation should return `None`.
+    fn get_builtin_call(&self, _id: i32) -> Option<Call> {
+        None
+    }
+
     /// Resolve a kfunc BTF id into a call contract.
     ///
     /// Platforms that do not model kfuncs should return an error explaining why.

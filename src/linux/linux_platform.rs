@@ -7,8 +7,10 @@
 //! program-type table, map-type table, map parsing, and the assembled
 //! `EbpfPlatform` implementation.
 
+use std::rc::Rc;
+
 use crate::elf_loader::UnmarshalError;
-use crate::ir::syntax::Call;
+use crate::ir::syntax::{ArgPair, ArgPairKind, ArgSingle, ArgSingleKind, Call, CallKind, Reg};
 use crate::linux::kfunc;
 use crate::linux::spec_prototypes::{self, HelperPrototype};
 use crate::linux::spec_type_descriptors::{
@@ -305,13 +307,13 @@ fn linux_program_types() -> Vec<EbpfProgramType> {
             bpf_prog_type::SK_MSG,
             &["sk_msg"],
         ),
-        ptype(
+        ptype_privileged(
             "raw_tracepoint",
             Some(&TRACEPOINT_DESCR),
             bpf_prog_type::RAW_TRACEPOINT,
             &["raw_tracepoint/", "raw_tp/"],
         ),
-        ptype(
+        ptype_privileged(
             "raw_tracepoint_writable",
             Some(&TRACEPOINT_DESCR),
             bpf_prog_type::RAW_TRACEPOINT_WRITABLE,
@@ -406,6 +408,28 @@ fn linux_program_types() -> Vec<EbpfProgramType> {
             &["netfilter/"],
         ),
     ]
+}
+
+const LINUX_BUILTIN_CALL_MEMSET: i32 = -11;
+const LINUX_BUILTIN_CALL_MEMCPY: i32 = -12;
+const LINUX_BUILTIN_CALL_MEMMOVE: i32 = -13;
+const LINUX_BUILTIN_CALL_MEMCMP: i32 = -14;
+
+fn builtin_call(name: &'static str, id: i32, singles: Vec<ArgSingle>, pairs: Vec<ArgPair>) -> Call {
+    Call {
+        func: id,
+        kind: CallKind::Helper,
+        name: Rc::from(name),
+        is_supported: true,
+        unsupported_reason: Rc::from(""),
+        is_map_lookup: false,
+        reallocate_packet: false,
+        return_ptr_type: None,
+        return_nullable: false,
+        singles,
+        pairs,
+        stack_frame_prefix: Rc::from(""),
+    }
 }
 
 // ── get_program_type_linux ─────────────────────────────────────────
@@ -792,6 +816,87 @@ impl EbpfPlatform for LinuxPlatform {
         )
     }
 
+    fn resolve_builtin_call(&self, name: &str) -> Option<i32> {
+        match name {
+            "memset" => Some(LINUX_BUILTIN_CALL_MEMSET),
+            "memcpy" => Some(LINUX_BUILTIN_CALL_MEMCPY),
+            "memmove" => Some(LINUX_BUILTIN_CALL_MEMMOVE),
+            "memcmp" => Some(LINUX_BUILTIN_CALL_MEMCMP),
+            _ => None,
+        }
+    }
+
+    fn get_builtin_call(&self, id: i32) -> Option<Call> {
+        let reg1 = Reg { v: 1 };
+        let reg2 = Reg { v: 2 };
+        let reg3 = Reg { v: 3 };
+        match id {
+            LINUX_BUILTIN_CALL_MEMSET => Some(builtin_call(
+                "memset",
+                id,
+                vec![ArgSingle {
+                    kind: ArgSingleKind::Anything,
+                    or_null: false,
+                    reg: reg2,
+                }],
+                vec![ArgPair {
+                    kind: ArgPairKind::PtrToWritableMem,
+                    or_null: false,
+                    mem: reg1,
+                    size: reg3,
+                    can_be_zero: false,
+                }],
+            )),
+            LINUX_BUILTIN_CALL_MEMCPY | LINUX_BUILTIN_CALL_MEMMOVE => Some(builtin_call(
+                if id == LINUX_BUILTIN_CALL_MEMCPY {
+                    "memcpy"
+                } else {
+                    "memmove"
+                },
+                id,
+                vec![],
+                vec![
+                    ArgPair {
+                        kind: ArgPairKind::PtrToWritableMem,
+                        or_null: false,
+                        mem: reg1,
+                        size: reg3,
+                        can_be_zero: false,
+                    },
+                    ArgPair {
+                        kind: ArgPairKind::PtrToReadableMem,
+                        or_null: false,
+                        mem: reg2,
+                        size: reg3,
+                        can_be_zero: false,
+                    },
+                ],
+            )),
+            LINUX_BUILTIN_CALL_MEMCMP => Some(builtin_call(
+                "memcmp",
+                id,
+                vec![],
+                vec![
+                    ArgPair {
+                        kind: ArgPairKind::PtrToReadableMem,
+                        or_null: false,
+                        mem: reg1,
+                        size: reg3,
+                        can_be_zero: false,
+                    },
+                    ArgPair {
+                        kind: ArgPairKind::PtrToReadableMem,
+                        or_null: false,
+                        mem: reg2,
+                        size: reg3,
+                        can_be_zero: false,
+                    },
+                ],
+            )),
+            _ => None,
+        }
+    }
+
     fn resolve_kfunc_call(&self, btf_id: i32, info: &ProgramInfo) -> Result<Call, String> {
         kfunc::make_kfunc_call_result(btf_id, Some(info))
     }
@@ -893,5 +998,43 @@ mod tests {
             user_ringbuf.platform_specific_type,
             bpf_map_type::USER_RINGBUF
         );
+    }
+
+    #[test]
+    fn test_raw_tracepoint_program_types_are_privileged() {
+        let raw_tp = get_program_type_linux("raw_tracepoint/sys_enter", "");
+        assert_eq!(raw_tp.name, "raw_tracepoint");
+        assert!(raw_tp.is_privileged);
+
+        let raw_tp_w = get_program_type_linux("raw_tracepoint.w/sched_switch", "");
+        assert_eq!(raw_tp_w.name, "raw_tracepoint_writable");
+        assert!(raw_tp_w.is_privileged);
+    }
+
+    #[test]
+    fn test_builtin_relocation_resolver_maps_known_libc_builtins() {
+        let platform = LinuxPlatform::new();
+        let memset_id = platform.resolve_builtin_call("memset");
+        let memcpy_id = platform.resolve_builtin_call("memcpy");
+        let memmove_id = platform.resolve_builtin_call("memmove");
+        let memcmp_id = platform.resolve_builtin_call("memcmp");
+
+        assert!(memset_id.is_some());
+        assert!(memcpy_id.is_some());
+        assert!(memmove_id.is_some());
+        assert!(memcmp_id.is_some());
+
+        let memset_call = platform.get_builtin_call(memset_id.unwrap()).unwrap();
+        let memcpy_call = platform.get_builtin_call(memcpy_id.unwrap()).unwrap();
+        let memmove_call = platform.get_builtin_call(memmove_id.unwrap()).unwrap();
+        let memcmp_call = platform.get_builtin_call(memcmp_id.unwrap()).unwrap();
+
+        assert_eq!(&*memset_call.name, "memset");
+        assert_eq!(&*memcpy_call.name, "memcpy");
+        assert_eq!(&*memmove_call.name, "memmove");
+        assert_eq!(&*memcmp_call.name, "memcmp");
+
+        assert!(platform.resolve_builtin_call("__does_not_exist").is_none());
+        assert!(platform.get_builtin_call(-999_999).is_none());
     }
 }
