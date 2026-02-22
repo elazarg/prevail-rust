@@ -5,7 +5,7 @@ use std::fs;
 use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 
@@ -141,23 +141,46 @@ pub fn run(root: &Path) -> Result<()> {
             let safe_sec = sec.replace('/', "__").replace('.', "");
             let prefix = format!("{safe_elf}__{safe_sec}");
 
-            // Run C++ binary.
-            let output = Command::new(&cpp)
+            // Run C++ binary with a timeout to avoid diverging programs.
+            let mut child = Command::new(&cpp)
                 .args(["-v", "--section", sec, &elf_str])
                 .stderr(Stdio::piped())
                 .stdout(Stdio::piped())
-                .output()?;
-            let exit_code = output.status.code().unwrap_or(-1);
+                .spawn()?;
 
-            // Strip the stats line from stdout.
-            let raw_stdout = String::from_utf8_lossy(&output.stdout);
-            let stdout = parity_common::strip_stats_line(&raw_stdout);
+            const TIMEOUT: Duration = Duration::from_secs(120);
+            let deadline = std::time::Instant::now() + TIMEOUT;
+            let timed_out = loop {
+                match child.try_wait()? {
+                    Some(_status) => break false,
+                    None if std::time::Instant::now() >= deadline => break true,
+                    None => std::thread::sleep(Duration::from_millis(250)),
+                }
+            };
 
-            fs::write(out_dir.join(format!("{prefix}.stdout")), &stdout)?;
-            fs::write(out_dir.join(format!("{prefix}.stderr")), &output.stderr)?;
+            if timed_out {
+                child.kill()?;
+                let _ = child.wait();
+                eprintln!(
+                    "TIMEOUT ({}s): {elf_str} section={sec} — skipping",
+                    TIMEOUT.as_secs()
+                );
+                writeln!(manifest, "{elf_str}\t{sec}\tTIMEOUT")?;
+                total += 1;
+            } else {
+                let output = child.wait_with_output()?;
+                let exit_code = output.status.code().unwrap_or(-1);
 
-            writeln!(manifest, "{elf_str}\t{sec}\t{exit_code}")?;
-            total += 1;
+                // Strip the stats line from stdout.
+                let raw_stdout = String::from_utf8_lossy(&output.stdout);
+                let stdout = parity_common::strip_stats_line(&raw_stdout);
+
+                fs::write(out_dir.join(format!("{prefix}.stdout")), &stdout)?;
+                fs::write(out_dir.join(format!("{prefix}.stderr")), &output.stderr)?;
+
+                writeln!(manifest, "{elf_str}\t{sec}\t{exit_code}")?;
+                total += 1;
+            }
         }
     }
 
