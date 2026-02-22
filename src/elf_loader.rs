@@ -200,7 +200,7 @@ fn validate_lddw_pair(
 /// Resolve well-known Linux extern symbols to their compile-time values.
 fn resolve_known_linux_extern_symbol(symbol_name: &str) -> Option<u64> {
     match symbol_name {
-        "LINUX_KERNEL_VERSION" => Some((6 << 16) | (6 << 8) | 0), // 6.6.0
+        "LINUX_KERNEL_VERSION" => Some((6 << 16) | (6 << 8)), // 6.6.0
         "LINUX_HAS_SYSCALL_WRAPPER" => Some(1),
         "LINUX_HAS_BPF_COOKIE" => Some(1),
         "CONFIG_HZ" => Some(250),
@@ -431,7 +431,7 @@ fn parse_map_sections(
             record_size = platform.map_record_size();
         }
 
-        if record_size < 4 * 4 || record_size % 4 != 0 {
+        if record_size < 4 * 4 || !record_size.is_multiple_of(4) {
             return Err(UnmarshalError(format!(
                 "Malformed legacy maps section: {sec_name}"
             )));
@@ -466,7 +466,7 @@ fn parse_map_sections(
                     "Malformed legacy maps section: {sec_name}"
                 )));
             }
-            map_count = (max_record_end + record_size - 1) / record_size;
+            map_count = max_record_end.div_ceil(record_size);
         }
 
         let base_index = global.map_descriptors.len();
@@ -956,10 +956,10 @@ impl<'a> ProgramReader<'a> {
         // Known constants (LINUX_KERNEL_VERSION, CONFIG_HZ, etc.) are rewritten
         // from LDDW+LDX to MOV-immediate.  Unknown extern addresses are zeroed.
         if symbol_section_index == elf::SHN_UNDEF as usize {
-            if let Some(value) = resolve_known_linux_extern_symbol(symbol_name) {
-                if rewrite_extern_constant_load(instructions, location, value) {
-                    return Ok(true);
-                }
+            if let Some(value) = resolve_known_linux_extern_symbol(symbol_name)
+                && rewrite_extern_constant_load(instructions, location, value)
+            {
+                return Ok(true);
             }
             if rewrite_extern_address_load_to_zero(instructions, location) {
                 return Ok(true);
@@ -994,7 +994,7 @@ impl<'a> ProgramReader<'a> {
                     (i64::from(instructions[location].imm) + 1) * size_of::<EbpfInst>() as i64
                 };
                 if target_byte_offset < 0
-                    || target_byte_offset as u64 % size_of::<EbpfInst>() as u64 != 0
+                    || !(target_byte_offset as u64).is_multiple_of(size_of::<EbpfInst>() as u64)
                 {
                     return Err(UnmarshalError(
                         "Invalid section-local call target offset".into(),
@@ -1877,19 +1877,18 @@ fn core_field_bit_width(
             return Ok(bf_size);
         }
     }
-    if btf_data.get_kind_index(field.type_id)? == BtfKindIndex::Int {
-        if let BtfKind::Int {
+    if btf_data.get_kind_index(field.type_id)? == BtfKindIndex::Int
+        && let BtfKind::Int {
             field_width_in_bits,
             size_in_bytes,
             ..
         } = btf_data.get_kind(field.type_id)?
-        {
-            return Ok(if *field_width_in_bits != 0 {
-                u32::from(*field_width_in_bits)
-            } else {
-                *size_in_bytes * 8
-            });
-        }
+    {
+        return Ok(if *field_width_in_bits != 0 {
+            u32::from(*field_width_in_bits)
+        } else {
+            *size_in_bytes * 8
+        });
     }
     Ok(btf_data.get_size(field.type_id)? * 8)
 }
