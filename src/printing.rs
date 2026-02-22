@@ -1941,6 +1941,7 @@ mod tests {
                 can_be_zero: false,
             }],
             stack_frame_prefix: Rc::from(""),
+            alloc_size_reg: None,
         };
         assert_eq!(
             format!("{call}"),

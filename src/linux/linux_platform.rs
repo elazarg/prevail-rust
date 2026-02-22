@@ -430,6 +430,7 @@ fn builtin_call(name: &'static str, id: i32, singles: Vec<ArgSingle>, pairs: Vec
         singles,
         pairs,
         stack_frame_prefix: Rc::from(""),
+        alloc_size_reg: None,
     }
 }
 
@@ -941,6 +942,7 @@ impl EbpfPlatform for LinuxPlatform {
                 ],
                 pairs: vec![],
                 stack_frame_prefix: Rc::from(""),
+                alloc_size_reg: None,
             }),
             _ => None,
         }

@@ -439,6 +439,25 @@ impl<'a> EbpfChecker<'a> {
                                 ),
                                 "Non-null number",
                             )?;
+                            // A null pointer access is only valid with zero width.
+                            match s.width {
+                                Value::Imm(imm) => {
+                                    if imm.v != 0 {
+                                        return self
+                                            .throw_fail("Non-zero access size with null pointer");
+                                    }
+                                }
+                                Value::Reg(reg) => {
+                                    let width_svalue = reg_pack(&reg, self.registry).svalue;
+                                    self.require_value(
+                                        expr_eq(
+                                            LinearExpression::from(width_svalue),
+                                            LinearExpression::from(0),
+                                        ),
+                                        "Non-zero access size with null pointer",
+                                    )?;
+                                }
+                            }
                         } else {
                             return self.throw_fail("Only pointers can be dereferenced");
                         }

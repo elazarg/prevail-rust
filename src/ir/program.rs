@@ -1447,6 +1447,7 @@ mod tests {
                     singles: vec![],
                     pairs: vec![],
                     stack_frame_prefix: Rc::from(""),
+                    alloc_size_reg: None,
                 }),
                 None,
             ));
@@ -1488,6 +1489,7 @@ mod tests {
                     singles: vec![],
                     pairs: vec![],
                     stack_frame_prefix: Rc::from(""),
+                    alloc_size_reg: None,
                 }),
                 None,
             ));

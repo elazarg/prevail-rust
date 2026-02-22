@@ -771,6 +771,7 @@ impl<'a> Unmarshaller<'a> {
                         singles: Vec::new(),
                         pairs: Vec::new(),
                         stack_frame_prefix: Rc::from(""),
+                        alloc_size_reg: None,
                     }));
                 }
 
@@ -801,6 +802,7 @@ impl<'a> Unmarshaller<'a> {
                         singles: Vec::new(),
                         pairs: Vec::new(),
                         stack_frame_prefix: Rc::from(""),
+                        alloc_size_reg: None,
                     }));
                 }
 
@@ -1158,6 +1160,7 @@ pub fn make_call_result(imm: i32, platform: &dyn EbpfPlatform) -> Result<Call, S
         singles: vec![],
         pairs: vec![],
         stack_frame_prefix: Rc::from(""),
+        alloc_size_reg: None,
     };
     let mark_unsupported = |res: &mut Call, why: String| {
         res.is_supported = false;
@@ -1285,6 +1288,7 @@ pub fn make_call_result(imm: i32, platform: &dyn EbpfPlatform) -> Result<Call, S
                 });
             }
             EbpfArgumentType::ConstAllocSizeOrZero => {
+                res.alloc_size_reg = Some(Reg { v: i as u8 });
                 res.singles.push(ArgSingle {
                     kind: ArgSingleKind::ConstSizeOrZero,
                     or_null: false,

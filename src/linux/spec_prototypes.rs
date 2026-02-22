@@ -142,6 +142,7 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
         "skb_store_bytes",
         Integer,
         [PtrToCtx, Anything, PtrToReadableMem, ConstSize, Anything],
+        realloc,
         ctx = &SK_BUFF
     ),
     // 10: l3_csum_replace
@@ -184,10 +185,11 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
         "skb_vlan_push",
         Integer,
         [PtrToCtx, Anything, Anything],
+        realloc,
         ctx = &SK_BUFF
     ),
     // 19: skb_vlan_pop
-    proto!("skb_vlan_pop", Integer, [PtrToCtx], ctx = &SK_BUFF),
+    proto!("skb_vlan_pop", Integer, [PtrToCtx], realloc, ctx = &SK_BUFF),
     // 20: skb_get_tunnel_key
     proto!(
         "skb_get_tunnel_key",
@@ -260,6 +262,7 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
         "skb_change_proto",
         Integer,
         [PtrToCtx, Anything, Anything],
+        realloc,
         ctx = &SK_BUFF
     ),
     // 32: skb_change_type
@@ -293,6 +296,7 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
         "skb_change_tail",
         Integer,
         [PtrToCtx, Anything, Anything],
+        realloc,
         ctx = &SK_BUFF
     ),
     // 39: skb_pull_data
@@ -300,6 +304,7 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
         "skb_pull_data",
         Integer,
         [PtrToCtx, Anything],
+        realloc,
         ctx = &SK_BUFF
     ),
     // 40: csum_update
@@ -582,6 +587,7 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
         "msg_push_data",
         Integer,
         [PtrToCtx, Anything, Anything, Anything],
+        realloc,
         ctx = &SK_MSG_MD
     ),
     // 91: msg_pop_data
@@ -589,6 +595,7 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
         "msg_pop_data",
         Integer,
         [PtrToCtx, Anything, Anything, Anything],
+        realloc,
         ctx = &SK_MSG_MD
     ),
     // 92: rc_pointer_rel
@@ -1406,7 +1413,7 @@ mod tests {
     fn test_reallocate_packet_helpers() {
         // skb_adjust_room (50), skb_change_head (43), xdp_adjust_head (44),
         // xdp_adjust_tail (65), xdp_adjust_meta (54), lwt_seg6_adjust_srh (75)
-        let realloc_ids = [43, 44, 50, 54, 65, 75];
+        let realloc_ids = [9, 18, 19, 31, 38, 39, 43, 44, 50, 54, 65, 75, 90, 91];
         for &id in &realloc_ids {
             assert!(
                 PROTOTYPES[id].reallocate_packet,

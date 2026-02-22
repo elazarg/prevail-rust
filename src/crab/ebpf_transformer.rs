@@ -1742,7 +1742,23 @@ fn transform_call(
         assign_valid_ptr(dom, &r0_reg, call.return_nullable, registry);
         dom.state
             .assign_type_encoding(&r0_reg, return_ptr_type, registry);
-        dom.state.havoc_offsets(&r0_reg, registry);
+        if return_ptr_type == T_ALLOC_MEM
+            && let Some(alloc_size_reg) = &call.alloc_size_reg
+        {
+            let r0_pack = reg_pack(&r0_reg, registry);
+            dom.state
+                .values
+                .assign_i64(r0_pack.alloc_mem_offset, 0, registry);
+            let size_value = dom
+                .state
+                .values
+                .eval_interval_var(reg_pack(alloc_size_reg, registry).uvalue, registry);
+            dom.state
+                .values
+                .set(r0_pack.alloc_mem_size, &size_value, registry);
+        } else {
+            dom.state.havoc_offsets(&r0_reg, registry);
+        }
     } else {
         dom.state.havoc_register_except_type(&r0_reg, registry);
         dom.state.assign_type_encoding(&r0_reg, T_NUM, registry);

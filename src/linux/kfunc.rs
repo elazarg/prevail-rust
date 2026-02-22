@@ -11,6 +11,10 @@ use crate::spec::type_descriptors::ProgramInfo;
 
 const KFUNC_FLAG_NONE: u32 = 0;
 const KFUNC_FLAG_ACQUIRE: u32 = 1 << 0;
+const KFUNC_FLAG_RELEASE: u32 = 1 << 1;
+const KFUNC_FLAG_DESTRUCTIVE: u32 = 1 << 2;
+const KFUNC_FLAG_TRUSTED_ARGS: u32 = 1 << 3;
+const KFUNC_FLAG_SLEEPABLE: u32 = 1 << 4;
 
 struct KfuncPrototypeEntry {
     btf_id: i32,
@@ -20,7 +24,7 @@ struct KfuncPrototypeEntry {
     requires_privileged: bool,
 }
 
-const KFUNC_PROTOTYPES: [KfuncPrototypeEntry; 9] = [
+const KFUNC_PROTOTYPES: [KfuncPrototypeEntry; 10] = [
     KfuncPrototypeEntry {
         btf_id: 12,
         proto: HelperPrototype {
@@ -165,6 +169,20 @@ const KFUNC_PROTOTYPES: [KfuncPrototypeEntry; 9] = [
         required_program_type: "",
         requires_privileged: false,
     },
+    KfuncPrototypeEntry {
+        btf_id: 1008,
+        proto: HelperPrototype {
+            name: "kfunc_test_release_flag",
+            return_type: EbpfReturnType::Integer,
+            argument_type: [EbpfArgumentType::DontCare; 5],
+            reallocate_packet: false,
+            context_descriptor: None,
+            unsupported: false,
+        },
+        flags: KFUNC_FLAG_RELEASE,
+        required_program_type: "",
+        requires_privileged: false,
+    },
 ];
 
 fn lookup_kfunc_prototype(btf_id: i32) -> Option<&'static KfuncPrototypeEntry> {
@@ -227,11 +245,16 @@ pub fn make_kfunc_call_result(btf_id: i32, info: Option<&ProgramInfo>) -> Result
         singles: Vec::new(),
         pairs: Vec::new(),
         stack_frame_prefix: Rc::from(""),
+        alloc_size_reg: None,
     };
 
-    if entry.flags != KFUNC_FLAG_NONE {
+    let accepted_flags = KFUNC_FLAG_ACQUIRE
+        | KFUNC_FLAG_DESTRUCTIVE
+        | KFUNC_FLAG_TRUSTED_ARGS
+        | KFUNC_FLAG_SLEEPABLE;
+    if (entry.flags & !accepted_flags) != KFUNC_FLAG_NONE {
         return Err(format!(
-            "kfunc flags are unsupported on this platform: {}",
+            "kfunc has unsupported flags (release requires lifecycle tracking): {}",
             proto.name
         ));
     }
@@ -373,6 +396,7 @@ pub fn make_kfunc_call_result(btf_id: i32, info: Option<&ProgramInfo>) -> Result
                 i += 1;
             }
             EbpfArgumentType::ConstAllocSizeOrZero => {
+                res.alloc_size_reg = Some(Reg { v: i as u8 });
                 res.singles.push(ArgSingle {
                     kind: ArgSingleKind::ConstSizeOrZero,
                     or_null: false,
@@ -474,9 +498,15 @@ mod tests {
     }
 
     #[test]
-    fn kfunc_flags_are_rejected_until_modeled() {
-        let err = make_kfunc_call_result(1002, None).expect_err("flagged kfunc must be rejected");
-        assert!(err.contains("kfunc flags are unsupported on this platform"));
+    fn kfunc_acquire_flag_is_accepted() {
+        make_kfunc_call_result(1002, None).expect("acquire-flagged kfunc should be accepted");
+    }
+
+    #[test]
+    fn kfunc_release_flag_is_rejected() {
+        let err =
+            make_kfunc_call_result(1008, None).expect_err("release-flagged kfunc must be rejected");
+        assert!(err.contains("kfunc has unsupported flags (release requires lifecycle tracking)"));
     }
 
     #[test]

@@ -243,6 +243,8 @@ pub struct Call {
     pub singles: Vec<ArgSingle>,
     pub pairs: Vec<ArgPair>,
     pub stack_frame_prefix: Rc<str>,
+    /// Register holding allocation size (for T_ALLOC_MEM returns).
+    pub alloc_size_reg: Option<Reg>,
 }
 
 impl PartialEq for Call {
