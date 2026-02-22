@@ -4,7 +4,7 @@
 #![allow(dead_code)]
 // Shared by multiple integration-test crates; each uses a subset.
 
-pub const UPSTREAM_CHECK_BIN: &str = "tests/upstream/bin/check";
+pub const UPSTREAM_CHECK_BIN: &str = "tests/upstream/bin/prevail";
 pub const UPSTREAM_TEST_DATA_DIR: &str = "tests/upstream/test-data";
 pub const UPSTREAM_BPF_CONFORMANCE_TESTS_DIR: &str =
     "tests/upstream/external/bpf_conformance/tests";

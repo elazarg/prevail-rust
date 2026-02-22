@@ -52,7 +52,7 @@ pub fn samples_dir(root: &Path) -> PathBuf {
     root.join("tests/upstream/ebpf-samples")
 }
 
-pub const UPSTREAM_CPP_BIN_NAME: &str = "check";
+pub const UPSTREAM_CPP_BIN_NAME: &str = "prevail";
 
 pub fn target_dir(root: &Path) -> PathBuf {
     if let Ok(dir) = std::env::var("CARGO_TARGET_DIR") {
