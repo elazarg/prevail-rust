@@ -365,8 +365,9 @@ fn main() -> ExitCode {
             println!("please specify a program");
             println!("available programs:");
         }
+        // Always list all programs (matching C++ elf.list_programs() behavior).
         let reloaded;
-        let progs: &[RawProgram] = if section.is_some() && raw_progs.is_empty() {
+        let progs: &[RawProgram] = if section.is_some() {
             reloaded = elf_loader::read_elf_file(&path, "", "", &opts, &mut rust_platform)
                 .unwrap_or_default();
             &reloaded

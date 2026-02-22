@@ -71,9 +71,7 @@ fn default_variables() -> (Vec<String>, Vec<VarMetadata>) {
                 is_loop_counter: false,
                 is_min_only: matches!(
                     kind,
-                    DataKind::StackNumericSizes
-                        | DataKind::SharedRegionSizes
-                        | DataKind::AllocMemSizes
+                    DataKind::StackNumericSizes | DataKind::SharedRegionSizes
                 ),
             });
         }
@@ -154,7 +152,7 @@ impl VariableRegistry {
             is_loop_counter: false,
             is_min_only: matches!(
                 kind,
-                DataKind::StackNumericSizes | DataKind::SharedRegionSizes | DataKind::AllocMemSizes
+                DataKind::StackNumericSizes | DataKind::SharedRegionSizes
             ),
         }
     }
@@ -478,7 +476,7 @@ mod tests {
 
         assert!(reg.is_min_only(stack_num));
         assert!(reg.is_min_only(shared_reg));
-        assert!(reg.is_min_only(alloc_mem));
+        assert!(!reg.is_min_only(alloc_mem));
         assert!(reg.is_min_only(pkt));
         assert!(!reg.is_min_only(sval));
     }
@@ -529,8 +527,8 @@ mod tests {
         assert_eq!(reg.metadata[8].kind, Some(DataKind::Types));
         // r0.stack_numeric_size → min_only (index 10)
         assert!(reg.metadata[10].is_min_only);
-        // r0.alloc_mem_size → min_only (index 14)
-        assert!(reg.metadata[14].is_min_only);
+        // r0.alloc_mem_size → NOT min_only (index 14)
+        assert!(!reg.metadata[14].is_min_only);
         // packet_size → min_only, no kind (index 183)
         assert!(reg.metadata[183].is_min_only);
         assert_eq!(reg.metadata[183].kind, None);

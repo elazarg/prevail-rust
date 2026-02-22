@@ -1,10 +1,12 @@
 // Copyright (c) Prevail Verifier contributors.
 // SPDX-License-Identifier: MIT
 
+use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
@@ -92,20 +94,31 @@ pub fn run(root: &Path) -> Result<()> {
         fs::write(out_dir.join("help.stderr"), &out.stderr)?;
     }
 
-    // Initialize manifest.
-    let mut manifest = fs::File::create(&manifest_path)?;
-    writeln!(manifest, "elf\tsection\texit_code")?;
+    // Load existing manifest entries so we can resume incrementally.
+    let mut done: HashSet<(String, String)> = HashSet::new();
+    if manifest_path.exists() {
+        let existing = fs::read_to_string(&manifest_path)?;
+        for line in existing.lines().skip(1) {
+            let cols: Vec<&str> = line.split('\t').collect();
+            if cols.len() >= 3 {
+                done.insert((cols[0].to_string(), cols[1].to_string()));
+            }
+        }
+    }
+    let cached = done.len();
+    if cached > 0 {
+        eprintln!("info: resuming baseline generation ({cached} pairs already done)");
+    }
 
-    let mut total = 0u32;
-
-    // Find all .o files.
+    // Find all .o files and collect (elf, section) work items.
     let o_files = paths::find_o_files(&samples_dir)?;
+    let mut work_items: Vec<(String, String)> = Vec::new();
 
     for elf in &o_files {
-        let elf_str = elf.to_string_lossy();
+        let elf_str = elf.to_string_lossy().into_owned();
         let safe_elf = elf_str.replace('/', "__");
 
-        // Save -l output.
+        // Save -l output (cheap, always redo).
         let list_out = Command::new(&cpp).args(["-l", &elf_str]).output().ok();
         if let Some(ref out) = list_out {
             fs::write(
@@ -124,70 +137,178 @@ pub fn run(root: &Path) -> Result<()> {
             .stderr(Stdio::null())
             .output()?;
         let sections_text = String::from_utf8_lossy(&sections_output.stdout);
-        let sections: Vec<&str> = sections_text
-            .lines()
-            .filter_map(|l| {
-                let s = l.strip_prefix("section=").unwrap_or(l);
-                let s = s.split_whitespace().next().unwrap_or("");
-                if s.is_empty() { None } else { Some(s) }
-            })
-            .collect();
-
-        if sections.is_empty() {
-            continue;
-        }
-
-        for sec in &sections {
-            let safe_sec = sec.replace('/', "__").replace('.', "");
-            let prefix = format!("{safe_elf}__{safe_sec}");
-
-            // Run C++ binary with a timeout to avoid diverging programs.
-            let mut child = Command::new(&cpp)
-                .args(["-v", "--section", sec, &elf_str])
-                .stderr(Stdio::piped())
-                .stdout(Stdio::piped())
-                .spawn()?;
-
-            const TIMEOUT: Duration = Duration::from_secs(120);
-            let deadline = std::time::Instant::now() + TIMEOUT;
-            let timed_out = loop {
-                match child.try_wait()? {
-                    Some(_status) => break false,
-                    None if std::time::Instant::now() >= deadline => break true,
-                    None => std::thread::sleep(Duration::from_millis(250)),
-                }
-            };
-
-            if timed_out {
-                child.kill()?;
-                let _ = child.wait();
-                eprintln!(
-                    "TIMEOUT ({}s): {elf_str} section={sec} — skipping",
-                    TIMEOUT.as_secs()
-                );
-                writeln!(manifest, "{elf_str}\t{sec}\tTIMEOUT")?;
-                total += 1;
-            } else {
-                let output = child.wait_with_output()?;
-                let exit_code = output.status.code().unwrap_or(-1);
-
-                // Strip the stats line from stdout.
-                let raw_stdout = String::from_utf8_lossy(&output.stdout);
-                let stdout = parity_common::strip_stats_line(&raw_stdout);
-
-                fs::write(out_dir.join(format!("{prefix}.stdout")), &stdout)?;
-                fs::write(out_dir.join(format!("{prefix}.stderr")), &output.stderr)?;
-
-                writeln!(manifest, "{elf_str}\t{sec}\t{exit_code}")?;
-                total += 1;
+        for line in sections_text.lines() {
+            let s = line.strip_prefix("section=").unwrap_or(line);
+            let s = s.split_whitespace().next().unwrap_or("");
+            if s.is_empty() {
+                continue;
+            }
+            if !done.contains(&(elf_str.clone(), s.to_string())) {
+                work_items.push((elf_str.clone(), s.to_string()));
             }
         }
     }
 
-    println!("Generated baseline: {total} (elf, section) pairs");
+    eprintln!(
+        "info: {} work items to process ({cached} cached)",
+        work_items.len()
+    );
+
+    // Process work items in parallel using a shared work queue.
+    let num_workers = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
+    eprintln!("info: using {num_workers} parallel workers");
+
+    let work_queue = Arc::new(Mutex::new(work_items.into_iter()));
+    let cpp = Arc::new(cpp);
+    let out_dir_arc = Arc::new(out_dir.clone());
+
+    let (tx, rx) = std::sync::mpsc::channel::<WorkResult>();
+
+    let handles: Vec<_> = (0..num_workers)
+        .map(|_| {
+            let queue = Arc::clone(&work_queue);
+            let cpp = Arc::clone(&cpp);
+            let out_dir = Arc::clone(&out_dir_arc);
+            let tx = tx.clone();
+            std::thread::spawn(move || {
+                loop {
+                    let item = {
+                        let mut iter = queue.lock().unwrap();
+                        iter.next()
+                    };
+                    let Some((elf_str, sec)) = item else {
+                        break;
+                    };
+                    let result = run_one_verification(&cpp, &out_dir, &elf_str, &sec);
+                    let _ = tx.send(result);
+                }
+            })
+        })
+        .collect();
+    drop(tx); // Close sender so rx iterator terminates.
+
+    // Open manifest: append if resuming, create fresh otherwise.
+    let mut manifest = fs::OpenOptions::new()
+        .create(true)
+        .append(cached > 0)
+        .write(true)
+        .truncate(cached == 0)
+        .open(&manifest_path)?;
+    if cached == 0 {
+        writeln!(manifest, "elf\tsection\texit_code")?;
+    }
+
+    let mut generated = 0u32;
+    for result in rx {
+        writeln!(
+            manifest,
+            "{}\t{}\t{}",
+            result.elf, result.section, result.exit_code
+        )?;
+        if result.timed_out {
+            eprintln!(
+                "TIMEOUT (120s): {} section={} — skipping",
+                result.elf, result.section
+            );
+        }
+        generated += 1;
+    }
+
+    for h in handles {
+        h.join().expect("worker thread panicked");
+    }
+
+    let total = cached as u32 + generated;
+    println!(
+        "Generated baseline: {generated} new + {cached} cached = {total} total (elf, section) pairs"
+    );
     println!("Manifest: {}", manifest_path.display());
     write_baseline_metadata(&metadata_path, &upstream_hash, &cpp)?;
     Ok(())
+}
+
+struct WorkResult {
+    elf: String,
+    section: String,
+    exit_code: String,
+    timed_out: bool,
+}
+
+fn run_one_verification(cpp: &Path, out_dir: &Path, elf_str: &str, sec: &str) -> WorkResult {
+    let safe_elf = elf_str.replace('/', "__");
+    let safe_sec = sec.replace('/', "__").replace('.', "");
+    let prefix = format!("{safe_elf}__{safe_sec}");
+
+    let child = Command::new(cpp)
+        .args(["-v", "--section", sec, elf_str])
+        .stderr(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn();
+
+    let mut child = match child {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("ERROR spawning C++ verifier: {e}");
+            return WorkResult {
+                elf: elf_str.to_string(),
+                section: sec.to_string(),
+                exit_code: "SPAWN_ERROR".to_string(),
+                timed_out: false,
+            };
+        }
+    };
+
+    const TIMEOUT: Duration = Duration::from_secs(120);
+    let deadline = std::time::Instant::now() + TIMEOUT;
+    let timed_out = loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break false,
+            Ok(None) if std::time::Instant::now() >= deadline => break true,
+            Ok(None) => std::thread::sleep(Duration::from_millis(250)),
+            Err(_) => break false,
+        }
+    };
+
+    if timed_out {
+        let _ = child.kill();
+        let _ = child.wait();
+        return WorkResult {
+            elf: elf_str.to_string(),
+            section: sec.to_string(),
+            exit_code: "TIMEOUT".to_string(),
+            timed_out: true,
+        };
+    }
+
+    let output = match child.wait_with_output() {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("ERROR reading output: {e}");
+            return WorkResult {
+                elf: elf_str.to_string(),
+                section: sec.to_string(),
+                exit_code: "IO_ERROR".to_string(),
+                timed_out: false,
+            };
+        }
+    };
+
+    let exit_code = output.status.code().unwrap_or(-1);
+    let raw_stdout = String::from_utf8_lossy(&output.stdout);
+    let stdout = parity_common::strip_stats_line(&raw_stdout);
+
+    // Write output files (best-effort).
+    let _ = fs::write(out_dir.join(format!("{prefix}.stdout")), &stdout);
+    let _ = fs::write(out_dir.join(format!("{prefix}.stderr")), &output.stderr);
+
+    WorkResult {
+        elf: elf_str.to_string(),
+        section: sec.to_string(),
+        exit_code: exit_code.to_string(),
+        timed_out: false,
+    }
 }
 
 fn maybe_clean_build_dir_for_upstream_change(

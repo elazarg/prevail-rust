@@ -108,6 +108,30 @@ impl BtfTypeData {
         }
     }
 
+    /// Return the name of a type by ID, or an empty string if the type has no
+    /// name. Matches `btf_type_data::get_type_name` in C++.
+    pub fn get_type_name(&self, id: BtfTypeId) -> String {
+        let Ok(kind) = self.get_kind(id) else {
+            return String::new();
+        };
+        match kind {
+            BtfKind::Int { name, .. }
+            | BtfKind::Fwd { name, .. }
+            | BtfKind::Typedef { name, .. }
+            | BtfKind::Function { name, .. }
+            | BtfKind::Var { name, .. }
+            | BtfKind::DataSection { name, .. }
+            | BtfKind::Float { name, .. }
+            | BtfKind::DeclTag { name, .. }
+            | BtfKind::TypeTag { name, .. } => name.clone(),
+            BtfKind::Struct { name, .. }
+            | BtfKind::Union { name, .. }
+            | BtfKind::Enum { name, .. }
+            | BtfKind::Enum64 { name, .. } => name.clone().unwrap_or_default(),
+            _ => String::new(),
+        }
+    }
+
     /// Compute the byte size of a type, with cycle detection.
     pub fn get_size(&self, id: BtfTypeId) -> Result<u32, UnmarshalError> {
         let mut visited = HashSet::new();

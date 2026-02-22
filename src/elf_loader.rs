@@ -299,8 +299,10 @@ fn rewrite_extern_constant_load(
     instructions[location + 2].offset = 0;
     instructions[location + 2].imm = narrowed_value as i32;
 
-    instructions[location] = make_mov_reg_nop(lddw_dst);
-    instructions[location + 1] = make_mov_reg_nop(lddw_dst);
+    let lo_dst = instructions[location].dst_raw();
+    let hi_dst = instructions[location + 1].dst_raw();
+    instructions[location] = make_mov_reg_nop(lo_dst);
+    instructions[location + 1] = make_mov_reg_nop(hi_dst);
     true
 }
 
@@ -337,7 +339,7 @@ fn collect_global_sections(elf: &ElfFile<'_, Elf64>) -> Vec<(usize, String, u64)
         let sh = section.elf_section_header();
         let sh_type = sh.sh_type(ENDIAN);
         let size = section.size();
-        if sh_type == elf::SHT_NOBITS || (sh_type == elf::SHT_PROGBITS && size != 0) {
+        if (sh_type == elf::SHT_NOBITS || sh_type == elf::SHT_PROGBITS) && size != 0 {
             result.push((section.index().0, name, size));
         }
     }
@@ -566,7 +568,9 @@ fn parse_btf_section(elf: &ElfFile<'_, Elf64>) -> Result<ElfGlobalData, Unmarsha
     let mut map_offsets = MapOffsets::new();
 
     // Parse BTF-defined maps from the .maps DATASEC
-    for map_def in crate::btf::map::parse_btf_map_section(&btf_data)? {
+    let btf_maps = crate::btf::map::parse_btf_map_section(&btf_data)
+        .map_err(|e| UnmarshalError(format!("Unsupported or invalid BTF map metadata: {e}")))?;
+    for map_def in btf_maps {
         map_offsets.insert(map_def.name.clone(), global.map_descriptors.len());
         global.map_descriptors.push(EbpfMapDescriptor {
             original_fd: map_def.type_id as i32, // temporary: stores BTF type ID

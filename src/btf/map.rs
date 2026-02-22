@@ -134,13 +134,33 @@ fn get_map_definition_from_btf(
     }
 
     if key_field != 0 {
-        def.key_size = btf_data.get_size(key_field)?;
+        let key_size = btf_data.get_size(key_field)?;
+        if key_size == 0 {
+            let mut type_name = btf_data.get_type_name(key_field);
+            if type_name.is_empty() {
+                type_name = format!("type_id={key_field}");
+            }
+            return Err(UnmarshalError(format!(
+                "map '{name}': cannot determine key size for type '{type_name}'"
+            )));
+        }
+        def.key_size = key_size;
     } else if key_size_field != 0 {
         def.key_size = value_from_btf_uint(btf_data, key_size_field)?;
     }
 
     if value_field != 0 {
-        def.value_size = btf_data.get_size(value_field)?;
+        let value_size = btf_data.get_size(value_field)?;
+        if value_size == 0 {
+            let mut type_name = btf_data.get_type_name(value_field);
+            if type_name.is_empty() {
+                type_name = format!("type_id={value_field}");
+            }
+            return Err(UnmarshalError(format!(
+                "map '{name}': cannot determine value size for type '{type_name}'"
+            )));
+        }
+        def.value_size = value_size;
     } else if value_size_field != 0 {
         def.value_size = value_from_btf_uint(btf_data, value_size_field)?;
     }
@@ -173,8 +193,6 @@ pub fn parse_btf_map_section(
     // C++ uses std::multimap which keeps all entries; BTreeMap would silently
     // overwrite duplicates (e.g. outer_map_1 and outer_map_2 sharing outer_map_t).
     let mut map_definitions: Vec<BtfMapDefinition> = Vec::new();
-    // Track type_ids already processed as inner maps to avoid duplicates.
-    let mut added_inner_type_ids: BTreeSet<BtfTypeId> = BTreeSet::new();
 
     // Parse .maps DATASEC if present
     let maps_id = btf_data.get_id(".maps");
@@ -217,11 +235,13 @@ pub fn parse_btf_map_section(
         for _level in 0..2 {
             let ids_to_process: Vec<_> = inner_map_type_ids
                 .iter()
-                .filter(|id| !added_inner_type_ids.contains(id))
+                .filter(|id| {
+                    // Skip if already present in map_definitions (matching C++ multimap::find check)
+                    !map_definitions.iter().any(|d| d.type_id == **id)
+                })
                 .copied()
                 .collect();
             for map_type_id in ids_to_process {
-                added_inner_type_ids.insert(map_type_id);
                 handle_map_type_id(
                     btf_data,
                     "",
