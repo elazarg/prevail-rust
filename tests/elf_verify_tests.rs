@@ -2861,6 +2861,7 @@ macro_rules! verify_section_skip {
 }
 
 /// Generate a skip test for a program (known timeout or algorithmic limitation).
+#[allow(unused_macros)]
 macro_rules! verify_program_skip {
     ($name:ident, $dir:expr, $file:expr, $section:expr, $program:expr, $count:expr, $reason:expr) => {
         #[test]
