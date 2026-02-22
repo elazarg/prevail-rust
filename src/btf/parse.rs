@@ -299,7 +299,11 @@ pub fn parse_types(
         })?;
 
         let kind = match kind_idx {
-            BtfKindIndex::Void => BtfKind::Void,
+            BtfKindIndex::Void => {
+                return Err(UnmarshalError(format!(
+                    "Invalid .BTF section — invalid BTF_KIND {kind_raw}"
+                )));
+            }
 
             BtfKindIndex::Int => {
                 let mut int_data = read_struct::<u32>(data, &mut pos, type_start, type_end)?;

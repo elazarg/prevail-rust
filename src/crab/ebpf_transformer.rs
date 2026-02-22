@@ -1407,6 +1407,9 @@ fn transform_exit(
         64,
         registry,
     );
+
+    // Scratch r1-r5: the callee may have clobbered them (caller-saved per BPF ABI).
+    scratch_caller_saved_registers(dom, registry);
 }
 
 fn transform_packet(
@@ -1684,13 +1687,35 @@ fn transform_call(
     let r0_pack = reg_pack(&r0_reg, registry);
     dom.state.values.havoc(r0_pack.stack_numeric_size);
 
+    // Set r0 as a nullable T_SHARED pointer at offset 0.
+    // If region_size is known, constrain it; otherwise havoc to prevent stale values.
+    let assign_shared_map_value =
+        |dom: &mut EbpfDomain, region_size: Option<&Interval>, registry: &mut VariableRegistry| {
+            assign_valid_ptr(dom, &r0_reg, true, registry);
+            dom.state
+                .values
+                .assign_i64(r0_pack.shared_offset, 0, registry);
+            if let Some(region_size) = region_size {
+                dom.state
+                    .values
+                    .set(r0_pack.shared_region_size, region_size, registry);
+            } else {
+                dom.state.values.havoc(r0_pack.shared_region_size);
+            }
+            dom.state.assign_type_encoding(&r0_reg, T_SHARED, registry);
+        };
+
     if call.is_map_lookup {
-        // This is the only way to get a null pointer
-        if let Some(ref fd_reg) = maybe_fd_reg
-            && let Some(map_type) = dom.get_map_type(fd_reg, ctx, registry)
-        {
-            let map_type_desc = ctx.platform.get_map_type(map_type);
-            if map_type_desc.value_type == EbpfMapValueType::Map {
+        // Map lookup is the only way to get a null pointer.
+        let resolved = 'resolve: {
+            let Some(ref fd_reg) = maybe_fd_reg else {
+                break 'resolve false;
+            };
+            let Some(map_type) = dom.get_map_type(fd_reg, ctx, registry) else {
+                break 'resolve false;
+            };
+            if ctx.platform.get_map_type(map_type).value_type == EbpfMapValueType::Map {
+                // Map-of-maps: r0 is an inner map fd if known, otherwise an opaque shared pointer.
                 if let Some(inner_map_fd) = dom.get_map_inner_map_fd(fd_reg, ctx, registry) {
                     do_load_mapfd(
                         dom,
@@ -1700,29 +1725,19 @@ fn transform_call(
                         ctx,
                         registry,
                     );
-                    scratch_caller_saved_registers(dom, registry);
-                    if call.reallocate_packet {
-                        forget_packet_pointers(dom, ctx, registry);
-                    }
-                    return;
+                } else {
+                    assign_shared_map_value(dom, None, registry);
                 }
-            } else {
-                assign_valid_ptr(dom, &r0_reg, true, registry);
-                dom.state
-                    .values
-                    .assign_i64(r0_pack.shared_offset, 0, registry);
-                let map_value_size = dom.get_map_value_size(fd_reg, ctx, registry);
-                dom.state
-                    .values
-                    .set(r0_pack.shared_region_size, &map_value_size, registry);
-                dom.state.assign_type_encoding(&r0_reg, T_SHARED, registry);
+                break 'resolve true;
             }
+            // Regular map: r0 is a shared pointer with known value size.
+            let map_value_size = dom.get_map_value_size(fd_reg, ctx, registry);
+            assign_shared_map_value(dom, Some(&map_value_size), registry);
+            true
+        };
+        if !resolved {
+            assign_shared_map_value(dom, None, registry);
         }
-        assign_valid_ptr(dom, &r0_reg, true, registry);
-        dom.state
-            .values
-            .assign_i64(r0_pack.shared_offset, 0, registry);
-        dom.state.assign_type_encoding(&r0_reg, T_SHARED, registry);
     } else if let Some(return_ptr_type) = call.return_ptr_type {
         assign_valid_ptr(dom, &r0_reg, call.return_nullable, registry);
         dom.state

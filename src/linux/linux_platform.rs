@@ -414,6 +414,7 @@ const LINUX_BUILTIN_CALL_MEMSET: i32 = -11;
 const LINUX_BUILTIN_CALL_MEMCPY: i32 = -12;
 const LINUX_BUILTIN_CALL_MEMMOVE: i32 = -13;
 const LINUX_BUILTIN_CALL_MEMCMP: i32 = -14;
+const LINUX_BUILTIN_CALL_EXTERN_UNSPEC: i32 = -100;
 
 fn builtin_call(name: &'static str, id: i32, singles: Vec<ArgSingle>, pairs: Vec<ArgPair>) -> Call {
     Call {
@@ -822,7 +823,15 @@ impl EbpfPlatform for LinuxPlatform {
             "memcpy" => Some(LINUX_BUILTIN_CALL_MEMCPY),
             "memmove" => Some(LINUX_BUILTIN_CALL_MEMMOVE),
             "memcmp" => Some(LINUX_BUILTIN_CALL_MEMCMP),
-            _ => None,
+            _ => {
+                if let Some(helper_id) = spec_prototypes::resolve_helper_id(name) {
+                    return Some(helper_id);
+                }
+                if !name.is_empty() {
+                    return Some(LINUX_BUILTIN_CALL_EXTERN_UNSPEC);
+                }
+                None
+            }
         }
     }
 
@@ -893,6 +902,46 @@ impl EbpfPlatform for LinuxPlatform {
                     },
                 ],
             )),
+            LINUX_BUILTIN_CALL_EXTERN_UNSPEC => Some(Call {
+                func: id,
+                kind: CallKind::Helper,
+                name: Rc::from("extern_unspecified"),
+                is_supported: true,
+                unsupported_reason: Rc::from(""),
+                is_map_lookup: false,
+                reallocate_packet: true,
+                return_ptr_type: None,
+                return_nullable: false,
+                singles: vec![
+                    ArgSingle {
+                        kind: ArgSingleKind::Anything,
+                        or_null: false,
+                        reg: reg1,
+                    },
+                    ArgSingle {
+                        kind: ArgSingleKind::Anything,
+                        or_null: false,
+                        reg: reg2,
+                    },
+                    ArgSingle {
+                        kind: ArgSingleKind::Anything,
+                        or_null: false,
+                        reg: reg3,
+                    },
+                    ArgSingle {
+                        kind: ArgSingleKind::Anything,
+                        or_null: false,
+                        reg: Reg { v: 4 },
+                    },
+                    ArgSingle {
+                        kind: ArgSingleKind::Anything,
+                        or_null: false,
+                        reg: Reg { v: 5 },
+                    },
+                ],
+                pairs: vec![],
+                stack_frame_prefix: Rc::from(""),
+            }),
             _ => None,
         }
     }
@@ -1034,7 +1083,20 @@ mod tests {
         assert_eq!(&*memmove_call.name, "memmove");
         assert_eq!(&*memcmp_call.name, "memcmp");
 
-        assert!(platform.resolve_builtin_call("__does_not_exist").is_none());
+        // Unknown non-empty names resolve to EXTERN_UNSPEC.
+        let extern_id = platform.resolve_builtin_call("__does_not_exist");
+        assert_eq!(extern_id, Some(LINUX_BUILTIN_CALL_EXTERN_UNSPEC));
+        let extern_call = platform.get_builtin_call(extern_id.unwrap()).unwrap();
+        assert_eq!(&*extern_call.name, "extern_unspecified");
+        assert!(extern_call.reallocate_packet);
+
+        // Empty name returns None.
+        assert!(platform.resolve_builtin_call("").is_none());
         assert!(platform.get_builtin_call(-999_999).is_none());
+
+        // Known helper names (e.g. "bpf_map_lookup_elem") resolve to their helper ID.
+        let helper_id = platform.resolve_builtin_call("bpf_map_lookup_elem");
+        assert!(helper_id.is_some());
+        assert!(helper_id.unwrap() >= 0);
     }
 }

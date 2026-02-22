@@ -1272,6 +1272,26 @@ pub fn get_helper_prototype(n: i32) -> &'static HelperPrototype {
     &PROTOTYPES[n as usize]
 }
 
+/// Resolve a helper function by name, returning its index in the prototype table.
+///
+/// Strips `bpf_` or `ebpf_` prefix before matching against prototype names.
+pub fn resolve_helper_id(name: &str) -> Option<i32> {
+    let candidate = if let Some(rest) = name.strip_prefix("bpf_") {
+        rest
+    } else if let Some(rest) = name.strip_prefix("ebpf_") {
+        rest
+    } else {
+        name
+    };
+
+    for (id, proto) in PROTOTYPES.iter().enumerate() {
+        if candidate == proto.name {
+            return Some(id as i32);
+        }
+    }
+    None
+}
+
 /// Check whether helper `n` is usable in the current program context.
 ///
 /// A helper is *not* usable when:

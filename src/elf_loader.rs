@@ -20,8 +20,11 @@ use crate::platform::EbpfPlatform;
 use crate::spec::config::EbpfVerifierOptions;
 use crate::spec::type_descriptors::{BtfLineInfo, EbpfMapDescriptor, ProgramInfo, RawProgram};
 use crate::spec::vm_isa::{
-    EbpfInst, INST_CALL_LOCAL, INST_CALL_STATIC_HELPER, INST_CLS_LD, INST_CLS_MASK,
-    INST_LD_MODE_MAP_FD, INST_LD_MODE_MAP_VALUE, INST_OP_CALL,
+    EbpfInst, INST_ALU_OP_MOV, INST_CALL_LOCAL, INST_CALL_STATIC_HELPER, INST_CLS_ALU,
+    INST_CLS_ALU64, INST_CLS_LD, INST_CLS_LDX, INST_CLS_MASK, INST_LD_MODE_MAP_FD,
+    INST_LD_MODE_MAP_VALUE, INST_MODE_MEM, INST_MODE_MEMSX, INST_OP_CALL, INST_OP_LDDW_IMM,
+    INST_SIZE_B, INST_SIZE_DW, INST_SIZE_H, INST_SIZE_MASK, INST_SIZE_W, INST_SRC_IMM,
+    INST_SRC_REG,
 };
 
 // ── Convenience aliases ─────────────────────────────────────────────
@@ -50,7 +53,7 @@ impl std::error::Error for UnmarshalError {}
 const DEFAULT_MAP_FD: i32 = -1;
 
 fn is_map_section(name: &str) -> bool {
-    name == "maps" || (name.len() > 5 && name.starts_with("maps/"))
+    name == "maps" || name == ".maps" || name.starts_with("maps/") || name.starts_with(".maps/")
 }
 
 fn is_global_section(name: &str) -> bool {
@@ -121,6 +124,7 @@ impl Default for ElfGlobalData {
 struct SymbolDetails {
     name: String,
     value: u64,
+    size: u64,
     sym_type: u8,
     section_index: usize,
 }
@@ -142,6 +146,7 @@ fn get_symbol_details(
     Ok(SymbolDetails {
         name,
         value: sym.st_value(ENDIAN),
+        size: sym.st_size(ENDIAN),
         sym_type: sym.st_type(),
         section_index: sym.st_shndx(ENDIAN) as usize,
     })
@@ -149,10 +154,12 @@ fn get_symbol_details(
 
 // ── Function relocation record ──────────────────────────────────────
 
+#[allow(dead_code)]
 struct FunctionRelocation {
     prog_index: usize,
     source_offset: usize,
     relocation_entry_index: usize,
+    target_section_index: usize,
     target_function_name: String,
 }
 
@@ -186,6 +193,132 @@ fn validate_lddw_pair(
         )));
     }
     Ok(())
+}
+
+// ── Extern symbol resolution ────────────────────────────────────────
+
+/// Resolve well-known Linux extern symbols to their compile-time values.
+fn resolve_known_linux_extern_symbol(symbol_name: &str) -> Option<u64> {
+    match symbol_name {
+        "LINUX_KERNEL_VERSION" => Some((6 << 16) | (6 << 8) | 0), // 6.6.0
+        "LINUX_HAS_SYSCALL_WRAPPER" => Some(1),
+        "LINUX_HAS_BPF_COOKIE" => Some(1),
+        "CONFIG_HZ" => Some(250),
+        "CONFIG_BPF_SYSCALL" => Some(1),
+        "CONFIG_DEFAULT_HOSTNAME" => Some(b'l' as u64), // first byte of "localhost"
+        _ => {
+            if symbol_name.starts_with("__config_") {
+                Some(0)
+            } else {
+                None
+            }
+        }
+    }
+}
+
+/// Make a MOV reg,reg no-op instruction (neutralizes a LDDW slot).
+fn make_mov_reg_nop(reg: u8) -> EbpfInst {
+    EbpfInst {
+        opcode: INST_CLS_ALU64 | INST_ALU_OP_MOV | INST_SRC_REG,
+        dst_src: reg | (reg << 4),
+        offset: 0,
+        imm: 0,
+    }
+}
+
+/// Extract the memory access width (in bytes) from an LDX/ST/STX opcode.
+fn opcode_to_width(opcode: u8) -> u8 {
+    match opcode & INST_SIZE_MASK {
+        INST_SIZE_B => 1,
+        INST_SIZE_H => 2,
+        INST_SIZE_W => 4,
+        INST_SIZE_DW => 8,
+        _ => 0,
+    }
+}
+
+/// Rewrite a LDDW + LDX sequence that loads a known extern constant.
+///
+/// Detects the pattern: LDDW (2-slot) followed by LDX that dereferences
+/// the loaded address at offset 0.  Replaces the LDX with MOV-immediate
+/// of the resolved value and neutralizes the LDDW pair with no-op MOVs.
+fn rewrite_extern_constant_load(
+    instructions: &mut [EbpfInst],
+    location: usize,
+    value: u64,
+) -> bool {
+    if instructions.len() <= location + 2 {
+        return false;
+    }
+
+    // Verify LDDW pair
+    if instructions[location].opcode != INST_OP_LDDW_IMM {
+        return false;
+    }
+    if instructions[location + 1].opcode != 0x00 {
+        return false;
+    }
+
+    let load_inst = &instructions[location + 2];
+    if (load_inst.opcode & INST_CLS_MASK) != INST_CLS_LDX {
+        return false;
+    }
+    let mode = load_inst.opcode & 0xe0; // INST_MODE_MASK
+    if mode != INST_MODE_MEM && mode != INST_MODE_MEMSX {
+        return false;
+    }
+    let lddw_dst = instructions[location].dst_raw();
+    if load_inst.src_raw() != lddw_dst || load_inst.offset != 0 {
+        return false;
+    }
+
+    let width = opcode_to_width(load_inst.opcode);
+    let mut narrowed_value = value;
+    match width {
+        1 => narrowed_value &= 0xff,
+        2 => narrowed_value &= 0xffff,
+        4 => narrowed_value &= 0xffff_ffff,
+        8 => {}
+        _ => return false,
+    }
+    if mode == INST_MODE_MEMSX && width < 8 {
+        let shift = 64 - u32::from(width) * 8;
+        narrowed_value = ((narrowed_value << shift) as i64 >> shift) as u64;
+    }
+
+    // Use mov-imm to materialize the resolved constant in the destination register of
+    // the load, and neutralize the preceding LDDW pair.
+    let mov_opcode = if width == 8 || mode == INST_MODE_MEMSX {
+        INST_CLS_ALU64 | INST_ALU_OP_MOV | INST_SRC_IMM
+    } else {
+        INST_CLS_ALU | INST_ALU_OP_MOV | INST_SRC_IMM
+    };
+    let load_dst = instructions[location + 2].dst_raw();
+    instructions[location + 2].opcode = mov_opcode;
+    instructions[location + 2].dst_src = load_dst; // src = 0
+    instructions[location + 2].offset = 0;
+    instructions[location + 2].imm = narrowed_value as i32;
+
+    instructions[location] = make_mov_reg_nop(lddw_dst);
+    instructions[location + 1] = make_mov_reg_nop(lddw_dst);
+    true
+}
+
+/// Rewrite an unknown extern symbol's LDDW to load zero.
+fn rewrite_extern_address_load_to_zero(instructions: &mut [EbpfInst], location: usize) -> bool {
+    if location + 1 >= instructions.len() {
+        return false;
+    }
+    if instructions[location].opcode != INST_OP_LDDW_IMM {
+        return false;
+    }
+    // Validate the second slot is present and is 0x00 opcode
+    if instructions[location + 1].opcode != 0x00 {
+        return false;
+    }
+    instructions[location].imm = 0;
+    instructions[location + 1].imm = 0;
+    true
 }
 
 // ── Global data extraction ──────────────────────────────────────────
@@ -260,20 +393,20 @@ fn parse_map_sections(
         }
         let sec_idx = section.index().0;
 
-        // Count map symbols in this section.
-        let mut map_count = 0usize;
+        // Collect map symbols in this section.
+        let mut map_symbols: Vec<SymbolDetails> = Vec::new();
         for i in 0..sym_count {
             if let Ok(sd) = get_symbol_details(symbols, i)
                 && sd.section_index == sec_idx
                 && !sd.name.is_empty()
             {
-                map_count += 1;
+                map_symbols.push(sd);
             }
         }
 
         global.map_section_indices.insert(sec_idx);
 
-        if map_count == 0 {
+        if map_symbols.is_empty() {
             continue;
         }
 
@@ -281,12 +414,59 @@ fn parse_map_sections(
             .data()
             .map_err(|e| UnmarshalError(format!("Cannot read maps section '{sec_name}': {e}")))?;
         let sec_size = sec_data.len();
-        let record_size = sec_size / map_count;
 
-        if record_size == 0 || sec_size % record_size != 0 {
+        // Compute record size from the minimum non-zero symbol size (matching C++).
+        let mut record_size: usize = 0;
+        for sd in &map_symbols {
+            if sd.size > 0 {
+                let sz = sd.size as usize;
+                record_size = if record_size == 0 {
+                    sz
+                } else {
+                    record_size.min(sz)
+                };
+            }
+        }
+        if record_size == 0 {
+            record_size = platform.map_record_size();
+        }
+
+        if record_size < 4 * 4 || record_size % 4 != 0 {
             return Err(UnmarshalError(format!(
                 "Malformed legacy maps section: {sec_name}"
             )));
+        }
+        if sec_size < record_size {
+            return Err(UnmarshalError(format!(
+                "Malformed legacy maps section: {sec_name}"
+            )));
+        }
+
+        let mut map_count = sec_size / record_size;
+        if map_count == 0 {
+            return Err(UnmarshalError(format!(
+                "Malformed legacy maps section: {sec_name}"
+            )));
+        }
+
+        // If section size is not evenly divisible, compute count from symbol extents.
+        if sec_size % record_size != 0 {
+            let mut max_record_end: usize = 0;
+            for sd in &map_symbols {
+                let sym_off = sd.value as usize;
+                if sym_off >= sec_size {
+                    return Err(UnmarshalError(format!(
+                        "Malformed legacy maps section: {sec_name}"
+                    )));
+                }
+                max_record_end = max_record_end.max(sym_off + record_size);
+            }
+            if max_record_end > sec_size {
+                return Err(UnmarshalError(format!(
+                    "Malformed legacy maps section: {sec_name}"
+                )));
+            }
+            map_count = (max_record_end + record_size - 1) / record_size;
         }
 
         let base_index = global.map_descriptors.len();
@@ -446,20 +626,151 @@ fn extract_global_data(
     platform: &mut dyn EbpfPlatform,
     options: &EbpfVerifierOptions,
 ) -> Result<ElfGlobalData, UnmarshalError> {
-    let has_legacy_maps = elf.sections().any(|s| s.name().is_ok_and(is_map_section));
+    // BTF-defined maps take priority when both .BTF and .maps sections exist.
+    let has_btf = elf.section_by_name(".BTF").is_some();
+    let has_btf_maps = has_btf && elf.section_by_name(".maps").is_some();
+    if has_btf_maps {
+        // Try BTF parsing first; fall back to section-based maps if BTF can't be decoded.
+        match parse_btf_section(elf) {
+            Ok(global) => return Ok(global),
+            Err(e) => {
+                eprintln!("BTF map parsing failed, falling back to section-based maps: {e}");
+            }
+        }
+        return parse_map_sections(elf, symbols, sym_count, platform, options);
+    }
 
+    // Fall back to legacy "maps" / "maps/*" / ".maps" / ".maps/*" sections.
+    let has_legacy_maps = elf.sections().any(|s| s.name().is_ok_and(is_map_section));
     if has_legacy_maps {
         return parse_map_sections(elf, symbols, sym_count, platform, options);
     }
 
-    // Only use BTF for maps if there's no legacy maps section
-    let has_btf = elf.section_by_name(".BTF").is_some();
+    // BTF without .maps section (e.g. only global variables).
     if has_btf {
         return parse_btf_section(elf);
     }
 
     // No maps or BTF, but might still have global variables
     Ok(create_global_variable_maps(elf))
+}
+
+// ── Symbol helpers ──────────────────────────────────────────────────
+
+/// Find a function symbol at a given byte offset within a section.
+fn find_function_symbol_at_offset(
+    symbols: &SymbolTable<'_>,
+    sym_count: usize,
+    section_index: usize,
+    byte_offset: u64,
+) -> Option<String> {
+    for i in 0..sym_count {
+        let sd = match get_symbol_details(symbols, i) {
+            Ok(sd) => sd,
+            Err(_) => continue,
+        };
+        if sd.section_index != section_index || sd.sym_type != elf::STT_FUNC || sd.name.is_empty() {
+            continue;
+        }
+        if sd.value == byte_offset {
+            return Some(sd.name);
+        }
+    }
+    None
+}
+
+// ── Reachable CFG span ─────────────────────────────────────────────
+
+/// Compute the span of reachable instructions starting from a program entry point.
+///
+/// Starting from the first instruction, follows jumps, calls, and fallthrough
+/// to determine the actual program span (which may extend beyond what symbol
+/// sizes indicate, e.g., for fall-through subprograms).
+fn compute_reachable_program_span(
+    section_instructions: &[EbpfInst],
+    program_offset: u64,
+    initial_size: u64,
+) -> u64 {
+    use crate::spec::vm_isa::{
+        INST_CALL, INST_CLS_JMP, INST_CLS_JMP32, INST_EXIT, INST_JA, INST_OP_LDDW_IMM,
+    };
+    use std::collections::VecDeque;
+
+    if section_instructions.is_empty() {
+        return initial_size;
+    }
+
+    let inst_size = size_of::<EbpfInst>() as u64;
+    let total = section_instructions.len();
+    let start = (program_offset / inst_size) as usize;
+    let mut initial_end = ((program_offset + initial_size) / inst_size) as usize;
+    if start >= total || initial_end <= start {
+        return initial_size;
+    }
+    initial_end = initial_end.min(total);
+
+    let mut seen = vec![false; total];
+    let mut work = VecDeque::new();
+
+    let mark = |idx: i64, seen: &mut Vec<bool>, work: &mut VecDeque<usize>| {
+        if idx < 0 || idx >= total as i64 {
+            return;
+        }
+        let idx = idx as usize;
+        if !seen[idx] {
+            seen[idx] = true;
+            work.push_back(idx);
+        }
+    };
+
+    mark(start as i64, &mut seen, &mut work);
+    let mut max_reachable = initial_end - 1;
+
+    while let Some(pc) = work.pop_front() {
+        if pc > max_reachable {
+            max_reachable = pc;
+        }
+
+        let inst = &section_instructions[pc];
+        let is_lddw = inst.opcode == INST_OP_LDDW_IMM;
+        let fallthrough = pc + if is_lddw { 2 } else { 1 };
+
+        // LDDW is a two-slot instruction: keep the high slot in range.
+        if is_lddw && pc + 1 < total {
+            mark((pc + 1) as i64, &mut seen, &mut work);
+            if pc + 1 > max_reachable {
+                max_reachable = pc + 1;
+            }
+        }
+
+        let cls = inst.opcode & INST_CLS_MASK;
+        if cls == INST_CLS_JMP || cls == INST_CLS_JMP32 {
+            let op = (inst.opcode >> 4) & 0xf;
+            if op == INST_EXIT {
+                continue;
+            }
+            if op == INST_CALL {
+                if inst.opcode == INST_OP_CALL && inst.src_raw() == INST_CALL_LOCAL {
+                    let target = pc as i64 + 1 + i64::from(inst.imm);
+                    mark(target, &mut seen, &mut work);
+                }
+                mark(fallthrough as i64, &mut seen, &mut work);
+                continue;
+            }
+
+            let target = pc as i64 + 1 + i64::from(inst.offset);
+            mark(target, &mut seen, &mut work);
+            if op != INST_JA {
+                mark(fallthrough as i64, &mut seen, &mut work);
+            }
+            continue;
+        }
+
+        mark(fallthrough as i64, &mut seen, &mut work);
+    }
+
+    let span_end = initial_end.max(max_reachable + 1);
+    ((span_end - start) as u64) * inst_size
 }
 
 // ── Program name and size from symbols ──────────────────────────────
@@ -496,6 +807,11 @@ fn get_program_name_and_size(
     (program_name, size)
 }
 
+struct UnresolvedSymbolError {
+    section: String,
+    message: String,
+}
+
 // ── ProgramReader ───────────────────────────────────────────────────
 
 struct ProgramReader<'a> {
@@ -512,7 +828,7 @@ struct ProgramReader<'a> {
 
     raw_programs: Vec<RawProgram>,
     function_relocations: Vec<FunctionRelocation>,
-    unresolved_symbol_errors: Vec<String>,
+    unresolved_symbol_errors: Vec<UnresolvedSymbolError>,
     builtin_offsets_for_current_program: BTreeSet<usize>,
 }
 
@@ -630,11 +946,85 @@ impl<'a> ProgramReader<'a> {
         &mut self,
         symbol_name: &str,
         symbol_section_index: usize,
+        symbol_type: u8,
         instructions: &mut [EbpfInst],
         location: usize,
         sym_index: usize,
         addend: i64,
     ) -> Result<bool, UnmarshalError> {
+        // Resolve known extern symbols (SHN_UNDEF).
+        // Known constants (LINUX_KERNEL_VERSION, CONFIG_HZ, etc.) are rewritten
+        // from LDDW+LDX to MOV-immediate.  Unknown extern addresses are zeroed.
+        if symbol_section_index == elf::SHN_UNDEF as usize {
+            if let Some(value) = resolve_known_linux_extern_symbol(symbol_name) {
+                if rewrite_extern_constant_load(instructions, location, value) {
+                    return Ok(true);
+                }
+            }
+            if rewrite_extern_address_load_to_zero(instructions, location) {
+                return Ok(true);
+            }
+        }
+
+        // Handle local function calls.
+        // Builtins such as memset/memcpy may be encoded as local calls
+        // against undefined symbols; those are rewritten to static helpers
+        // and gated via ProgramInfo::builtin_call_offsets.
+        let inst = &instructions[location];
+        if inst.opcode == INST_OP_CALL && inst.src_raw() == INST_CALL_LOCAL {
+            if symbol_section_index == elf::SHN_UNDEF as usize {
+                if let Some(builtin_id) = self.platform.resolve_builtin_call(symbol_name) {
+                    instructions[location].set_src(INST_CALL_STATIC_HELPER);
+                    instructions[location].imm = builtin_id;
+                    if builtin_id < 0 {
+                        self.builtin_offsets_for_current_program.insert(location);
+                    }
+                    return Ok(true);
+                }
+                return Ok(false);
+            }
+
+            // For section-type symbols with empty names, resolve the actual
+            // function name from the symbol table at the target offset.
+            let mut target_function_name = symbol_name.to_string();
+            if target_function_name.is_empty() && symbol_type == elf::STT_SECTION {
+                let target_byte_offset = if addend != 0 {
+                    addend
+                } else {
+                    (i64::from(instructions[location].imm) + 1) * size_of::<EbpfInst>() as i64
+                };
+                if target_byte_offset < 0
+                    || target_byte_offset as u64 % size_of::<EbpfInst>() as u64 != 0
+                {
+                    return Err(UnmarshalError(
+                        "Invalid section-local call target offset".into(),
+                    ));
+                }
+                if let Some(name) = find_function_symbol_at_offset(
+                    self.symbols,
+                    self.sym_count,
+                    symbol_section_index,
+                    target_byte_offset as u64,
+                ) {
+                    target_function_name = name;
+                }
+            }
+
+            if !target_function_name.is_empty()
+                && !self.has_function_relocation(self.raw_programs.len(), location)
+            {
+                let prog_index = self.raw_programs.len();
+                self.function_relocations.push(FunctionRelocation {
+                    prog_index,
+                    source_offset: location,
+                    relocation_entry_index: sym_index,
+                    target_section_index: symbol_section_index,
+                    target_function_name,
+                });
+            }
+            return Ok(true);
+        }
+
         // Handle empty symbol names for global variable sections.
         if symbol_name.is_empty() {
             if self
@@ -655,31 +1045,6 @@ impl<'a> ProgramReader<'a> {
                 instructions[location].imm = self.relocate_global_variable(&sec_name)?;
                 return Ok(true);
             }
-            return Ok(true);
-        }
-
-        let inst = &instructions[location];
-
-        // Handle local function calls.
-        // Builtins such as memset/memcpy may be encoded as local calls
-        // against undefined symbols; those are rewritten to static helpers
-        // and gated via ProgramInfo::builtin_call_offsets.
-        if inst.opcode == INST_OP_CALL && inst.src_raw() == INST_CALL_LOCAL {
-            if symbol_section_index == elf::SHN_UNDEF as usize
-                && let Some(builtin_id) = self.platform.resolve_builtin_call(symbol_name)
-            {
-                instructions[location].set_src(INST_CALL_STATIC_HELPER);
-                instructions[location].imm = builtin_id;
-                self.builtin_offsets_for_current_program.insert(location);
-                return Ok(true);
-            }
-            let prog_index = self.raw_programs.len();
-            self.function_relocations.push(FunctionRelocation {
-                prog_index,
-                source_offset: location,
-                relocation_entry_index: sym_index,
-                target_function_name: symbol_name.to_string(),
-            });
             return Ok(true);
         }
 
@@ -715,12 +1080,6 @@ impl<'a> ProgramReader<'a> {
 
             let sec_name = self.section_name_by_index(symbol_section_index)?;
             instructions[location].imm = self.relocate_global_variable(&sec_name)?;
-            return Ok(true);
-        }
-
-        // Legacy fallback: zero out __config_* symbols.
-        if symbol_name.starts_with("__config_") {
-            instructions[location].imm = 0;
             return Ok(true);
         }
 
@@ -811,15 +1170,96 @@ impl<'a> ProgramReader<'a> {
         if !self.try_reloc(
             &sd.name,
             sd.section_index,
+            sd.sym_type,
             instructions,
             loc,
             sym_idx,
             addend,
         )? {
-            self.unresolved_symbol_errors.push(format!(
-                "Unresolved external symbol {} in section {} at location {}",
-                sd.name, section_name, loc,
-            ));
+            self.unresolved_symbol_errors.push(UnresolvedSymbolError {
+                section: section_name.to_string(),
+                message: format!(
+                    "Unresolved external symbol {} in section {} at location {}",
+                    if sd.name.is_empty() {
+                        "<anonymous>"
+                    } else {
+                        &sd.name
+                    },
+                    section_name,
+                    loc,
+                ),
+            });
+        }
+        Ok(())
+    }
+
+    // ── Function relocation helpers ────────────────────────────────
+
+    /// Check whether a function relocation has already been recorded for a
+    /// given (prog_index, source_offset) pair.
+    fn has_function_relocation(&self, prog_index: usize, source_offset: usize) -> bool {
+        self.function_relocations
+            .iter()
+            .any(|r| r.prog_index == prog_index && r.source_offset == source_offset)
+    }
+
+    /// Scan a program for CALL instructions with local source that were not
+    /// already resolved by relocations, and record synthetic function
+    /// relocations for them.
+    fn enqueue_synthetic_local_calls(
+        &mut self,
+        instructions: &[EbpfInst],
+        section_index: usize,
+        section_size: u64,
+        program_offset: u64,
+    ) -> Result<(), UnmarshalError> {
+        use crate::spec::vm_isa::INST_CALL_LOCAL;
+
+        let inst_size = size_of::<EbpfInst>() as i64;
+        let section_insn_count = section_size as i64 / inst_size;
+        let program_start = program_offset as i64 / inst_size;
+        let program_end = program_start + instructions.len() as i64;
+        let prog_index = self.raw_programs.len();
+
+        for (loc, inst) in instructions.iter().enumerate() {
+            if !(inst.opcode == INST_OP_CALL && inst.src_raw() == INST_CALL_LOCAL) {
+                continue;
+            }
+            if self.has_function_relocation(prog_index, loc) {
+                continue;
+            }
+
+            let target = program_start + loc as i64 + 1 + i64::from(inst.imm);
+            // Skip targets within the current program (already local).
+            if target >= program_start && target < program_end {
+                continue;
+            }
+            if target < 0 || target >= section_insn_count {
+                return Err(UnmarshalError(
+                    "Local call target out of section bounds".into(),
+                ));
+            }
+
+            let target_offset = (target * inst_size) as u64;
+            let target_name = find_function_symbol_at_offset(
+                self.symbols,
+                self.sym_count,
+                section_index,
+                target_offset,
+            )
+            .ok_or_else(|| {
+                UnmarshalError(format!(
+                    "Subprogram not found at section offset {target_offset}"
+                ))
+            })?;
+
+            self.function_relocations.push(FunctionRelocation {
+                prog_index,
+                source_offset: loc,
+                relocation_entry_index: 0,
+                target_section_index: section_index,
+                target_function_name: target_name,
+            });
         }
         Ok(())
     }
@@ -1007,7 +1447,17 @@ impl<'a> ProgramReader<'a> {
         }
 
         for prog_idx in 0..prog_count {
-            self.resolve_subprograms_for(prog_idx, &prog_lookup, &mut resolved, &mut visiting)?;
+            match self.resolve_subprograms_for(prog_idx, &prog_lookup, &mut resolved, &mut visiting)
+            {
+                Ok(()) => {}
+                Err(e)
+                    if !self.desired_section.is_empty()
+                        && self.raw_programs[prog_idx].section_name != self.desired_section =>
+                {
+                    // Silently ignore subprogram errors for non-desired sections
+                }
+                Err(e) => return Err(e),
+            }
         }
         Ok(())
     }
@@ -1042,7 +1492,7 @@ impl<'a> ProgramReader<'a> {
             .map(|r| {
                 (
                     r.source_offset,
-                    r.relocation_entry_index,
+                    r.target_section_index,
                     r.target_function_name.clone(),
                 )
             })
@@ -1050,14 +1500,13 @@ impl<'a> ProgramReader<'a> {
 
         let mut subprogram_offsets: BTreeMap<String, usize> = BTreeMap::new();
 
-        for (source_offset, reloc_entry_index, target_name) in &relocs_for_prog {
+        for (source_offset, target_section_index, target_name) in &relocs_for_prog {
             if !subprogram_offsets.contains_key(target_name) {
                 let current_len = self.raw_programs[prog_idx].prog.len();
                 subprogram_offsets.insert(target_name.clone(), current_len);
 
-                let sd = get_symbol_details(self.symbols, *reloc_entry_index)?;
-                let sub_sec_name = self.section_name_by_index(sd.section_index)?;
-                let sub_key = (sub_sec_name, sd.name.clone());
+                let sub_sec_name = self.section_name_by_index(*target_section_index)?;
+                let sub_key = (sub_sec_name, target_name.clone());
                 let sub_idx = prog_lookup.get(&sub_key).copied();
 
                 if let Some(sub_idx) = sub_idx {
@@ -1092,7 +1541,7 @@ impl<'a> ProgramReader<'a> {
                         .prog
                         .extend_from_slice(&sub_instructions);
                 } else {
-                    let err_msg = format!("Subprogram not found: {}", sd.name);
+                    let err_msg = format!("Subprogram not found: {}", target_name);
                     if self.raw_programs[prog_idx].section_name == self.desired_section {
                         return Err(UnmarshalError(err_msg));
                     }
@@ -1132,11 +1581,13 @@ impl<'a> ProgramReader<'a> {
 
             let prog_type = self.platform.get_program_type(sec_name, self.path);
             let reloc_sh = self.find_relocation_section_header(sec_name);
+            // Parse all section instructions for reachable-span computation.
+            let section_instructions = bytes_to_instructions(sec_data)?;
 
             let mut offset: u64 = 0;
             while offset < sec_size {
                 self.builtin_offsets_for_current_program.clear();
-                let (name, size) = get_program_name_and_size(
+                let (name, initial_size) = get_program_name_and_size(
                     sec_idx,
                     sec_name,
                     sec_size,
@@ -1145,7 +1596,11 @@ impl<'a> ProgramReader<'a> {
                     self.sym_count,
                 );
 
-                let end = offset + size;
+                // Expand the program span to cover all reachable instructions.
+                let extracted_size =
+                    compute_reachable_program_span(&section_instructions, offset, initial_size);
+
+                let end = offset + extracted_size;
                 if end > sec_size {
                     return Err(UnmarshalError(format!(
                         "Program '{name}' extends past section boundary"
@@ -1155,8 +1610,17 @@ impl<'a> ProgramReader<'a> {
                     bytes_to_instructions(&sec_data[offset as usize..end as usize])?;
 
                 if let Some(reloc_sh) = reloc_sh {
-                    self.process_relocations(&mut instructions, sec_name, offset, size, reloc_sh)?;
+                    self.process_relocations(
+                        &mut instructions,
+                        sec_name,
+                        offset,
+                        extracted_size,
+                        reloc_sh,
+                    )?;
                 }
+
+                // Discover local calls not covered by explicit relocation entries.
+                self.enqueue_synthetic_local_calls(&instructions, sec_idx, sec_size, offset)?;
 
                 self.raw_programs.push(RawProgram {
                     filename: self.path.to_string(),
@@ -1175,21 +1639,35 @@ impl<'a> ProgramReader<'a> {
                     },
                 });
 
-                offset += size;
+                // Advance by the symbol-derived size, not the reachable span.
+                // The reachable span may extend beyond the symbol boundary
+                // (e.g. for local calls to adjacent functions), but the next
+                // program starts at the next symbol boundary.
+                offset += initial_size;
             }
         }
 
         // Process CO-RE relocations if .BTF section exists
         if let Some(btf_section) = self.elf.section_by_name(".BTF")
             && let Ok(btf_bytes) = btf_section.data()
-            && let Ok(btf_data) = BtfTypeData::new(btf_bytes)
         {
+            let btf_data = BtfTypeData::new(btf_bytes).map_err(|e| {
+                UnmarshalError(format!(
+                    "Unsupported or invalid CO-RE/BTF relocation data: {e}"
+                ))
+            })?;
             self.process_core_relocations(&btf_data, btf_bytes)?;
         }
 
-        if !self.unresolved_symbol_errors.is_empty() {
-            for err in &self.unresolved_symbol_errors {
-                eprintln!("{err}");
+        let has_relevant = self
+            .unresolved_symbol_errors
+            .iter()
+            .any(|e| self.desired_section.is_empty() || e.section == self.desired_section);
+        if has_relevant {
+            for e in &self.unresolved_symbol_errors {
+                if self.desired_section.is_empty() || e.section == self.desired_section {
+                    eprintln!("{}", e.message);
+                }
             }
             return Err(UnmarshalError("Unresolved symbols found.".into()));
         }
@@ -1256,34 +1734,33 @@ fn parse_core_access_string(s: &str) -> Result<Vec<u32>, UnmarshalError> {
     Ok(indices)
 }
 
-/// Unwrap typedef/const/volatile/restrict to reach the underlying type.
+/// Unwrap typedef/const/volatile/restrict/type_tag to reach the underlying type.
 fn unwrap_btf_type(btf_data: &BtfTypeData, mut type_id: u32) -> Result<u32, UnmarshalError> {
+    use crate::btf::{BtfKind, BtfKindIndex};
     for _ in 0..256 {
-        let kind_index = btf_data.get_kind_index(type_id)?;
-        match kind_index {
-            crate::btf::BtfKindIndex::Typedef => {
-                if let crate::btf::BtfKind::Typedef { type_id: inner, .. } =
-                    btf_data.get_kind(type_id)?
-                {
+        match btf_data.get_kind_index(type_id)? {
+            BtfKindIndex::Typedef => {
+                if let BtfKind::Typedef { type_id: inner, .. } = btf_data.get_kind(type_id)? {
                     type_id = *inner;
                 }
             }
-            crate::btf::BtfKindIndex::Const => {
-                if let crate::btf::BtfKind::Const { type_id: inner } = btf_data.get_kind(type_id)? {
+            BtfKindIndex::Const => {
+                if let BtfKind::Const { type_id: inner } = btf_data.get_kind(type_id)? {
                     type_id = *inner;
                 }
             }
-            crate::btf::BtfKindIndex::Volatile => {
-                if let crate::btf::BtfKind::Volatile { type_id: inner } =
-                    btf_data.get_kind(type_id)?
-                {
+            BtfKindIndex::Volatile => {
+                if let BtfKind::Volatile { type_id: inner } = btf_data.get_kind(type_id)? {
                     type_id = *inner;
                 }
             }
-            crate::btf::BtfKindIndex::Restrict => {
-                if let crate::btf::BtfKind::Restrict { type_id: inner } =
-                    btf_data.get_kind(type_id)?
-                {
+            BtfKindIndex::Restrict => {
+                if let BtfKind::Restrict { type_id: inner } = btf_data.get_kind(type_id)? {
+                    type_id = *inner;
+                }
+            }
+            BtfKindIndex::TypeTag => {
+                if let BtfKind::TypeTag { type_id: inner, .. } = btf_data.get_kind(type_id)? {
                     type_id = *inner;
                 }
             }
@@ -1295,6 +1772,140 @@ fn unwrap_btf_type(btf_data: &BtfTypeData, mut type_id: u32) -> Result<u32, Unma
     ))
 }
 
+// ── BTF member offset encoding helpers ──────────────────────────────
+
+/// Extract the bit offset from a raw BTF member offset encoding.
+/// The lower 24 bits encode the bit offset.
+fn btf_member_bit_offset(raw: u32) -> u32 {
+    raw & 0x00ff_ffff
+}
+
+/// Extract the bitfield size from a raw BTF member offset encoding.
+/// Bits 24-31 encode the bitfield size (0 = not a bitfield).
+fn btf_member_bitfield_size(raw: u32) -> u32 {
+    (raw >> 24) & 0xff
+}
+
+// ── CO-RE field resolution ──────────────────────────────────────────
+
+/// Result of resolving a CO-RE field access path.
+struct CoreFieldResolution {
+    type_id: u32,
+    offset_bits: u64,
+    /// Raw BTF member offset encoding of the last struct/union member accessed.
+    member_offset_encoding: Option<u32>,
+}
+
+/// Walk a CO-RE access string to resolve a field within a BTF type.
+fn resolve_core_field(
+    btf_data: &BtfTypeData,
+    type_id: u32,
+    access_string: &str,
+) -> Result<CoreFieldResolution, UnmarshalError> {
+    use crate::btf::{BtfKind, BtfKindIndex};
+    let mut indices = parse_core_access_string(access_string)?;
+    // Clang/libbpf encode root type with a leading "0" accessor.
+    if !indices.is_empty() && indices[0] == 0 {
+        indices.remove(0);
+    }
+    let mut result = CoreFieldResolution {
+        type_id,
+        offset_bits: 0,
+        member_offset_encoding: None,
+    };
+
+    for &index in &indices {
+        result.type_id = unwrap_btf_type(btf_data, result.type_id)?;
+        match btf_data.get_kind_index(result.type_id)? {
+            BtfKindIndex::Struct | BtfKindIndex::Union => {
+                let members = match btf_data.get_kind(result.type_id)? {
+                    BtfKind::Struct { members, .. } | BtfKind::Union { members, .. } => members,
+                    _ => unreachable!(),
+                };
+                if (index as usize) >= members.len() {
+                    return Err(UnmarshalError(format!(
+                        "CO-RE: member index {index} out of bounds (size {}) for access path {access_string}",
+                        members.len()
+                    )));
+                }
+                let member = &members[index as usize];
+                result.offset_bits +=
+                    u64::from(btf_member_bit_offset(member.offset_from_start_in_bits));
+                result.member_offset_encoding = Some(member.offset_from_start_in_bits);
+                result.type_id = member.type_id;
+            }
+            BtfKindIndex::Array => {
+                if let BtfKind::Array {
+                    element_type,
+                    count_of_elements,
+                    ..
+                } = btf_data.get_kind(result.type_id)?
+                {
+                    if index >= *count_of_elements {
+                        return Err(UnmarshalError(format!(
+                            "CO-RE: array index {index} out of bounds (size {count_of_elements}) for access path {access_string}"
+                        )));
+                    }
+                    let elem_size = btf_data.get_size(*element_type)?;
+                    result.offset_bits += u64::from(index) * u64::from(elem_size) * 8;
+                    result.member_offset_encoding = None;
+                    result.type_id = *element_type;
+                }
+            }
+            _ => {
+                return Err(UnmarshalError(
+                    "CO-RE: indexing into non-aggregate type".into(),
+                ));
+            }
+        }
+    }
+
+    result.type_id = unwrap_btf_type(btf_data, result.type_id)?;
+    Ok(result)
+}
+
+/// Compute the effective bit width of a resolved CO-RE field.
+fn core_field_bit_width(
+    btf_data: &BtfTypeData,
+    field: &CoreFieldResolution,
+) -> Result<u32, UnmarshalError> {
+    use crate::btf::{BtfKind, BtfKindIndex};
+    // Check for explicit bitfield size in the member encoding.
+    if let Some(encoding) = field.member_offset_encoding {
+        let bf_size = btf_member_bitfield_size(encoding);
+        if bf_size != 0 {
+            return Ok(bf_size);
+        }
+    }
+    if btf_data.get_kind_index(field.type_id)? == BtfKindIndex::Int {
+        if let BtfKind::Int {
+            field_width_in_bits,
+            size_in_bytes,
+            ..
+        } = btf_data.get_kind(field.type_id)?
+        {
+            return Ok(if *field_width_in_bits != 0 {
+                u32::from(*field_width_in_bits)
+            } else {
+                *size_in_bytes * 8
+            });
+        }
+    }
+    Ok(btf_data.get_size(field.type_id)? * 8)
+}
+
+/// Check whether a CO-RE field byte offset relocation should patch
+/// the instruction's `offset` field (for LDX/ST/STX with MEM/MEMSX/ATOMIC mode).
+fn core_field_offset_uses_offset_field(inst: &EbpfInst) -> bool {
+    use crate::spec::vm_isa::{INST_CLS_ST, INST_CLS_STX, INST_MODE_ATOMIC};
+    let cls = inst.opcode & INST_CLS_MASK;
+    if cls != INST_CLS_LDX && cls != INST_CLS_ST && cls != INST_CLS_STX {
+        return false;
+    }
+    let mode = inst.opcode & 0xe0; // INST_MODE_MASK
+    mode == INST_MODE_MEM || mode == INST_MODE_MEMSX || mode == INST_MODE_ATOMIC
+}
+
 /// Apply a single CO-RE relocation to an instruction.
 fn apply_core_relocation(
     inst: &mut EbpfInst,
@@ -1304,55 +1915,140 @@ fn apply_core_relocation(
     access_str_off: u32,
     kind_raw: u32,
 ) -> Result<(), UnmarshalError> {
+    use crate::btf::{BtfKind, BtfKindIndex};
+
+    // Resolve field lazily — only computed for FIELD_* kinds.
+    let resolve_field = || -> Result<CoreFieldResolution, UnmarshalError> {
+        let access_string = crate::btf::parse::read_btf_string(btf_section_data, access_str_off)?;
+        resolve_core_field(btf_data, type_id, &access_string)
+    };
+
     match kind_raw {
         core_relo_kind::FIELD_BYTE_OFFSET => {
-            let access_string =
-                crate::btf::parse::read_btf_string(btf_section_data, access_str_off)?;
-            let indices = parse_core_access_string(&access_string)?;
-            let mut current_type_id = type_id;
-            let mut final_offset_bits: u32 = 0;
-
-            for &index in &indices {
-                current_type_id = unwrap_btf_type(btf_data, current_type_id)?;
-                let kind_index = btf_data.get_kind_index(current_type_id)?;
-
-                match kind_index {
-                    crate::btf::BtfKindIndex::Struct => {
-                        if let crate::btf::BtfKind::Struct { members, .. } =
-                            btf_data.get_kind(current_type_id)?
-                        {
-                            if (index as usize) >= members.len() {
-                                return Err(UnmarshalError(
-                                    "CO-RE: member index out of bounds".into(),
-                                ));
-                            }
-                            final_offset_bits += members[index as usize].offset_from_start_in_bits;
-                            current_type_id = members[index as usize].type_id;
-                        }
-                    }
-                    crate::btf::BtfKindIndex::Array => {
-                        if let crate::btf::BtfKind::Array { element_type, .. } =
-                            btf_data.get_kind(current_type_id)?
-                        {
-                            let elem_size = btf_data.get_size(*element_type)?;
-                            final_offset_bits += index * elem_size * 8;
-                            current_type_id = *element_type;
-                        }
-                    }
-                    _ => {
-                        return Err(UnmarshalError(
-                            "CO-RE: indexing into non-aggregate type".into(),
-                        ));
+            let field = resolve_field()?;
+            let byte_offset = (field.offset_bits / 8) as i64;
+            if core_field_offset_uses_offset_field(inst) {
+                if byte_offset < i64::from(i16::MIN) || byte_offset > i64::from(i16::MAX) {
+                    return Err(UnmarshalError(
+                        "CO-RE field offset does not fit instruction offset field".into(),
+                    ));
+                }
+                inst.offset = byte_offset as i16;
+            } else {
+                inst.imm = byte_offset as i32;
+            }
+        }
+        core_relo_kind::FIELD_BYTE_SIZE => {
+            let field = resolve_field()?;
+            inst.imm = btf_data.get_size(field.type_id)? as i32;
+        }
+        core_relo_kind::FIELD_EXISTS => {
+            inst.imm = 1;
+        }
+        core_relo_kind::FIELD_SIGNED => {
+            let field = resolve_field()?;
+            inst.imm = match btf_data.get_kind_index(field.type_id)? {
+                BtfKindIndex::Int => {
+                    if let BtfKind::Int { is_signed, .. } = btf_data.get_kind(field.type_id)? {
+                        i32::from(*is_signed)
+                    } else {
+                        0
                     }
                 }
+                BtfKindIndex::Enum => {
+                    if let BtfKind::Enum { is_signed, .. } = btf_data.get_kind(field.type_id)? {
+                        i32::from(*is_signed)
+                    } else {
+                        0
+                    }
+                }
+                BtfKindIndex::Enum64 => {
+                    if let BtfKind::Enum64 { is_signed, .. } = btf_data.get_kind(field.type_id)? {
+                        i32::from(*is_signed)
+                    } else {
+                        0
+                    }
+                }
+                _ => 0,
+            };
+        }
+        core_relo_kind::FIELD_LSHIFT_U64 => {
+            let field = resolve_field()?;
+            let bit_width = core_field_bit_width(btf_data, &field)?;
+            let bit_offset_in_byte = (field.offset_bits % 8) as u32;
+            if bit_width == 0 || bit_width > 64 || bit_offset_in_byte + bit_width > 64 {
+                return Err(UnmarshalError(
+                    "CO-RE field bit width exceeds 64 bits".into(),
+                ));
             }
-            inst.imm = (final_offset_bits / 8) as i32;
+            inst.imm = (64 - (bit_offset_in_byte + bit_width)) as i32;
+        }
+        core_relo_kind::FIELD_RSHIFT_U64 => {
+            let field = resolve_field()?;
+            let bit_width = core_field_bit_width(btf_data, &field)?;
+            if bit_width == 0 || bit_width > 64 {
+                return Err(UnmarshalError(
+                    "CO-RE field bit width exceeds 64 bits".into(),
+                ));
+            }
+            inst.imm = (64 - bit_width) as i32;
         }
         core_relo_kind::TYPE_ID_LOCAL | core_relo_kind::TYPE_ID_TARGET => {
-            inst.imm = type_id as i32;
+            inst.imm = unwrap_btf_type(btf_data, type_id)? as i32;
+        }
+        core_relo_kind::TYPE_EXISTS | core_relo_kind::TYPE_MATCHES => {
+            // Static verifier without target-kernel BTF: existence/match folds to true.
+            inst.imm = 1;
         }
         core_relo_kind::TYPE_SIZE => {
-            inst.imm = btf_data.get_size(type_id)? as i32;
+            inst.imm = btf_data.get_size(unwrap_btf_type(btf_data, type_id)?)? as i32;
+        }
+        core_relo_kind::ENUMVAL_EXISTS | core_relo_kind::ENUMVAL_VALUE => {
+            let as_str = crate::btf::parse::read_btf_string(btf_section_data, access_str_off)?;
+            let indices = parse_core_access_string(&as_str)?;
+            if indices.is_empty() {
+                return Err(UnmarshalError(
+                    "CO-RE enum relocation missing enum value index".into(),
+                ));
+            }
+            let enum_member_index = *indices.last().unwrap();
+            let enum_type_id = unwrap_btf_type(btf_data, type_id)?;
+
+            match btf_data.get_kind_index(enum_type_id)? {
+                BtfKindIndex::Enum => {
+                    if let BtfKind::Enum { members, .. } = btf_data.get_kind(enum_type_id)? {
+                        if (enum_member_index as usize) >= members.len() {
+                            return Err(UnmarshalError(
+                                "CO-RE enum member index out of bounds".into(),
+                            ));
+                        }
+                        inst.imm = if kind_raw == core_relo_kind::ENUMVAL_EXISTS {
+                            1
+                        } else {
+                            members[enum_member_index as usize].value as i32
+                        };
+                    }
+                }
+                BtfKindIndex::Enum64 => {
+                    if let BtfKind::Enum64 { members, .. } = btf_data.get_kind(enum_type_id)? {
+                        if (enum_member_index as usize) >= members.len() {
+                            return Err(UnmarshalError(
+                                "CO-RE enum64 member index out of bounds".into(),
+                            ));
+                        }
+                        inst.imm = if kind_raw == core_relo_kind::ENUMVAL_EXISTS {
+                            1
+                        } else {
+                            members[enum_member_index as usize].value as i32
+                        };
+                    }
+                }
+                _ => {
+                    return Err(UnmarshalError(
+                        "CO-RE enum relocation target is not enum/enum64".into(),
+                    ));
+                }
+            }
         }
         _ => {
             return Err(UnmarshalError(format!(
@@ -1497,8 +2193,9 @@ mod tests {
     fn is_map_section_basic() {
         assert!(is_map_section("maps"));
         assert!(is_map_section("maps/my_map"));
+        assert!(is_map_section(".maps"));
+        assert!(is_map_section(".maps/inner"));
         assert!(!is_map_section("map"));
-        assert!(!is_map_section(".maps"));
         assert!(!is_map_section(""));
     }
 

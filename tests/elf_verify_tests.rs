@@ -113,6 +113,107 @@ fn verify_program(
     panic!("Program '{program_name}' not found in section '{section}'");
 }
 
+/// Like `verify_section` but returns false on any error (load, unmarshal, CFG, analysis).
+/// Used by reject tests where errors count as rejections.
+fn try_verify_section(path: &str, section: &str, opts: &EbpfVerifierOptions) -> bool {
+    let resolved_path = if let Some(rel) = path.strip_prefix("ebpf-samples/") {
+        path_config::upstream_ebpf_sample_path(rel)
+    } else {
+        path.to_string()
+    };
+    let mut platform = LinuxPlatform::new();
+    let raw_progs =
+        match elf_loader::read_elf_file(&resolved_path, section, "", opts, &mut platform) {
+            Ok(p) => p,
+            Err(_) => return false,
+        };
+    if raw_progs.len() != 1 {
+        return false;
+    }
+    let raw_prog = &raw_progs[0];
+
+    platform.map_descriptors = raw_prog.info.map_descriptors.clone();
+    platform.set_program_type(&raw_prog.info.program_type);
+
+    let info = &raw_prog.info;
+    let insts = &raw_prog.prog;
+
+    let mut notes = Vec::new();
+    let inst_seq = match unmarshal::unmarshal(insts, &mut notes, info, &platform, opts) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+
+    let program = match Program::from_sequence(&inst_seq, info, &platform, opts) {
+        Ok(p) => p,
+        Err(_) => return false,
+    };
+
+    let ctx = DomainContext {
+        program_info: info,
+        options: opts,
+        platform: &platform,
+    };
+    let mut registry = VariableRegistry::new();
+    let result = fwd_analyzer::analyze(&program, &ctx, &mut registry);
+    !result.failed
+}
+
+/// Like `verify_program` but returns false on any error.
+fn try_verify_program(
+    path: &str,
+    section: &str,
+    program_name: &str,
+    expected_count: usize,
+    opts: &EbpfVerifierOptions,
+) -> bool {
+    let resolved_path = if let Some(rel) = path.strip_prefix("ebpf-samples/") {
+        path_config::upstream_ebpf_sample_path(rel)
+    } else {
+        path.to_string()
+    };
+    let mut platform = LinuxPlatform::new();
+    let raw_progs =
+        match elf_loader::read_elf_file(&resolved_path, section, "", opts, &mut platform) {
+            Ok(p) => p,
+            Err(_) => return false,
+        };
+    if raw_progs.len() != expected_count {
+        return false;
+    }
+
+    for raw_prog in &raw_progs {
+        if expected_count == 1 || raw_prog.function_name == program_name {
+            platform.map_descriptors = raw_prog.info.map_descriptors.clone();
+            platform.set_program_type(&raw_prog.info.program_type);
+
+            let info = &raw_prog.info;
+            let insts = &raw_prog.prog;
+
+            let mut notes = Vec::new();
+            let inst_seq = match unmarshal::unmarshal(insts, &mut notes, info, &platform, opts) {
+                Ok(s) => s,
+                Err(_) => return false,
+            };
+
+            let program = match Program::from_sequence(&inst_seq, info, &platform, opts) {
+                Ok(p) => p,
+                Err(_) => return false,
+            };
+
+            let ctx = DomainContext {
+                program_info: info,
+                options: opts,
+                platform: &platform,
+            };
+            let mut registry = VariableRegistry::new();
+            let result = fwd_analyzer::analyze(&program, &ctx, &mut registry);
+            return !result.failed;
+        }
+    }
+    false
+}
+
 fn default_opts() -> EbpfVerifierOptions {
     EbpfVerifierOptions {
         mock_map_fds: true,
@@ -2662,6 +2763,2668 @@ fn fail_cilium_examples_uretprobe_bpf_x86_bpfel() {
         "Expected cilium-examples uretprobe_bpf_x86_bpfel.o to pass (known imprecision)"
     );
 }
+
+// ============================================================================
+// Additional macros for reject, skip, load-reject, and program-reject tests
+// ============================================================================
+
+/// Generate a test that verifies a section should be rejected.
+/// Uses `try_verify_section` so that errors (load/unmarshal/CFG) also count as rejections.
+macro_rules! verify_section_reject {
+    ($name:ident, $dir:expr, $file:expr, $section:expr) => {
+        #[test]
+        fn $name() {
+            assert!(
+                !try_verify_section(
+                    &format!("ebpf-samples/{}/{}", $dir, $file),
+                    $section,
+                    &default_opts()
+                ),
+                "Expected {} {} {} to be rejected",
+                $dir,
+                $file,
+                $section
+            );
+        }
+    };
+}
+
+/// Generate a test for a specific program in a multi-program section (reject).
+/// Uses `try_verify_program` so that errors also count as rejections.
+macro_rules! verify_program_reject {
+    ($name:ident, $dir:expr, $file:expr, $section:expr, $program:expr, $count:expr) => {
+        #[test]
+        fn $name() {
+            assert!(
+                !try_verify_program(
+                    &format!("ebpf-samples/{}/{}", $dir, $file),
+                    $section,
+                    $program,
+                    $count,
+                    &default_opts()
+                ),
+                "Expected {} {} {} {} to be rejected",
+                $dir,
+                $file,
+                $section,
+                $program
+            );
+        }
+    };
+}
+
+/// Generate a test that loading should fail (panic during read_elf_file).
+macro_rules! verify_section_reject_load {
+    ($name:ident, $dir:expr, $file:expr, $section:expr) => {
+        #[test]
+        fn $name() {
+            let mut platform = LinuxPlatform::new();
+            let opts = default_opts();
+            let result = elf_loader::read_elf_file(
+                &path_config::upstream_ebpf_sample_path(&format!("{}/{}", $dir, $file)),
+                $section,
+                "",
+                &opts,
+                &mut platform,
+            );
+            assert!(
+                result.is_err(),
+                "Expected load rejection for {} {} {}",
+                $dir,
+                $file,
+                $section
+            );
+        }
+    };
+}
+
+/// Generate a skip test (known timeout or algorithmic limitation).
+macro_rules! verify_section_skip {
+    ($name:ident, $dir:expr, $file:expr, $section:expr, $reason:expr) => {
+        #[test]
+        #[ignore = $reason]
+        fn $name() {
+            assert!(
+                verify_section(
+                    &format!("ebpf-samples/{}/{}", $dir, $file),
+                    $section,
+                    &default_opts()
+                ),
+                "Expected {} {} {} to pass (skipped: {})",
+                $dir,
+                $file,
+                $section,
+                $reason
+            );
+        }
+    };
+}
+
+/// Generate a skip test for a program (known timeout or algorithmic limitation).
+macro_rules! verify_program_skip {
+    ($name:ident, $dir:expr, $file:expr, $section:expr, $program:expr, $count:expr, $reason:expr) => {
+        #[test]
+        #[ignore = $reason]
+        fn $name() {
+            assert!(
+                verify_program(
+                    &format!("ebpf-samples/{}/{}", $dir, $file),
+                    $section,
+                    $program,
+                    $count,
+                    &default_opts()
+                ),
+                "Expected {} {} {} {} to pass (skipped: {})",
+                $dir,
+                $file,
+                $section,
+                $program,
+                $reason
+            );
+        }
+    };
+}
+
+// ============================================================================
+// build/ additional tests (new in upstream)
+// ============================================================================
+
+verify_section_pass!(verify_build_bounded_loop, "build", "bounded_loop.o", "test");
+verify_section_pass!(verify_build_bpf2bpf_test, "build", "bpf2bpf.o", "test");
+verify_section_pass!(verify_build_cpumap, "build", "cpumap.o", "xdp");
+verify_section_pass!(verify_build_devmap, "build", "devmap.o", "xdp");
+verify_section_pass!(verify_build_divzero, "build", "divzero.o", "test");
+verify_section_pass!(
+    verify_build_externalfunction,
+    "build",
+    "externalfunction.o",
+    ".text"
+);
+verify_section_pass!(verify_build_global_func, "build", "global_func.o", "xdp");
+verify_section_pass!(
+    verify_build_global_variable_2,
+    "build",
+    "global_variable_2.o",
+    ".text"
+);
+verify_section_pass!(
+    verify_build_hash_of_maps,
+    "build",
+    "hash_of_maps.o",
+    ".text"
+);
+verify_section_pass!(
+    verify_build_infinite_loop,
+    "build",
+    "infinite_loop.o",
+    "test"
+);
+verify_section_pass!(verify_build_lpm_trie, "build", "lpm_trie.o", "xdp");
+verify_section_pass!(
+    verify_build_map_in_map_typedef,
+    "build",
+    "map_in_map_typedef.o",
+    ".text"
+);
+verify_section_pass!(verify_build_percpu_array, "build", "percpu_array.o", "xdp");
+verify_section_pass!(verify_build_percpu_hash, "build", "percpu_hash.o", "xdp");
+verify_section_pass!(
+    verify_build_sockmap,
+    "build",
+    "sockmap.o",
+    "sk_skb/stream_verdict"
+);
+verify_section_pass!(
+    verify_build_tail_call_xdp_prog_0,
+    "build",
+    "tail_call.o",
+    "xdp_prog/0"
+);
+verify_section_pass!(
+    verify_build_tail_call_bad_xdp_prog_0,
+    "build",
+    "tail_call_bad.o",
+    "xdp_prog/0"
+);
+verify_section_pass!(verify_build_twomaps_btf, "build", "twomaps_btf.o", ".text");
+
+// build/ additional reject tests
+verify_section_reject!(reject_build_badrelo, "build", "badrelo.o", ".text");
+verify_section_reject!(reject_build_wronghelper, "build", "wronghelper.o", "xdp");
+
+// build/ additional expected failures
+verify_section_expected_fail!(fail_build_badmapptr, "build", "badmapptr.o", "test");
+verify_section_expected_fail!(
+    fail_build_bpf_loop_helper_xdp,
+    "build",
+    "bpf_loop_helper.o",
+    "xdp"
+);
+verify_section_expected_fail!(
+    fail_build_bpf_loop_helper_text,
+    "build",
+    "bpf_loop_helper.o",
+    ".text"
+);
+verify_section_expected_fail!(
+    fail_build_correlated_branch,
+    "build",
+    "correlated_branch.o",
+    "xdp"
+);
+verify_section_expected_fail!(
+    fail_build_correlated_branch2,
+    "build",
+    "correlated_branch2.o",
+    "socket_filter"
+);
+verify_program_expected_fail!(
+    fail_build_global_func_add_and_store,
+    "build",
+    "global_func.o",
+    ".text",
+    "add_and_store",
+    2
+);
+verify_program_expected_fail!(
+    fail_build_global_func_process_entry,
+    "build",
+    "global_func.o",
+    ".text",
+    "process_entry",
+    2
+);
+verify_section_expected_fail!(
+    fail_build_invalid_map_access,
+    "build",
+    "invalid_map_access.o",
+    ".text"
+);
+verify_section_expected_fail!(fail_build_loop_test_md, "build", "loop.o", "test_md");
+verify_section_expected_fail!(
+    fail_build_packet_reallocate_2,
+    "build",
+    "packet_reallocate.o",
+    "socket_filter"
+);
+verify_section_expected_fail!(
+    fail_build_perf_event_array,
+    "build",
+    "perf_event_array.o",
+    "xdp"
+);
+verify_section_expected_fail!(fail_build_ptr_arith, "build", "ptr_arith.o", "xdp");
+verify_section_expected_fail!(fail_build_queue_stack, "build", "queue_stack.o", ".text");
+verify_section_expected_fail!(
+    fail_build_ringbuf_in_map,
+    "build",
+    "ringbuf_in_map.o",
+    ".text"
+);
+verify_section_expected_fail!(
+    fail_build_ringbuf_uninit_2,
+    "build",
+    "ringbuf_uninit.o",
+    ".text"
+);
+verify_section_expected_fail!(
+    fail_build_tail_call_bad_xdp_prog,
+    "build",
+    "tail_call_bad.o",
+    "xdp_prog"
+);
+verify_section_expected_fail!(
+    fail_build_ctxoffset_sockops,
+    "build",
+    "ctxoffset.o",
+    "sockops"
+);
+verify_section_expected_fail!(fail_build_nullmapref_test, "build", "nullmapref.o", "test");
+verify_section_expected_fail!(
+    fail_build_mapvalue_overrun_2,
+    "build",
+    "mapvalue-overrun.o",
+    ".text"
+);
+verify_section_expected_fail!(
+    fail_build_packet_overflow_2,
+    "build",
+    "packet_overflow.o",
+    "xdp"
+);
+verify_section_expected_fail!(fail_build_exposeptr_2, "build", "exposeptr.o", ".text");
+verify_section_expected_fail!(fail_build_exposeptr2_2, "build", "exposeptr2.o", ".text");
+verify_section_expected_fail!(
+    fail_build_badhelpercall_2,
+    "build",
+    "badhelpercall.o",
+    ".text"
+);
+
+// ============================================================================
+// suricata/ additional tests (new in upstream)
+// ============================================================================
+
+verify_section_pass!(
+    suricata_bypass_filter_filter,
+    "suricata",
+    "bypass_filter.o",
+    "filter"
+);
+verify_section_pass!(suricata_lb_loadbalancer, "suricata", "lb.o", "loadbalancer");
+
+// ============================================================================
+// katran/ (new project)
+// ============================================================================
+
+verify_section_pass!(katran_xdp_root_xdp, "katran", "xdp_root.o", "xdp");
+
+// ============================================================================
+// new_linux/ (new project)
+// ============================================================================
+
+verify_section_pass!(
+    new_linux_sock_flags_kern_cgroup_sock1,
+    "new_linux",
+    "sock_flags_kern.o",
+    "cgroup/sock1"
+);
+verify_section_pass!(
+    new_linux_sock_flags_kern_cgroup_sock2,
+    "new_linux",
+    "sock_flags_kern.o",
+    "cgroup/sock2"
+);
+verify_section_pass!(
+    new_linux_sockex1_kern_socket1,
+    "new_linux",
+    "sockex1_kern.o",
+    "socket1"
+);
+verify_section_pass!(
+    new_linux_sockex2_kern_socket2,
+    "new_linux",
+    "sockex2_kern.o",
+    "socket2"
+);
+verify_section_pass!(
+    new_linux_sockex3_kern_socket_0,
+    "new_linux",
+    "sockex3_kern.o",
+    "socket/0"
+);
+verify_section_pass!(
+    new_linux_sockex3_kern_socket_1,
+    "new_linux",
+    "sockex3_kern.o",
+    "socket/1"
+);
+verify_section_pass!(
+    new_linux_sockex3_kern_socket_2,
+    "new_linux",
+    "sockex3_kern.o",
+    "socket/2"
+);
+verify_section_pass!(
+    new_linux_sockex3_kern_socket_3,
+    "new_linux",
+    "sockex3_kern.o",
+    "socket/3"
+);
+verify_section_pass!(
+    new_linux_sockex3_kern_socket_4,
+    "new_linux",
+    "sockex3_kern.o",
+    "socket/4"
+);
+verify_section_pass!(
+    new_linux_trace_output_kern,
+    "new_linux",
+    "trace_output_kern.o",
+    "kprobe/__x64_sys_write"
+);
+verify_section_pass!(
+    new_linux_tracex1_kern,
+    "new_linux",
+    "tracex1_kern.o",
+    "kprobe/__netif_receive_skb_core"
+);
+verify_section_pass!(
+    new_linux_tracex2_kern_sys_write,
+    "new_linux",
+    "tracex2_kern.o",
+    "kprobe/__x64_sys_write"
+);
+verify_section_pass!(
+    new_linux_tracex2_kern_kfree_skb,
+    "new_linux",
+    "tracex2_kern.o",
+    "kprobe/kfree_skb"
+);
+verify_section_pass!(
+    new_linux_tracex3_kern_blk_account_io_done,
+    "new_linux",
+    "tracex3_kern.o",
+    "kprobe/blk_account_io_done"
+);
+verify_section_pass!(
+    new_linux_tracex3_kern_blk_mq_start_request,
+    "new_linux",
+    "tracex3_kern.o",
+    "kprobe/blk_mq_start_request"
+);
+verify_section_pass!(
+    new_linux_tracex4_kern_kmem_cache_free,
+    "new_linux",
+    "tracex4_kern.o",
+    "kprobe/kmem_cache_free"
+);
+verify_section_pass!(
+    new_linux_tracex4_kern_kmem_cache_alloc_node,
+    "new_linux",
+    "tracex4_kern.o",
+    "kretprobe/kmem_cache_alloc_node"
+);
+verify_section_pass!(
+    new_linux_tracex6_kern_htab_get_next_key,
+    "new_linux",
+    "tracex6_kern.o",
+    "kprobe/htab_map_get_next_key"
+);
+verify_section_pass!(
+    new_linux_tracex6_kern_htab_lookup_elem,
+    "new_linux",
+    "tracex6_kern.o",
+    "kprobe/htab_map_lookup_elem"
+);
+verify_section_pass!(
+    new_linux_tracex7_kern_open_ctree,
+    "new_linux",
+    "tracex7_kern.o",
+    "kprobe/open_ctree"
+);
+
+// ============================================================================
+// bcc/ (new project)
+// ============================================================================
+
+verify_section_pass!(
+    bcc_capable_kprobe_cap_capable,
+    "bcc",
+    "capable.bpf.o",
+    "kprobe/cap_capable"
+);
+verify_section_pass!(
+    bcc_capable_kretprobe_cap_capable,
+    "bcc",
+    "capable.bpf.o",
+    "kretprobe/cap_capable"
+);
+verify_section_pass!(
+    bcc_exitsnoop_tracepoint_sched_process_exit,
+    "bcc",
+    "exitsnoop.bpf.o",
+    "tracepoint/sched/sched_process_exit"
+);
+verify_section_pass!(
+    bcc_filelife_kprobe_vfs_unlink,
+    "bcc",
+    "filelife.bpf.o",
+    "kprobe/vfs_unlink"
+);
+verify_section_pass!(
+    bcc_tcpconnect_kprobe_tcp_v4_connect,
+    "bcc",
+    "tcpconnect.bpf.o",
+    "kprobe/tcp_v4_connect"
+);
+verify_section_pass!(
+    bcc_tcpconnect_kprobe_tcp_v6_connect,
+    "bcc",
+    "tcpconnect.bpf.o",
+    "kprobe/tcp_v6_connect"
+);
+
+// bcc/ expected failures (VerifierTypeTracking)
+verify_section_expected_fail!(
+    fail_bcc_bashreadline_uretprobe_readline,
+    "bcc",
+    "bashreadline.bpf.o",
+    "uretprobe/readline"
+);
+verify_section_expected_fail!(
+    fail_bcc_filelife_kprobe_security_inode_create,
+    "bcc",
+    "filelife.bpf.o",
+    "kprobe/security_inode_create"
+);
+verify_section_expected_fail!(
+    fail_bcc_filelife_kprobe_vfs_create,
+    "bcc",
+    "filelife.bpf.o",
+    "kprobe/vfs_create"
+);
+verify_section_expected_fail!(
+    fail_bcc_filelife_kprobe_vfs_open,
+    "bcc",
+    "filelife.bpf.o",
+    "kprobe/vfs_open"
+);
+verify_section_expected_fail!(
+    fail_bcc_filelife_kretprobe_vfs_unlink,
+    "bcc",
+    "filelife.bpf.o",
+    "kretprobe/vfs_unlink"
+);
+verify_section_expected_fail!(
+    fail_bcc_oomkill_kprobe_oom_kill_process,
+    "bcc",
+    "oomkill.bpf.o",
+    "kprobe/oom_kill_process"
+);
+
+// bcc/ expected failures (VerifierBoundsTracking)
+verify_section_expected_fail!(
+    fail_bcc_tcpconnect_kretprobe_tcp_v4_connect,
+    "bcc",
+    "tcpconnect.bpf.o",
+    "kretprobe/tcp_v4_connect"
+);
+verify_section_expected_fail!(
+    fail_bcc_tcpconnect_kretprobe_tcp_v6_connect,
+    "bcc",
+    "tcpconnect.bpf.o",
+    "kretprobe/tcp_v6_connect"
+);
+
+// ============================================================================
+// libbpf-bootstrap/ (new project)
+// ============================================================================
+
+verify_section_pass!(
+    libbpf_bootstrap_bootstrap_legacy_tp_sched_process_exit,
+    "libbpf-bootstrap",
+    "bootstrap_legacy.bpf.o",
+    "tp/sched/sched_process_exit"
+);
+verify_section_pass!(
+    libbpf_bootstrap_kprobe_do_unlinkat,
+    "libbpf-bootstrap",
+    "kprobe.bpf.o",
+    "kprobe/do_unlinkat"
+);
+verify_section_pass!(
+    libbpf_bootstrap_kprobe_kretprobe_do_unlinkat,
+    "libbpf-bootstrap",
+    "kprobe.bpf.o",
+    "kretprobe/do_unlinkat"
+);
+verify_section_pass!(
+    libbpf_bootstrap_minimal_tp_sys_enter_write,
+    "libbpf-bootstrap",
+    "minimal.bpf.o",
+    "tp/syscalls/sys_enter_write"
+);
+verify_section_pass!(
+    libbpf_bootstrap_minimal_legacy_tp_sys_enter_write,
+    "libbpf-bootstrap",
+    "minimal_legacy.bpf.o",
+    "tp/syscalls/sys_enter_write"
+);
+verify_section_pass!(
+    libbpf_bootstrap_minimal_ns_tp_sys_enter_write,
+    "libbpf-bootstrap",
+    "minimal_ns.bpf.o",
+    "tp/syscalls/sys_enter_write"
+);
+verify_section_pass!(libbpf_bootstrap_tc_tc, "libbpf-bootstrap", "tc.bpf.o", "tc");
+verify_section_pass!(
+    libbpf_bootstrap_uprobe_uprobe,
+    "libbpf-bootstrap",
+    "uprobe.bpf.o",
+    "uprobe"
+);
+verify_section_pass!(
+    libbpf_bootstrap_uprobe_uprobe_proc_self,
+    "libbpf-bootstrap",
+    "uprobe.bpf.o",
+    "uprobe//proc/self/exe:uprobed_sub"
+);
+verify_section_pass!(
+    libbpf_bootstrap_uprobe_uretprobe,
+    "libbpf-bootstrap",
+    "uprobe.bpf.o",
+    "uretprobe"
+);
+verify_section_pass!(
+    libbpf_bootstrap_uprobe_uretprobe_proc_self,
+    "libbpf-bootstrap",
+    "uprobe.bpf.o",
+    "uretprobe//proc/self/exe:uprobed_sub"
+);
+verify_program_pass!(
+    libbpf_bootstrap_usdt_bpf_usdt_arg_cnt,
+    "libbpf-bootstrap",
+    "usdt.bpf.o",
+    ".text",
+    "bpf_usdt_arg_cnt",
+    3
+);
+verify_program_pass!(
+    libbpf_bootstrap_usdt_bpf_usdt_cookie,
+    "libbpf-bootstrap",
+    "usdt.bpf.o",
+    ".text",
+    "bpf_usdt_cookie",
+    3
+);
+
+// libbpf-bootstrap/ expected failures (VerifierTypeTracking)
+verify_section_expected_fail!(
+    fail_libbpf_bootstrap_bootstrap_legacy_tp_sched_process_exec,
+    "libbpf-bootstrap",
+    "bootstrap_legacy.bpf.o",
+    "tp/sched/sched_process_exec"
+);
+verify_program_expected_fail!(
+    fail_libbpf_bootstrap_usdt_bpf_usdt_arg,
+    "libbpf-bootstrap",
+    "usdt.bpf.o",
+    ".text",
+    "bpf_usdt_arg",
+    3
+);
+verify_section_expected_fail!(
+    fail_libbpf_bootstrap_usdt_usdt,
+    "libbpf-bootstrap",
+    "usdt.bpf.o",
+    "usdt"
+);
+verify_section_expected_fail!(
+    fail_libbpf_bootstrap_usdt_usdt_libc,
+    "libbpf-bootstrap",
+    "usdt.bpf.o",
+    "usdt/libc.so.6:libc:setjmp"
+);
+
+// libbpf-bootstrap/ expected failures (VerifierBoundsTracking)
+verify_section_expected_fail!(
+    fail_libbpf_bootstrap_bootstrap_tp_sched_process_exec,
+    "libbpf-bootstrap",
+    "bootstrap.bpf.o",
+    "tp/sched/sched_process_exec"
+);
+verify_section_expected_fail!(
+    fail_libbpf_bootstrap_bootstrap_tp_sched_process_exit,
+    "libbpf-bootstrap",
+    "bootstrap.bpf.o",
+    "tp/sched/sched_process_exit"
+);
+verify_section_expected_fail!(
+    fail_libbpf_bootstrap_fentry_do_unlinkat,
+    "libbpf-bootstrap",
+    "fentry.bpf.o",
+    "fentry/do_unlinkat"
+);
+verify_section_expected_fail!(
+    fail_libbpf_bootstrap_fentry_fexit_do_unlinkat,
+    "libbpf-bootstrap",
+    "fentry.bpf.o",
+    "fexit/do_unlinkat"
+);
+verify_section_expected_fail!(
+    fail_libbpf_bootstrap_lsm_bpf,
+    "libbpf-bootstrap",
+    "lsm.bpf.o",
+    "lsm/bpf"
+);
+verify_section_expected_fail!(
+    fail_libbpf_bootstrap_profile_perf_event,
+    "libbpf-bootstrap",
+    "profile.bpf.o",
+    "perf_event"
+);
+verify_section_expected_fail!(
+    fail_libbpf_bootstrap_sockfilter_socket,
+    "libbpf-bootstrap",
+    "sockfilter.bpf.o",
+    "socket"
+);
+verify_section_expected_fail!(
+    fail_libbpf_bootstrap_task_iter_task,
+    "libbpf-bootstrap",
+    "task_iter.bpf.o",
+    "iter/task"
+);
+
+// libbpf-bootstrap/ expected failures (VerifierStackInitialization)
+verify_section_expected_fail!(
+    fail_libbpf_bootstrap_ksyscall_kill,
+    "libbpf-bootstrap",
+    "ksyscall.bpf.o",
+    "ksyscall/kill"
+);
+verify_section_expected_fail!(
+    fail_libbpf_bootstrap_ksyscall_tgkill,
+    "libbpf-bootstrap",
+    "ksyscall.bpf.o",
+    "ksyscall/tgkill"
+);
+
+// ============================================================================
+// linux-selftests/ (new project)
+// ============================================================================
+
+// linux-selftests/ passing programs
+verify_program_pass!(
+    linux_selftests_atomics_add,
+    "linux-selftests",
+    "atomics.o",
+    "raw_tp/sys_enter",
+    "add",
+    7
+);
+verify_program_pass!(
+    linux_selftests_atomics_and,
+    "linux-selftests",
+    "atomics.o",
+    "raw_tp/sys_enter",
+    "and",
+    7
+);
+verify_program_pass!(
+    linux_selftests_atomics_cmpxchg,
+    "linux-selftests",
+    "atomics.o",
+    "raw_tp/sys_enter",
+    "cmpxchg",
+    7
+);
+verify_program_pass!(
+    linux_selftests_atomics_or,
+    "linux-selftests",
+    "atomics.o",
+    "raw_tp/sys_enter",
+    "or",
+    7
+);
+verify_program_pass!(
+    linux_selftests_atomics_sub,
+    "linux-selftests",
+    "atomics.o",
+    "raw_tp/sys_enter",
+    "sub",
+    7
+);
+verify_program_pass!(
+    linux_selftests_atomics_xchg,
+    "linux-selftests",
+    "atomics.o",
+    "raw_tp/sys_enter",
+    "xchg",
+    7
+);
+verify_program_pass!(
+    linux_selftests_atomics_xor,
+    "linux-selftests",
+    "atomics.o",
+    "raw_tp/sys_enter",
+    "xor",
+    7
+);
+
+// linux-selftests/ reject programs (bpf_cubic)
+verify_program_reject!(
+    reject_linux_selftests_bpf_cubic_acked,
+    "linux-selftests",
+    "bpf_cubic.o",
+    "struct_ops",
+    "bpf_cubic_acked",
+    7
+);
+verify_program_reject!(
+    reject_linux_selftests_bpf_cubic_cong_avoid,
+    "linux-selftests",
+    "bpf_cubic.o",
+    "struct_ops",
+    "bpf_cubic_cong_avoid",
+    7
+);
+verify_program_reject!(
+    reject_linux_selftests_bpf_cubic_cwnd_event,
+    "linux-selftests",
+    "bpf_cubic.o",
+    "struct_ops",
+    "bpf_cubic_cwnd_event",
+    7
+);
+verify_program_reject!(
+    reject_linux_selftests_bpf_cubic_init,
+    "linux-selftests",
+    "bpf_cubic.o",
+    "struct_ops",
+    "bpf_cubic_init",
+    7
+);
+verify_program_reject!(
+    reject_linux_selftests_bpf_cubic_recalc_ssthresh,
+    "linux-selftests",
+    "bpf_cubic.o",
+    "struct_ops",
+    "bpf_cubic_recalc_ssthresh",
+    7
+);
+verify_program_reject!(
+    reject_linux_selftests_bpf_cubic_state,
+    "linux-selftests",
+    "bpf_cubic.o",
+    "struct_ops",
+    "bpf_cubic_state",
+    7
+);
+verify_program_reject!(
+    reject_linux_selftests_bpf_cubic_undo_cwnd,
+    "linux-selftests",
+    "bpf_cubic.o",
+    "struct_ops",
+    "bpf_cubic_undo_cwnd",
+    7
+);
+
+// linux-selftests/ reject programs (bpf_dctcp)
+verify_program_reject!(
+    reject_linux_selftests_bpf_dctcp_cong_avoid,
+    "linux-selftests",
+    "bpf_dctcp.o",
+    "struct_ops",
+    "bpf_dctcp_cong_avoid",
+    7
+);
+verify_program_reject!(
+    reject_linux_selftests_bpf_dctcp_cwnd_event,
+    "linux-selftests",
+    "bpf_dctcp.o",
+    "struct_ops",
+    "bpf_dctcp_cwnd_event",
+    7
+);
+verify_program_reject!(
+    reject_linux_selftests_bpf_dctcp_cwnd_undo,
+    "linux-selftests",
+    "bpf_dctcp.o",
+    "struct_ops",
+    "bpf_dctcp_cwnd_undo",
+    7
+);
+verify_program_reject!(
+    reject_linux_selftests_bpf_dctcp_init,
+    "linux-selftests",
+    "bpf_dctcp.o",
+    "struct_ops",
+    "bpf_dctcp_init",
+    7
+);
+verify_program_reject!(
+    reject_linux_selftests_bpf_dctcp_ssthresh,
+    "linux-selftests",
+    "bpf_dctcp.o",
+    "struct_ops",
+    "bpf_dctcp_ssthresh",
+    7
+);
+verify_program_reject!(
+    reject_linux_selftests_bpf_dctcp_state,
+    "linux-selftests",
+    "bpf_dctcp.o",
+    "struct_ops",
+    "bpf_dctcp_state",
+    7
+);
+verify_program_reject!(
+    reject_linux_selftests_bpf_dctcp_update_alpha,
+    "linux-selftests",
+    "bpf_dctcp.o",
+    "struct_ops",
+    "bpf_dctcp_update_alpha",
+    7
+);
+
+// linux-selftests/ passing sections
+verify_section_pass!(
+    linux_selftests_fexit_sleep_fentry,
+    "linux-selftests",
+    "fexit_sleep.o",
+    "fentry/__x64_sys_nanosleep"
+);
+verify_section_pass!(
+    linux_selftests_fexit_sleep_fexit,
+    "linux-selftests",
+    "fexit_sleep.o",
+    "fexit/__x64_sys_nanosleep"
+);
+verify_section_pass!(
+    linux_selftests_get_cgroup_id_kern,
+    "linux-selftests",
+    "get_cgroup_id_kern.o",
+    "tracepoint/syscalls/sys_enter_nanosleep"
+);
+verify_section_pass!(
+    linux_selftests_loop1,
+    "linux-selftests",
+    "loop1.o",
+    "raw_tracepoint/kfree_skb"
+);
+verify_section_pass!(
+    linux_selftests_loop2,
+    "linux-selftests",
+    "loop2.o",
+    "raw_tracepoint/consume_skb"
+);
+verify_section_pass!(
+    linux_selftests_loop4,
+    "linux-selftests",
+    "loop4.o",
+    "socket"
+);
+verify_section_pass!(
+    linux_selftests_loop5,
+    "linux-selftests",
+    "loop5.o",
+    "socket"
+);
+verify_section_reject!(
+    reject_linux_selftests_map_ptr_kern,
+    "linux-selftests",
+    "map_ptr_kern.o",
+    "cgroup_skb/egress"
+);
+verify_section_pass!(
+    linux_selftests_sockmap_parse_prog,
+    "linux-selftests",
+    "sockmap_parse_prog.o",
+    "sk_skb1"
+);
+verify_section_pass!(
+    linux_selftests_sockmap_verdict_prog,
+    "linux-selftests",
+    "sockmap_verdict_prog.o",
+    "sk_skb2"
+);
+
+// linux-selftests/ tailcall programs
+verify_program_pass!(
+    linux_selftests_tailcall1_classifier_0,
+    "linux-selftests",
+    "tailcall1.o",
+    "tc",
+    "classifier_0",
+    4
+);
+verify_program_pass!(
+    linux_selftests_tailcall1_classifier_1,
+    "linux-selftests",
+    "tailcall1.o",
+    "tc",
+    "classifier_1",
+    4
+);
+verify_program_pass!(
+    linux_selftests_tailcall1_classifier_2,
+    "linux-selftests",
+    "tailcall1.o",
+    "tc",
+    "classifier_2",
+    4
+);
+verify_program_pass!(
+    linux_selftests_tailcall1_entry,
+    "linux-selftests",
+    "tailcall1.o",
+    "tc",
+    "entry",
+    4
+);
+verify_program_pass!(
+    linux_selftests_tailcall2_classifier_0,
+    "linux-selftests",
+    "tailcall2.o",
+    "tc",
+    "classifier_0",
+    6
+);
+verify_program_pass!(
+    linux_selftests_tailcall2_classifier_1,
+    "linux-selftests",
+    "tailcall2.o",
+    "tc",
+    "classifier_1",
+    6
+);
+verify_program_pass!(
+    linux_selftests_tailcall2_classifier_2,
+    "linux-selftests",
+    "tailcall2.o",
+    "tc",
+    "classifier_2",
+    6
+);
+verify_program_pass!(
+    linux_selftests_tailcall2_classifier_3,
+    "linux-selftests",
+    "tailcall2.o",
+    "tc",
+    "classifier_3",
+    6
+);
+verify_program_pass!(
+    linux_selftests_tailcall2_classifier_4,
+    "linux-selftests",
+    "tailcall2.o",
+    "tc",
+    "classifier_4",
+    6
+);
+verify_program_pass!(
+    linux_selftests_tailcall2_entry,
+    "linux-selftests",
+    "tailcall2.o",
+    "tc",
+    "entry",
+    6
+);
+verify_program_pass!(
+    linux_selftests_tailcall3_classifier_0,
+    "linux-selftests",
+    "tailcall3.o",
+    "tc",
+    "classifier_0",
+    2
+);
+verify_program_pass!(
+    linux_selftests_tailcall3_entry,
+    "linux-selftests",
+    "tailcall3.o",
+    "tc",
+    "entry",
+    2
+);
+
+// linux-selftests/ global func tests
+verify_program_pass!(
+    linux_selftests_test_global_func1_f0,
+    "linux-selftests",
+    "test_global_func1.o",
+    ".text",
+    "f0",
+    4
+);
+verify_program_pass!(
+    linux_selftests_test_global_func1_f1,
+    "linux-selftests",
+    "test_global_func1.o",
+    ".text",
+    "f1",
+    4
+);
+verify_section_pass!(
+    linux_selftests_test_global_func1_tc,
+    "linux-selftests",
+    "test_global_func1.o",
+    "tc"
+);
+verify_program_pass!(
+    linux_selftests_test_global_func_args_baz,
+    "linux-selftests",
+    "test_global_func_args.o",
+    ".text",
+    "baz",
+    3
+);
+verify_section_pass!(
+    linux_selftests_test_global_func_args_cgroup_skb_ingress,
+    "linux-selftests",
+    "test_global_func_args.o",
+    "cgroup_skb/ingress"
+);
+
+// linux-selftests/ spin lock tests
+verify_program_pass!(
+    linux_selftests_test_spin_lock_static_subprog,
+    "linux-selftests",
+    "test_spin_lock.o",
+    ".text",
+    "static_subprog",
+    3
+);
+verify_program_pass!(
+    linux_selftests_test_spin_lock_static_subprog_lock,
+    "linux-selftests",
+    "test_spin_lock.o",
+    ".text",
+    "static_subprog_lock",
+    3
+);
+verify_program_pass!(
+    linux_selftests_test_spin_lock_static_subprog_unlock,
+    "linux-selftests",
+    "test_spin_lock.o",
+    ".text",
+    "static_subprog_unlock",
+    3
+);
+verify_program_pass!(
+    linux_selftests_test_spin_lock_tc_lock_static_subprog_call,
+    "linux-selftests",
+    "test_spin_lock.o",
+    "tc",
+    "lock_static_subprog_call",
+    3
+);
+verify_program_pass!(
+    linux_selftests_test_spin_lock_tc_lock_static_subprog_lock,
+    "linux-selftests",
+    "test_spin_lock.o",
+    "tc",
+    "lock_static_subprog_lock",
+    3
+);
+verify_program_pass!(
+    linux_selftests_test_spin_lock_tc_lock_static_subprog_unlock,
+    "linux-selftests",
+    "test_spin_lock.o",
+    "tc",
+    "lock_static_subprog_unlock",
+    3
+);
+
+// linux-selftests/ expected failures (VerifierTypeTracking)
+verify_section_expected_fail!(
+    fail_linux_selftests_bloom_filter_map_text,
+    "linux-selftests",
+    "bloom_filter_map.o",
+    ".text"
+);
+verify_program_expected_fail!(
+    fail_linux_selftests_bloom_filter_map_check_bloom,
+    "linux-selftests",
+    "bloom_filter_map.o",
+    "fentry/__x64_sys_getpgid",
+    "check_bloom",
+    2
+);
+verify_program_expected_fail!(
+    fail_linux_selftests_bloom_filter_map_inner_map,
+    "linux-selftests",
+    "bloom_filter_map.o",
+    "fentry/__x64_sys_getpgid",
+    "inner_map",
+    2
+);
+verify_section_expected_fail!(
+    fail_linux_selftests_freplace_get_constant,
+    "linux-selftests",
+    "freplace_get_constant.o",
+    "freplace/get_constant"
+);
+verify_program_expected_fail!(
+    fail_linux_selftests_map_ptr_kern_check,
+    "linux-selftests",
+    "map_ptr_kern.o",
+    ".text",
+    "check",
+    19
+);
+verify_program_expected_fail!(
+    fail_linux_selftests_map_ptr_kern_check_array_of_maps,
+    "linux-selftests",
+    "map_ptr_kern.o",
+    ".text",
+    "check_array_of_maps",
+    19
+);
+verify_program_expected_fail!(
+    fail_linux_selftests_map_ptr_kern_check_cgroup_storage,
+    "linux-selftests",
+    "map_ptr_kern.o",
+    ".text",
+    "check_cgroup_storage",
+    19
+);
+verify_program_expected_fail!(
+    fail_linux_selftests_map_ptr_kern_check_cpumap,
+    "linux-selftests",
+    "map_ptr_kern.o",
+    ".text",
+    "check_cpumap",
+    19
+);
+verify_program_expected_fail!(
+    fail_linux_selftests_map_ptr_kern_check_default_noinline,
+    "linux-selftests",
+    "map_ptr_kern.o",
+    ".text",
+    "check_default_noinline",
+    19
+);
+verify_program_expected_fail!(
+    fail_linux_selftests_map_ptr_kern_check_devmap,
+    "linux-selftests",
+    "map_ptr_kern.o",
+    ".text",
+    "check_devmap",
+    19
+);
+verify_program_expected_fail!(
+    fail_linux_selftests_map_ptr_kern_check_devmap_hash,
+    "linux-selftests",
+    "map_ptr_kern.o",
+    ".text",
+    "check_devmap_hash",
+    19
+);
+verify_program_expected_fail!(
+    fail_linux_selftests_map_ptr_kern_check_hash_of_maps,
+    "linux-selftests",
+    "map_ptr_kern.o",
+    ".text",
+    "check_hash_of_maps",
+    19
+);
+verify_program_expected_fail!(
+    fail_linux_selftests_map_ptr_kern_check_lpm_trie,
+    "linux-selftests",
+    "map_ptr_kern.o",
+    ".text",
+    "check_lpm_trie",
+    19
+);
+verify_program_expected_fail!(
+    fail_linux_selftests_map_ptr_kern_check_lru_percpu_hash,
+    "linux-selftests",
+    "map_ptr_kern.o",
+    ".text",
+    "check_lru_percpu_hash",
+    19
+);
+verify_program_expected_fail!(
+    fail_linux_selftests_map_ptr_kern_check_percpu_cgroup_storage,
+    "linux-selftests",
+    "map_ptr_kern.o",
+    ".text",
+    "check_percpu_cgroup_storage",
+    19
+);
+verify_program_expected_fail!(
+    fail_linux_selftests_map_ptr_kern_check_queue,
+    "linux-selftests",
+    "map_ptr_kern.o",
+    ".text",
+    "check_queue",
+    19
+);
+verify_program_expected_fail!(
+    fail_linux_selftests_map_ptr_kern_check_reuseport_sockarray,
+    "linux-selftests",
+    "map_ptr_kern.o",
+    ".text",
+    "check_reuseport_sockarray",
+    19
+);
+verify_program_expected_fail!(
+    fail_linux_selftests_map_ptr_kern_check_ringbuf,
+    "linux-selftests",
+    "map_ptr_kern.o",
+    ".text",
+    "check_ringbuf",
+    19
+);
+verify_program_expected_fail!(
+    fail_linux_selftests_map_ptr_kern_check_sk_storage,
+    "linux-selftests",
+    "map_ptr_kern.o",
+    ".text",
+    "check_sk_storage",
+    19
+);
+verify_program_expected_fail!(
+    fail_linux_selftests_map_ptr_kern_check_sockhash,
+    "linux-selftests",
+    "map_ptr_kern.o",
+    ".text",
+    "check_sockhash",
+    19
+);
+verify_program_expected_fail!(
+    fail_linux_selftests_map_ptr_kern_check_sockmap,
+    "linux-selftests",
+    "map_ptr_kern.o",
+    ".text",
+    "check_sockmap",
+    19
+);
+verify_program_expected_fail!(
+    fail_linux_selftests_map_ptr_kern_check_stack,
+    "linux-selftests",
+    "map_ptr_kern.o",
+    ".text",
+    "check_stack",
+    19
+);
+verify_program_expected_fail!(
+    fail_linux_selftests_map_ptr_kern_check_xskmap,
+    "linux-selftests",
+    "map_ptr_kern.o",
+    ".text",
+    "check_xskmap",
+    19
+);
+verify_section_expected_fail!(
+    fail_linux_selftests_socket_cookie_prog_cgroup_connect6,
+    "linux-selftests",
+    "socket_cookie_prog.o",
+    "cgroup/connect6"
+);
+verify_program_expected_fail!(
+    fail_linux_selftests_test_global_func1_f2,
+    "linux-selftests",
+    "test_global_func1.o",
+    ".text",
+    "f2",
+    4
+);
+verify_program_expected_fail!(
+    fail_linux_selftests_test_global_func1_f3,
+    "linux-selftests",
+    "test_global_func1.o",
+    ".text",
+    "f3",
+    4
+);
+verify_program_expected_fail!(
+    fail_linux_selftests_test_global_func_args_bar,
+    "linux-selftests",
+    "test_global_func_args.o",
+    ".text",
+    "bar",
+    3
+);
+verify_program_expected_fail!(
+    fail_linux_selftests_test_global_func_args_foo,
+    "linux-selftests",
+    "test_global_func_args.o",
+    ".text",
+    "foo",
+    3
+);
+
+// linux-selftests/ expected failures (VerifierBoundsTracking)
+verify_section_expected_fail!(
+    fail_linux_selftests_kfree_skb_fentry,
+    "linux-selftests",
+    "kfree_skb.o",
+    "fentry/eth_type_trans"
+);
+verify_section_expected_fail!(
+    fail_linux_selftests_kfree_skb_fexit,
+    "linux-selftests",
+    "kfree_skb.o",
+    "fexit/eth_type_trans"
+);
+verify_section_expected_fail!(
+    fail_linux_selftests_kfree_skb_tp_btf,
+    "linux-selftests",
+    "kfree_skb.o",
+    "tp_btf/kfree_skb"
+);
+verify_section_expected_fail!(
+    fail_linux_selftests_socket_cookie_prog_fexit,
+    "linux-selftests",
+    "socket_cookie_prog.o",
+    "fexit/inet_stream_connect"
+);
+verify_section_expected_fail!(
+    fail_linux_selftests_socket_cookie_prog_sockops,
+    "linux-selftests",
+    "socket_cookie_prog.o",
+    "sockops"
+);
+
+// linux-selftests/ expected failure (VerifierNullability)
+verify_section_expected_fail!(
+    fail_linux_selftests_test_spin_lock_cgroup_skb_ingress,
+    "linux-selftests",
+    "test_spin_lock.o",
+    "cgroup_skb/ingress"
+);
+
+// linux-selftests/ skip (VerificationTimeout)
+verify_section_skip!(
+    skip_linux_selftests_loop3,
+    "linux-selftests",
+    "loop3.o",
+    "raw_tracepoint/consume_skb",
+    "VerificationTimeout"
+);
+
+// ============================================================================
+// cilium-ebpf/ (new project)
+// ============================================================================
+
+// cilium-ebpf/ passing sections
+verify_section_pass!(
+    cilium_ebpf_btf_map_init_socket_main,
+    "cilium-ebpf",
+    "btf_map_init-el.elf",
+    "socket/main"
+);
+verify_section_pass!(
+    cilium_ebpf_btf_map_init_socket_tail,
+    "cilium-ebpf",
+    "btf_map_init-el.elf",
+    "socket/tail"
+);
+verify_section_pass!(
+    cilium_ebpf_constants_sk_lookup,
+    "cilium-ebpf",
+    "constants-el.elf",
+    "sk_lookup/"
+);
+verify_program_pass!(
+    cilium_ebpf_errors_poisoned_double,
+    "cilium-ebpf",
+    "errors-el.elf",
+    "socket",
+    "poisoned_double",
+    3
+);
+verify_program_reject!(
+    reject_cilium_ebpf_errors_poisoned_kfunc,
+    "cilium-ebpf",
+    "errors-el.elf",
+    "socket",
+    "poisoned_kfunc",
+    3
+);
+verify_program_reject!(
+    reject_cilium_ebpf_errors_poisoned_single,
+    "cilium-ebpf",
+    "errors-el.elf",
+    "socket",
+    "poisoned_single",
+    3
+);
+verify_section_pass!(
+    cilium_ebpf_fentry_fexit_fentry,
+    "cilium-ebpf",
+    "fentry_fexit-el.elf",
+    "fentry/target"
+);
+verify_section_pass!(
+    cilium_ebpf_fentry_fexit_fexit,
+    "cilium-ebpf",
+    "fentry_fexit-el.elf",
+    "fexit/target"
+);
+verify_section_pass!(
+    cilium_ebpf_fentry_fexit_tc,
+    "cilium-ebpf",
+    "fentry_fexit-el.elf",
+    "tc"
+);
+verify_section_pass!(
+    cilium_ebpf_freplace_text,
+    "cilium-ebpf",
+    "freplace-el.elf",
+    ".text"
+);
+verify_section_pass!(
+    cilium_ebpf_freplace_freplace_subprog,
+    "cilium-ebpf",
+    "freplace-el.elf",
+    "freplace/subprog"
+);
+verify_section_pass!(
+    cilium_ebpf_freplace_raw_tracepoint,
+    "cilium-ebpf",
+    "freplace-el.elf",
+    "raw_tracepoint/sched_process_exec"
+);
+verify_section_reject!(
+    reject_cilium_ebpf_fwd_decl_socket,
+    "cilium-ebpf",
+    "fwd_decl-el.elf",
+    "socket"
+);
+verify_section_reject!(
+    reject_cilium_ebpf_invalid_kfunc_tc,
+    "cilium-ebpf",
+    "invalid-kfunc-el.elf",
+    "tc"
+);
+verify_section_pass!(
+    cilium_ebpf_kconfig_socket,
+    "cilium-ebpf",
+    "kconfig-el.elf",
+    "socket"
+);
+verify_section_reject!(
+    reject_cilium_ebpf_kfunc_fentry,
+    "cilium-ebpf",
+    "kfunc-el.elf",
+    "fentry/bpf_fentry_test2"
+);
+verify_section_reject!(
+    reject_cilium_ebpf_kfunc_tc,
+    "cilium-ebpf",
+    "kfunc-el.elf",
+    "tc"
+);
+verify_program_pass!(
+    cilium_ebpf_kfunc_call_weak_kfunc,
+    "cilium-ebpf",
+    "kfunc-el.elf",
+    "tp_btf/task_newtask",
+    "call_weak_kfunc",
+    2
+);
+verify_program_pass!(
+    cilium_ebpf_kfunc_weak_kfunc_missing,
+    "cilium-ebpf",
+    "kfunc-el.elf",
+    "tp_btf/task_newtask",
+    "weak_kfunc_missing",
+    2
+);
+verify_section_reject!(
+    reject_cilium_ebpf_kfunc_kmod_tc,
+    "cilium-ebpf",
+    "kfunc-kmod-el.elf",
+    "tc"
+);
+verify_program_pass!(
+    cilium_ebpf_ksym_ksym_missing_test,
+    "cilium-ebpf",
+    "ksym-el.elf",
+    "socket",
+    "ksym_missing_test",
+    2
+);
+verify_program_pass!(
+    cilium_ebpf_ksym_ksym_test,
+    "cilium-ebpf",
+    "ksym-el.elf",
+    "socket",
+    "ksym_test",
+    2
+);
+
+// cilium-ebpf/ linked programs
+verify_program_pass!(
+    cilium_ebpf_linked_l1,
+    "cilium-ebpf",
+    "linked-el.elf",
+    ".text",
+    "l1",
+    5
+);
+verify_program_pass!(
+    cilium_ebpf_linked_l1_s,
+    "cilium-ebpf",
+    "linked-el.elf",
+    ".text",
+    "l1_s",
+    5
+);
+verify_program_pass!(
+    cilium_ebpf_linked_l1_w,
+    "cilium-ebpf",
+    "linked-el.elf",
+    ".text",
+    "l1_w",
+    5
+);
+verify_program_pass!(
+    cilium_ebpf_linked_l2,
+    "cilium-ebpf",
+    "linked-el.elf",
+    ".text",
+    "l2",
+    5
+);
+verify_program_pass!(
+    cilium_ebpf_linked_ww,
+    "cilium-ebpf",
+    "linked-el.elf",
+    ".text",
+    "ww",
+    5
+);
+verify_program_pass!(
+    cilium_ebpf_linked_entry_l1,
+    "cilium-ebpf",
+    "linked-el.elf",
+    "socket",
+    "entry_l1",
+    5
+);
+verify_program_pass!(
+    cilium_ebpf_linked_entry_l1_s,
+    "cilium-ebpf",
+    "linked-el.elf",
+    "socket",
+    "entry_l1_s",
+    5
+);
+verify_program_pass!(
+    cilium_ebpf_linked_entry_l1_w,
+    "cilium-ebpf",
+    "linked-el.elf",
+    "socket",
+    "entry_l1_w",
+    5
+);
+verify_program_pass!(
+    cilium_ebpf_linked_entry_l2,
+    "cilium-ebpf",
+    "linked-el.elf",
+    "socket",
+    "entry_l2",
+    5
+);
+verify_program_pass!(
+    cilium_ebpf_linked_entry_ww,
+    "cilium-ebpf",
+    "linked-el.elf",
+    "socket",
+    "entry_ww",
+    5
+);
+
+verify_program_pass!(
+    cilium_ebpf_linked1_l1,
+    "cilium-ebpf",
+    "linked1-el.elf",
+    ".text",
+    "l1",
+    4
+);
+verify_program_pass!(
+    cilium_ebpf_linked1_l1_s,
+    "cilium-ebpf",
+    "linked1-el.elf",
+    ".text",
+    "l1_s",
+    4
+);
+verify_program_pass!(
+    cilium_ebpf_linked1_l1_w,
+    "cilium-ebpf",
+    "linked1-el.elf",
+    ".text",
+    "l1_w",
+    4
+);
+verify_program_pass!(
+    cilium_ebpf_linked1_ww,
+    "cilium-ebpf",
+    "linked1-el.elf",
+    ".text",
+    "ww",
+    4
+);
+verify_program_pass!(
+    cilium_ebpf_linked1_entry_l1_s,
+    "cilium-ebpf",
+    "linked1-el.elf",
+    "socket",
+    "entry_l1_s",
+    4
+);
+verify_program_pass!(
+    cilium_ebpf_linked1_entry_l1_w,
+    "cilium-ebpf",
+    "linked1-el.elf",
+    "socket",
+    "entry_l1_w",
+    4
+);
+verify_program_reject!(
+    reject_cilium_ebpf_linked1_entry_l2,
+    "cilium-ebpf",
+    "linked1-el.elf",
+    "socket",
+    "entry_l2",
+    4
+);
+verify_program_pass!(
+    cilium_ebpf_linked1_entry_ww,
+    "cilium-ebpf",
+    "linked1-el.elf",
+    "socket",
+    "entry_ww",
+    4
+);
+
+verify_program_pass!(
+    cilium_ebpf_linked2_l1_s,
+    "cilium-ebpf",
+    "linked2-el.elf",
+    ".text",
+    "l1_s",
+    4
+);
+verify_program_pass!(
+    cilium_ebpf_linked2_l1_w,
+    "cilium-ebpf",
+    "linked2-el.elf",
+    ".text",
+    "l1_w",
+    4
+);
+verify_program_pass!(
+    cilium_ebpf_linked2_l2,
+    "cilium-ebpf",
+    "linked2-el.elf",
+    ".text",
+    "l2",
+    4
+);
+verify_program_pass!(
+    cilium_ebpf_linked2_ww,
+    "cilium-ebpf",
+    "linked2-el.elf",
+    ".text",
+    "ww",
+    4
+);
+verify_program_reject!(
+    reject_cilium_ebpf_linked2_entry_l1,
+    "cilium-ebpf",
+    "linked2-el.elf",
+    "socket",
+    "entry_l1",
+    4
+);
+verify_program_pass!(
+    cilium_ebpf_linked2_entry_l1_s,
+    "cilium-ebpf",
+    "linked2-el.elf",
+    "socket",
+    "entry_l1_s",
+    4
+);
+verify_program_pass!(
+    cilium_ebpf_linked2_entry_l1_w,
+    "cilium-ebpf",
+    "linked2-el.elf",
+    "socket",
+    "entry_l1_w",
+    4
+);
+verify_program_pass!(
+    cilium_ebpf_linked2_entry_ww,
+    "cilium-ebpf",
+    "linked2-el.elf",
+    "socket",
+    "entry_ww",
+    4
+);
+
+// cilium-ebpf/ loader variants
+verify_section_pass!(
+    cilium_ebpf_loader_clang14_socket,
+    "cilium-ebpf",
+    "loader-clang-14-el.elf",
+    "socket"
+);
+verify_section_pass!(
+    cilium_ebpf_loader_clang14_socket_2,
+    "cilium-ebpf",
+    "loader-clang-14-el.elf",
+    "socket/2"
+);
+verify_section_pass!(
+    cilium_ebpf_loader_clang14_socket_3,
+    "cilium-ebpf",
+    "loader-clang-14-el.elf",
+    "socket/3"
+);
+verify_section_pass!(
+    cilium_ebpf_loader_clang14_socket_4,
+    "cilium-ebpf",
+    "loader-clang-14-el.elf",
+    "socket/4"
+);
+verify_section_pass!(
+    cilium_ebpf_loader_clang14_xdp,
+    "cilium-ebpf",
+    "loader-clang-14-el.elf",
+    "xdp"
+);
+verify_section_pass!(
+    cilium_ebpf_loader_clang17_socket,
+    "cilium-ebpf",
+    "loader-clang-17-el.elf",
+    "socket"
+);
+verify_section_pass!(
+    cilium_ebpf_loader_clang17_socket_2,
+    "cilium-ebpf",
+    "loader-clang-17-el.elf",
+    "socket/2"
+);
+verify_section_pass!(
+    cilium_ebpf_loader_clang17_socket_3,
+    "cilium-ebpf",
+    "loader-clang-17-el.elf",
+    "socket/3"
+);
+verify_section_pass!(
+    cilium_ebpf_loader_clang17_socket_4,
+    "cilium-ebpf",
+    "loader-clang-17-el.elf",
+    "socket/4"
+);
+verify_section_pass!(
+    cilium_ebpf_loader_clang17_xdp,
+    "cilium-ebpf",
+    "loader-clang-17-el.elf",
+    "xdp"
+);
+verify_section_pass!(
+    cilium_ebpf_loader_clang20_socket,
+    "cilium-ebpf",
+    "loader-clang-20-el.elf",
+    "socket"
+);
+verify_section_pass!(
+    cilium_ebpf_loader_clang20_socket_2,
+    "cilium-ebpf",
+    "loader-clang-20-el.elf",
+    "socket/2"
+);
+verify_section_pass!(
+    cilium_ebpf_loader_clang20_socket_3,
+    "cilium-ebpf",
+    "loader-clang-20-el.elf",
+    "socket/3"
+);
+verify_section_pass!(
+    cilium_ebpf_loader_clang20_socket_4,
+    "cilium-ebpf",
+    "loader-clang-20-el.elf",
+    "socket/4"
+);
+verify_section_pass!(
+    cilium_ebpf_loader_clang20_xdp,
+    "cilium-ebpf",
+    "loader-clang-20-el.elf",
+    "xdp"
+);
+verify_section_pass!(
+    cilium_ebpf_loader_socket,
+    "cilium-ebpf",
+    "loader-el.elf",
+    "socket"
+);
+verify_section_pass!(
+    cilium_ebpf_loader_socket_2,
+    "cilium-ebpf",
+    "loader-el.elf",
+    "socket/2"
+);
+verify_section_pass!(
+    cilium_ebpf_loader_socket_3,
+    "cilium-ebpf",
+    "loader-el.elf",
+    "socket/3"
+);
+verify_section_pass!(
+    cilium_ebpf_loader_socket_4,
+    "cilium-ebpf",
+    "loader-el.elf",
+    "socket/4"
+);
+verify_section_pass!(
+    cilium_ebpf_loader_xdp,
+    "cilium-ebpf",
+    "loader-el.elf",
+    "xdp"
+);
+verify_section_pass!(
+    cilium_ebpf_loader_nobtf_socket,
+    "cilium-ebpf",
+    "loader_nobtf-el.elf",
+    "socket"
+);
+verify_section_pass!(
+    cilium_ebpf_loader_nobtf_socket_2,
+    "cilium-ebpf",
+    "loader_nobtf-el.elf",
+    "socket/2"
+);
+verify_section_pass!(
+    cilium_ebpf_loader_nobtf_socket_3,
+    "cilium-ebpf",
+    "loader_nobtf-el.elf",
+    "socket/3"
+);
+verify_section_pass!(
+    cilium_ebpf_loader_nobtf_socket_4,
+    "cilium-ebpf",
+    "loader_nobtf-el.elf",
+    "socket/4"
+);
+verify_section_pass!(
+    cilium_ebpf_loader_nobtf_xdp,
+    "cilium-ebpf",
+    "loader_nobtf-el.elf",
+    "xdp"
+);
+
+// cilium-ebpf/ manyprogs
+verify_section_pass!(
+    cilium_ebpf_manyprogs_a0,
+    "cilium-ebpf",
+    "manyprogs-el.elf",
+    "kprobe/sys_execvea0"
+);
+verify_section_pass!(
+    cilium_ebpf_manyprogs_a1,
+    "cilium-ebpf",
+    "manyprogs-el.elf",
+    "kprobe/sys_execvea1"
+);
+verify_section_pass!(
+    cilium_ebpf_manyprogs_a10,
+    "cilium-ebpf",
+    "manyprogs-el.elf",
+    "kprobe/sys_execvea10"
+);
+verify_section_pass!(
+    cilium_ebpf_manyprogs_a11,
+    "cilium-ebpf",
+    "manyprogs-el.elf",
+    "kprobe/sys_execvea11"
+);
+verify_section_pass!(
+    cilium_ebpf_manyprogs_a12,
+    "cilium-ebpf",
+    "manyprogs-el.elf",
+    "kprobe/sys_execvea12"
+);
+verify_section_pass!(
+    cilium_ebpf_manyprogs_a13,
+    "cilium-ebpf",
+    "manyprogs-el.elf",
+    "kprobe/sys_execvea13"
+);
+verify_section_pass!(
+    cilium_ebpf_manyprogs_a14,
+    "cilium-ebpf",
+    "manyprogs-el.elf",
+    "kprobe/sys_execvea14"
+);
+verify_section_pass!(
+    cilium_ebpf_manyprogs_a15,
+    "cilium-ebpf",
+    "manyprogs-el.elf",
+    "kprobe/sys_execvea15"
+);
+verify_section_pass!(
+    cilium_ebpf_manyprogs_a16,
+    "cilium-ebpf",
+    "manyprogs-el.elf",
+    "kprobe/sys_execvea16"
+);
+verify_section_pass!(
+    cilium_ebpf_manyprogs_a17,
+    "cilium-ebpf",
+    "manyprogs-el.elf",
+    "kprobe/sys_execvea17"
+);
+verify_section_pass!(
+    cilium_ebpf_manyprogs_a18,
+    "cilium-ebpf",
+    "manyprogs-el.elf",
+    "kprobe/sys_execvea18"
+);
+verify_section_pass!(
+    cilium_ebpf_manyprogs_a19,
+    "cilium-ebpf",
+    "manyprogs-el.elf",
+    "kprobe/sys_execvea19"
+);
+verify_section_pass!(
+    cilium_ebpf_manyprogs_a2,
+    "cilium-ebpf",
+    "manyprogs-el.elf",
+    "kprobe/sys_execvea2"
+);
+verify_section_pass!(
+    cilium_ebpf_manyprogs_a20,
+    "cilium-ebpf",
+    "manyprogs-el.elf",
+    "kprobe/sys_execvea20"
+);
+verify_section_pass!(
+    cilium_ebpf_manyprogs_a21,
+    "cilium-ebpf",
+    "manyprogs-el.elf",
+    "kprobe/sys_execvea21"
+);
+verify_section_pass!(
+    cilium_ebpf_manyprogs_a22,
+    "cilium-ebpf",
+    "manyprogs-el.elf",
+    "kprobe/sys_execvea22"
+);
+verify_section_pass!(
+    cilium_ebpf_manyprogs_a23,
+    "cilium-ebpf",
+    "manyprogs-el.elf",
+    "kprobe/sys_execvea23"
+);
+verify_section_pass!(
+    cilium_ebpf_manyprogs_a24,
+    "cilium-ebpf",
+    "manyprogs-el.elf",
+    "kprobe/sys_execvea24"
+);
+verify_section_pass!(
+    cilium_ebpf_manyprogs_a25,
+    "cilium-ebpf",
+    "manyprogs-el.elf",
+    "kprobe/sys_execvea25"
+);
+verify_section_pass!(
+    cilium_ebpf_manyprogs_a26,
+    "cilium-ebpf",
+    "manyprogs-el.elf",
+    "kprobe/sys_execvea26"
+);
+verify_section_pass!(
+    cilium_ebpf_manyprogs_a27,
+    "cilium-ebpf",
+    "manyprogs-el.elf",
+    "kprobe/sys_execvea27"
+);
+verify_section_pass!(
+    cilium_ebpf_manyprogs_a28,
+    "cilium-ebpf",
+    "manyprogs-el.elf",
+    "kprobe/sys_execvea28"
+);
+verify_section_pass!(
+    cilium_ebpf_manyprogs_a29,
+    "cilium-ebpf",
+    "manyprogs-el.elf",
+    "kprobe/sys_execvea29"
+);
+verify_section_pass!(
+    cilium_ebpf_manyprogs_a3,
+    "cilium-ebpf",
+    "manyprogs-el.elf",
+    "kprobe/sys_execvea3"
+);
+verify_section_pass!(
+    cilium_ebpf_manyprogs_a4,
+    "cilium-ebpf",
+    "manyprogs-el.elf",
+    "kprobe/sys_execvea4"
+);
+verify_section_pass!(
+    cilium_ebpf_manyprogs_a5,
+    "cilium-ebpf",
+    "manyprogs-el.elf",
+    "kprobe/sys_execvea5"
+);
+verify_section_pass!(
+    cilium_ebpf_manyprogs_a6,
+    "cilium-ebpf",
+    "manyprogs-el.elf",
+    "kprobe/sys_execvea6"
+);
+verify_section_pass!(
+    cilium_ebpf_manyprogs_a7,
+    "cilium-ebpf",
+    "manyprogs-el.elf",
+    "kprobe/sys_execvea7"
+);
+verify_section_pass!(
+    cilium_ebpf_manyprogs_a8,
+    "cilium-ebpf",
+    "manyprogs-el.elf",
+    "kprobe/sys_execvea8"
+);
+verify_section_pass!(
+    cilium_ebpf_manyprogs_a9,
+    "cilium-ebpf",
+    "manyprogs-el.elf",
+    "kprobe/sys_execvea9"
+);
+
+// cilium-ebpf/ remaining pass sections
+verify_section_pass!(
+    cilium_ebpf_raw_tracepoint,
+    "cilium-ebpf",
+    "raw_tracepoint-el.elf",
+    "raw_tracepoint/sched_process_exec"
+);
+verify_section_pass!(
+    cilium_ebpf_strings_xdp,
+    "cilium-ebpf",
+    "strings-el.elf",
+    "xdp"
+);
+verify_section_pass!(
+    cilium_ebpf_struct_ops_test_1,
+    "cilium-ebpf",
+    "struct_ops-el.elf",
+    "struct_ops/test_1"
+);
+verify_section_pass!(
+    cilium_ebpf_subprog_reloc_text,
+    "cilium-ebpf",
+    "subprog_reloc-el.elf",
+    ".text"
+);
+
+// cilium-ebpf/ variables
+verify_program_pass!(
+    cilium_ebpf_variables_add_atomic,
+    "cilium-ebpf",
+    "variables-el.elf",
+    "socket",
+    "add_atomic",
+    8
+);
+verify_program_pass!(
+    cilium_ebpf_variables_check_array,
+    "cilium-ebpf",
+    "variables-el.elf",
+    "socket",
+    "check_array",
+    8
+);
+verify_program_pass!(
+    cilium_ebpf_variables_check_struct,
+    "cilium-ebpf",
+    "variables-el.elf",
+    "socket",
+    "check_struct",
+    8
+);
+verify_program_pass!(
+    cilium_ebpf_variables_check_struct_pad,
+    "cilium-ebpf",
+    "variables-el.elf",
+    "socket",
+    "check_struct_pad",
+    8
+);
+verify_program_pass!(
+    cilium_ebpf_variables_get_bss,
+    "cilium-ebpf",
+    "variables-el.elf",
+    "socket",
+    "get_bss",
+    8
+);
+verify_program_pass!(
+    cilium_ebpf_variables_get_data,
+    "cilium-ebpf",
+    "variables-el.elf",
+    "socket",
+    "get_data",
+    8
+);
+verify_program_pass!(
+    cilium_ebpf_variables_get_rodata,
+    "cilium-ebpf",
+    "variables-el.elf",
+    "socket",
+    "get_rodata",
+    8
+);
+verify_program_pass!(
+    cilium_ebpf_variables_set_vars,
+    "cilium-ebpf",
+    "variables-el.elf",
+    "socket",
+    "set_vars",
+    8
+);
+
+// cilium-ebpf/ expected failures (VerifierTypeTracking)
+verify_section_expected_fail!(
+    fail_cilium_ebpf_invalid_map_static_xdp,
+    "cilium-ebpf",
+    "invalid_map_static-el.elf",
+    "xdp"
+);
+verify_program_expected_fail!(
+    fail_cilium_ebpf_loader_clang14_global_fn2,
+    "cilium-ebpf",
+    "loader-clang-14-el.elf",
+    ".text",
+    "global_fn2",
+    2
+);
+verify_section_expected_fail!(
+    fail_cilium_ebpf_loader_clang14_other,
+    "cilium-ebpf",
+    "loader-clang-14-el.elf",
+    "other"
+);
+verify_section_expected_fail!(
+    fail_cilium_ebpf_loader_clang14_static,
+    "cilium-ebpf",
+    "loader-clang-14-el.elf",
+    "static"
+);
+verify_program_expected_fail!(
+    fail_cilium_ebpf_loader_clang17_global_fn2,
+    "cilium-ebpf",
+    "loader-clang-17-el.elf",
+    ".text",
+    "global_fn2",
+    2
+);
+verify_section_expected_fail!(
+    fail_cilium_ebpf_loader_clang17_other,
+    "cilium-ebpf",
+    "loader-clang-17-el.elf",
+    "other"
+);
+verify_section_expected_fail!(
+    fail_cilium_ebpf_loader_clang17_static,
+    "cilium-ebpf",
+    "loader-clang-17-el.elf",
+    "static"
+);
+verify_program_expected_fail!(
+    fail_cilium_ebpf_loader_clang20_global_fn2,
+    "cilium-ebpf",
+    "loader-clang-20-el.elf",
+    ".text",
+    "global_fn2",
+    2
+);
+verify_section_expected_fail!(
+    fail_cilium_ebpf_loader_clang20_other,
+    "cilium-ebpf",
+    "loader-clang-20-el.elf",
+    "other"
+);
+verify_section_expected_fail!(
+    fail_cilium_ebpf_loader_clang20_static,
+    "cilium-ebpf",
+    "loader-clang-20-el.elf",
+    "static"
+);
+verify_program_expected_fail!(
+    fail_cilium_ebpf_loader_global_fn2,
+    "cilium-ebpf",
+    "loader-el.elf",
+    ".text",
+    "global_fn2",
+    2
+);
+verify_section_expected_fail!(
+    fail_cilium_ebpf_loader_other,
+    "cilium-ebpf",
+    "loader-el.elf",
+    "other"
+);
+verify_section_expected_fail!(
+    fail_cilium_ebpf_loader_static,
+    "cilium-ebpf",
+    "loader-el.elf",
+    "static"
+);
+verify_program_expected_fail!(
+    fail_cilium_ebpf_loader_nobtf_global_fn2,
+    "cilium-ebpf",
+    "loader_nobtf-el.elf",
+    ".text",
+    "global_fn2",
+    2
+);
+verify_section_expected_fail!(
+    fail_cilium_ebpf_loader_nobtf_other,
+    "cilium-ebpf",
+    "loader_nobtf-el.elf",
+    "other"
+);
+verify_section_expected_fail!(
+    fail_cilium_ebpf_loader_nobtf_static,
+    "cilium-ebpf",
+    "loader_nobtf-el.elf",
+    "static"
+);
+verify_section_expected_fail!(
+    fail_cilium_ebpf_subprog_reloc_xdp,
+    "cilium-ebpf",
+    "subprog_reloc-el.elf",
+    "xdp"
+);
+
+// cilium-ebpf/ expected failures (VerifierPointerArithmetic)
+verify_program_expected_fail!(
+    fail_cilium_ebpf_loader_clang14_global_fn,
+    "cilium-ebpf",
+    "loader-clang-14-el.elf",
+    ".text",
+    "global_fn",
+    2
+);
+verify_program_expected_fail!(
+    fail_cilium_ebpf_loader_clang17_global_fn,
+    "cilium-ebpf",
+    "loader-clang-17-el.elf",
+    ".text",
+    "global_fn",
+    2
+);
+verify_program_expected_fail!(
+    fail_cilium_ebpf_loader_clang20_global_fn,
+    "cilium-ebpf",
+    "loader-clang-20-el.elf",
+    ".text",
+    "global_fn",
+    2
+);
+verify_program_expected_fail!(
+    fail_cilium_ebpf_loader_global_fn,
+    "cilium-ebpf",
+    "loader-el.elf",
+    ".text",
+    "global_fn",
+    2
+);
+verify_program_expected_fail!(
+    fail_cilium_ebpf_loader_nobtf_global_fn,
+    "cilium-ebpf",
+    "loader_nobtf-el.elf",
+    ".text",
+    "global_fn",
+    2
+);
+
+// ============================================================================
+// invalid/ additional tests (new in upstream)
+// ============================================================================
+
+// invalid/ reject-load tests
+verify_section_reject_load!(
+    reject_load_invalid_58087ea4_cgroup_connect4,
+    "invalid",
+    "58087ea4ff41695f3186d628a3250b26dc8d237a",
+    "cgroup/connect4"
+);
+verify_section_reject_load!(
+    reject_load_invalid_58087ea4_cgroup_connect6,
+    "invalid",
+    "58087ea4ff41695f3186d628a3250b26dc8d237a",
+    "cgroup/connect6"
+);
+verify_section_reject_load!(
+    reject_load_invalid_58087ea4_cgroup_recv_accept4,
+    "invalid",
+    "58087ea4ff41695f3186d628a3250b26dc8d237a",
+    "cgroup/recv_accept4"
+);
+verify_section_reject_load!(
+    reject_load_invalid_58087ea4_cgroup_recv_accept6,
+    "invalid",
+    "58087ea4ff41695f3186d628a3250b26dc8d237a",
+    "cgroup/recv_accept6"
+);
+verify_section_reject_load!(
+    reject_load_invalid_ab3408af_cgroup_connect4,
+    "invalid",
+    "ab3408afd06d68dd7e73bf21bde38350d9751a78",
+    "cgroup/connect4"
+);
+verify_section_reject_load!(
+    reject_load_invalid_ab3408af_cgroup_connect6,
+    "invalid",
+    "ab3408afd06d68dd7e73bf21bde38350d9751a78",
+    "cgroup/connect6"
+);
+verify_section_reject_load!(
+    reject_load_invalid_ab3408af_cgroup_recv_accept4,
+    "invalid",
+    "ab3408afd06d68dd7e73bf21bde38350d9751a78",
+    "cgroup/recv_accept4"
+);
+verify_section_reject_load!(
+    reject_load_invalid_ab3408af_cgroup_recv_accept6,
+    "invalid",
+    "ab3408afd06d68dd7e73bf21bde38350d9751a78",
+    "cgroup/recv_accept6"
+);
+
+// invalid/ pass tests
+verify_section_pass!(
+    invalid_c049438c_text,
+    "invalid",
+    "c049438cf649269921736e7306231385350dea58",
+    ".text"
+);
+verify_section_pass!(
+    invalid_ef2e42c0_text,
+    "invalid",
+    "ef2e42c0bfcf4dab6b9c3926759365b6dfa73634",
+    ".text"
+);
+
+// invalid/ reject test
+verify_section_reject!(
+    reject_invalid_invalid_lddw,
+    "invalid",
+    "invalid-lddw.o",
+    ".text"
+);
+
+// invalid/ expected failures (VerifierTypeTracking)
+verify_section_expected_fail!(
+    fail_invalid_af99e766_xdp_prog,
+    "invalid",
+    "af99e766f6ba44fd7f2135c3e325c817224b99a3",
+    "xdp_prog"
+);
+verify_section_expected_fail!(
+    fail_invalid_dac31099_bind,
+    "invalid",
+    "dac31099c3bb5b6395908c82cc8540e77a6a1849",
+    "bind"
+);
+verify_section_expected_fail!(
+    fail_invalid_timeout_29db_bind,
+    "invalid",
+    "timeout-29db93548c671165313b314d4f83a3eefa24df37",
+    "bind"
+);
+verify_section_expected_fail!(
+    fail_invalid_timeout_29db_bind_0,
+    "invalid",
+    "timeout-29db93548c671165313b314d4f83a3eefa24df37",
+    "bind/0"
+);
+verify_section_expected_fail!(
+    fail_invalid_timeout_29db_bind_1,
+    "invalid",
+    "timeout-29db93548c671165313b314d4f83a3eefa24df37",
+    "bind/1"
+);
+verify_section_expected_fail!(
+    fail_invalid_timeout_29db_bind_10,
+    "invalid",
+    "timeout-29db93548c671165313b314d4f83a3eefa24df37",
+    "bind/10"
+);
+verify_section_expected_fail!(
+    fail_invalid_timeout_29db_bind_11,
+    "invalid",
+    "timeout-29db93548c671165313b314d4f83a3eefa24df37",
+    "bind/11"
+);
+verify_section_expected_fail!(
+    fail_invalid_timeout_29db_bind_12,
+    "invalid",
+    "timeout-29db93548c671165313b314d4f83a3eefa24df37",
+    "bind/12"
+);
+verify_section_expected_fail!(
+    fail_invalid_timeout_29db_bind_13,
+    "invalid",
+    "timeout-29db93548c671165313b314d4f83a3eefa24df37",
+    "bind/13"
+);
+verify_section_expected_fail!(
+    fail_invalid_timeout_29db_bind_14,
+    "invalid",
+    "timeout-29db93548c671165313b314d4f83a3eefa24df37",
+    "bind/14"
+);
+verify_section_expected_fail!(
+    fail_invalid_timeout_29db_bind_15,
+    "invalid",
+    "timeout-29db93548c671165313b314d4f83a3eefa24df37",
+    "bind/15"
+);
+verify_section_expected_fail!(
+    fail_invalid_timeout_29db_bind_16,
+    "invalid",
+    "timeout-29db93548c671165313b314d4f83a3eefa24df37",
+    "bind/16"
+);
+verify_section_expected_fail!(
+    fail_invalid_timeout_29db_bind_17,
+    "invalid",
+    "timeout-29db93548c671165313b314d4f83a3eefa24df37",
+    "bind/17"
+);
+verify_section_expected_fail!(
+    fail_invalid_timeout_29db_bind_18,
+    "invalid",
+    "timeout-29db93548c671165313b314d4f83a3eefa24df37",
+    "bind/18"
+);
+verify_section_expected_fail!(
+    fail_invalid_timeout_29db_bind_19,
+    "invalid",
+    "timeout-29db93548c671165313b314d4f83a3eefa24df37",
+    "bind/19"
+);
+verify_section_expected_fail!(
+    fail_invalid_timeout_29db_bind_2,
+    "invalid",
+    "timeout-29db93548c671165313b314d4f83a3eefa24df37",
+    "bind/2"
+);
+verify_section_expected_fail!(
+    fail_invalid_timeout_29db_bind_20,
+    "invalid",
+    "timeout-29db93548c671165313b314d4f83a3eefa24df37",
+    "bind/20"
+);
+verify_section_expected_fail!(
+    fail_invalid_timeout_29db_bind_21,
+    "invalid",
+    "timeout-29db93548c671165313b314d4f83a3eefa24df37",
+    "bind/21"
+);
+verify_section_expected_fail!(
+    fail_invalid_timeout_29db_bind_22,
+    "invalid",
+    "timeout-29db93548c671165313b314d4f83a3eefa24df37",
+    "bind/22"
+);
+verify_section_expected_fail!(
+    fail_invalid_timeout_29db_bind_23,
+    "invalid",
+    "timeout-29db93548c671165313b314d4f83a3eefa24df37",
+    "bind/23"
+);
+verify_section_expected_fail!(
+    fail_invalid_timeout_29db_bind_24,
+    "invalid",
+    "timeout-29db93548c671165313b314d4f83a3eefa24df37",
+    "bind/24"
+);
+verify_section_expected_fail!(
+    fail_invalid_timeout_29db_bind_25,
+    "invalid",
+    "timeout-29db93548c671165313b314d4f83a3eefa24df37",
+    "bind/25"
+);
+verify_section_expected_fail!(
+    fail_invalid_timeout_29db_bind_26,
+    "invalid",
+    "timeout-29db93548c671165313b314d4f83a3eefa24df37",
+    "bind/26"
+);
+verify_section_expected_fail!(
+    fail_invalid_timeout_29db_bind_27,
+    "invalid",
+    "timeout-29db93548c671165313b314d4f83a3eefa24df37",
+    "bind/27"
+);
+verify_section_expected_fail!(
+    fail_invalid_timeout_29db_bind_28,
+    "invalid",
+    "timeout-29db93548c671165313b314d4f83a3eefa24df37",
+    "bind/28"
+);
+verify_section_expected_fail!(
+    fail_invalid_timeout_29db_bind_29,
+    "invalid",
+    "timeout-29db93548c671165313b314d4f83a3eefa24df37",
+    "bind/29"
+);
+verify_section_expected_fail!(
+    fail_invalid_timeout_29db_bind_3,
+    "invalid",
+    "timeout-29db93548c671165313b314d4f83a3eefa24df37",
+    "bind/3"
+);
+verify_section_expected_fail!(
+    fail_invalid_timeout_29db_bind_30,
+    "invalid",
+    "timeout-29db93548c671165313b314d4f83a3eefa24df37",
+    "bind/30"
+);
+verify_section_expected_fail!(
+    fail_invalid_timeout_29db_bind_31,
+    "invalid",
+    "timeout-29db93548c671165313b314d4f83a3eefa24df37",
+    "bind/31"
+);
+verify_section_expected_fail!(
+    fail_invalid_timeout_29db_bind_32,
+    "invalid",
+    "timeout-29db93548c671165313b314d4f83a3eefa24df37",
+    "bind/32"
+);
+verify_section_expected_fail!(
+    fail_invalid_timeout_29db_bind_33,
+    "invalid",
+    "timeout-29db93548c671165313b314d4f83a3eefa24df37",
+    "bind/33"
+);
+verify_section_expected_fail!(
+    fail_invalid_timeout_29db_bind_34,
+    "invalid",
+    "timeout-29db93548c671165313b314d4f83a3eefa24df37",
+    "bind/34"
+);
+verify_section_expected_fail!(
+    fail_invalid_timeout_29db_bind_4,
+    "invalid",
+    "timeout-29db93548c671165313b314d4f83a3eefa24df37",
+    "bind/4"
+);
+verify_section_expected_fail!(
+    fail_invalid_timeout_29db_bind_5,
+    "invalid",
+    "timeout-29db93548c671165313b314d4f83a3eefa24df37",
+    "bind/5"
+);
+verify_section_expected_fail!(
+    fail_invalid_timeout_29db_bind_6,
+    "invalid",
+    "timeout-29db93548c671165313b314d4f83a3eefa24df37",
+    "bind/6"
+);
+verify_section_expected_fail!(
+    fail_invalid_timeout_29db_bind_7,
+    "invalid",
+    "timeout-29db93548c671165313b314d4f83a3eefa24df37",
+    "bind/7"
+);
+verify_section_expected_fail!(
+    fail_invalid_timeout_29db_bind_8,
+    "invalid",
+    "timeout-29db93548c671165313b314d4f83a3eefa24df37",
+    "bind/8"
+);
+verify_section_expected_fail!(
+    fail_invalid_timeout_29db_bind_9,
+    "invalid",
+    "timeout-29db93548c671165313b314d4f83a3eefa24df37",
+    "bind/9"
+);
+
+// invalid/ expected failure (VerifierBoundsTracking)
+verify_section_expected_fail!(
+    fail_invalid_662b334a_xdp,
+    "invalid",
+    "662b334a22904023c13f11008e072076a4f4d215",
+    "xdp"
+);
 
 // ============================================================================
 // Multithreading test: verify two sections concurrently
