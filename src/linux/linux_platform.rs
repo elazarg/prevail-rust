@@ -15,9 +15,10 @@ use crate::linux::kfunc;
 use crate::linux::spec_prototypes::{self, HelperPrototype};
 use crate::linux::spec_type_descriptors::{
     CGROUP_DEV_DESCR, CGROUP_SOCK_DESCR, CGROUP_SYSCTL_DESCR, FLOW_DISSECTOR_DESCR, KPROBE_DESCR,
-    LWT_INOUT_DESCR, LWT_XMIT_DESCR, PERF_EVENT_DESCR, SCHED_DESCR, SK_LOOKUP_DESCR, SK_MSG_MD,
-    SK_REUSEPORT_DESCR, SK_SKB_DESCR, SOCK_ADDR_DESCR, SOCK_OPS_DESCR, SOCKET_FILTER_DESCR,
-    SOCKOPT_DESCR, TRACEPOINT_DESCR, UNSPEC_DESCR, XDP_DESCR,
+    LIRC_MODE2_DESCR, LWT_INOUT_DESCR, LWT_XMIT_DESCR, NETFILTER_DESCR, PERF_EVENT_DESCR,
+    SCHED_DESCR, SK_LOOKUP_DESCR, SK_MSG_MD, SK_REUSEPORT_DESCR, SK_SKB_DESCR, SOCK_ADDR_DESCR,
+    SOCK_OPS_DESCR, SOCKET_FILTER_DESCR, SOCKOPT_DESCR, SYSCALL_DESCR, TRACEPOINT_DESCR,
+    TRACING_DESCR, UNSPEC_DESCR, XDP_DESCR,
 };
 use crate::platform::EbpfPlatform;
 use crate::spec::config::EbpfVerifierOptions;
@@ -341,7 +342,7 @@ fn linux_program_types() -> Vec<EbpfProgramType> {
         ),
         ptype(
             "lirc_mode2",
-            Some(&UNSPEC_DESCR),
+            Some(&LIRC_MODE2_DESCR),
             bpf_prog_type::LIRC_MODE2,
             &["lirc_mode2"],
         ),
@@ -371,24 +372,23 @@ fn linux_program_types() -> Vec<EbpfProgramType> {
         ),
         ptype(
             "tracing",
-            Some(&UNSPEC_DESCR),
+            Some(&TRACING_DESCR),
             bpf_prog_type::TRACING,
-            &[
-                "fentry/",
-                "fexit/",
-                "fmod_ret/",
-                "iter/",
-                "lsm.s/",
-                "tp_btf/",
-            ],
+            &["fentry/", "fexit/", "fmod_ret/", "iter/", "tp_btf/"],
         ),
+        // struct_ops callbacks receive function arguments as u64 array, same as fentry/fexit.
         ptype(
             "struct_ops",
-            Some(&UNSPEC_DESCR),
+            Some(&TRACING_DESCR),
             bpf_prog_type::STRUCT_OPS,
             &["struct_ops/"],
         ),
-        ptype("lsm", Some(&UNSPEC_DESCR), bpf_prog_type::LSM, &["lsm/"]),
+        ptype(
+            "lsm",
+            Some(&TRACING_DESCR),
+            bpf_prog_type::LSM,
+            &["lsm/", "lsm.s/"],
+        ),
         ptype(
             "sk_lookup",
             Some(&SK_LOOKUP_DESCR),
@@ -397,13 +397,13 @@ fn linux_program_types() -> Vec<EbpfProgramType> {
         ),
         ptype(
             "syscall",
-            Some(&UNSPEC_DESCR),
+            Some(&SYSCALL_DESCR),
             bpf_prog_type::SYSCALL,
             &["syscall"],
         ),
         ptype(
             "netfilter",
-            Some(&UNSPEC_DESCR),
+            Some(&NETFILTER_DESCR),
             bpf_prog_type::NETFILTER,
             &["netfilter/"],
         ),

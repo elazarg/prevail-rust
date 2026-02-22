@@ -3433,8 +3433,8 @@ verify_section_expected_fail!(
     "fentry.bpf.o",
     "fexit/do_unlinkat"
 );
-verify_section_expected_fail!(
-    fail_libbpf_bootstrap_lsm_bpf,
+verify_section_pass!(
+    libbpf_bootstrap_lsm_bpf,
     "libbpf-bootstrap",
     "lsm.bpf.o",
     "lsm/bpf"
