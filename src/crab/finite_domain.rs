@@ -291,22 +291,23 @@ impl FiniteDomain {
 
         let left_interval_positive;
         let left_interval_negative;
+        let width = if _is64 { 64 } else { 32 };
 
         if !left_interval.is_top() {
-            left_interval_positive = (&left_interval) & (&Interval::nonnegative(64));
-            left_interval_negative = (&left_interval) & (&Interval::negative(64));
+            left_interval_positive = (&left_interval) & (&Interval::nonnegative(width));
+            left_interval_negative = (&left_interval) & (&Interval::negative(width));
         } else {
             left_interval = self.eval_interval(left_uvalue, reg);
             if !left_interval.is_top() {
-                left_interval_positive = (&left_interval) & (&Interval::nonnegative(64));
+                left_interval_positive = (&left_interval) & (&Interval::nonnegative(width));
                 let lih_ub = match left_interval.ub().number() {
                     Some(n) => n.sign_extend(64),
                     None => Number::from(-1i64),
                 };
                 left_interval_negative = Interval::from_number_pair(Number::min_int(64), lih_ub);
             } else {
-                left_interval_positive = Interval::nonnegative(64);
-                left_interval_negative = Interval::negative(64);
+                left_interval_positive = Interval::nonnegative(width);
+                left_interval_negative = Interval::negative(width);
             }
         }
 
@@ -348,10 +349,11 @@ impl FiniteDomain {
 
         let left_interval_low;
         let left_interval_high;
+        let width = if _is64 { 64 } else { 32 };
 
         if !left_interval.is_top() {
-            left_interval_low = (&left_interval) & (&Interval::nonnegative(64));
-            left_interval_high = (&left_interval) & (&Interval::unsigned_high(64));
+            left_interval_low = (&left_interval) & (&Interval::nonnegative(width));
+            left_interval_high = (&left_interval) & (&Interval::unsigned_high(width));
         } else {
             left_interval = self.eval_interval(left_svalue, reg);
             if !left_interval.is_top() {
@@ -360,8 +362,8 @@ impl FiniteDomain {
                 left_interval_high =
                     Interval::new(*left_interval.lb(), Bound::from(-1i64)).truncate_to_unsigned(64);
             } else {
-                left_interval_low = Interval::nonnegative(64);
-                left_interval_high = Interval::unsigned_high(64);
+                left_interval_low = Interval::nonnegative(width);
+                left_interval_high = Interval::unsigned_high(width);
             }
         }
 
@@ -414,19 +416,29 @@ impl FiniteDomain {
         if let Some(rn) = right_interval.singleton() {
             let left_svalue_interval = self.eval_interval(left_svalue, reg);
             if left_svalue_interval.finite_size().is_some() {
-                let mut lb = left_svalue_interval.lb().number().unwrap().narrow_to_i64();
+                let lb = left_svalue_interval.lb().number().unwrap().narrow_to_i64();
                 let rn_i64 = rn.cast_to_signed_width(64).narrow_to_i64();
 
                 // Use high 32-bits from left lb and low 32-bits from right singleton.
-                let lb_match = (lb & 0xFFFFFFFF_00000000u64 as i64) | (rn_i64 & 0xFFFFFFFFi64);
+                let mut lb_match = (lb & 0xFFFFFFFF_00000000u64 as i64) | (rn_i64 & 0xFFFFFFFFi64);
                 if lb_match < lb {
-                    lb = lb.wrapping_add(0x1_0000_0000i64);
+                    // The result is lower than the left interval, so try the next higher
+                    // matching 64-bit value.
+                    if lb_match > i64::MAX - 0x1_0000_0000i64 {
+                        return vec![]; // No valid matching 64-bit value exists.
+                    }
+                    lb_match += 0x1_0000_0000i64;
                 }
 
                 let ub = left_svalue_interval.ub().number().unwrap().narrow_to_i64();
-                let ub_match = (ub & 0xFFFFFFFF_00000000u64 as i64) | (rn_i64 & 0xFFFFFFFFi64);
+                let mut ub_match = (ub & 0xFFFFFFFF_00000000u64 as i64) | (rn_i64 & 0xFFFFFFFFi64);
                 if ub_match > ub {
-                    let _lb = lb.wrapping_sub(0x1_0000_0000i64);
+                    // The result is higher than the left interval, so try the next lower
+                    // matching 64-bit value.
+                    if ub_match < i64::MIN + 0x1_0000_0000i64 {
+                        return vec![]; // No valid matching 64-bit value exists.
+                    }
+                    ub_match -= 0x1_0000_0000i64;
                 }
 
                 return if (lb_match as u64) <= (ub_match as u64) {

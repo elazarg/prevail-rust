@@ -154,7 +154,7 @@ parity_test!(
     parity_cilium_bpf_xdp_dsr_2_18,
     "cilium/bpf_xdp_dsr_linux.o",
     "2/18",
-    "r0.svalue-packet_size<=-14"
+    "r0.svalue-packet_size<=4294967239"
 );
 
 parity_test!(
@@ -189,7 +189,7 @@ parity_test!(
     parity_cilium_bpf_xdp_dsr_v1_2_18,
     "cilium/bpf_xdp_dsr_linux_v1.o",
     "2/18",
-    "r0.svalue-packet_size<=-14"
+    "r0.svalue-packet_size<=4294967239"
 );
 
 parity_test!(
@@ -245,7 +245,7 @@ parity_test!(
     parity_cilium_bpf_xdp_snat_2_18,
     "cilium/bpf_xdp_snat_linux.o",
     "2/18",
-    "r0.svalue-packet_size<=-14"
+    "r0.svalue-packet_size<=4294967239"
 );
 
 parity_test!(
@@ -266,7 +266,7 @@ parity_test!(
     parity_cilium_bpf_xdp_snat_v1_2_18,
     "cilium/bpf_xdp_snat_linux_v1.o",
     "2/18",
-    "r0.svalue-packet_size<=-14"
+    "r0.svalue-packet_size<=4294967239"
 );
 
 parity_test!(

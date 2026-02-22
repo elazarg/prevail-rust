@@ -274,17 +274,14 @@ impl TypeToNumDomain {
     pub fn widen(
         &self,
         other: &TypeToNumDomain,
-        registry: &mut VariableRegistry,
+        _registry: &mut VariableRegistry,
     ) -> TypeToNumDomain {
-        let extra = self.collect_type_dependent_constraints(other, registry);
-        let mut res = TypeToNumDomain {
+        // Unlike join, widen must NOT re-add type-dependent constraints:
+        // narrowing the widened result can defeat termination (see upstream #960).
+        TypeToNumDomain {
             types: self.types.widen(&other.types),
             values: self.values.widen(&other.values),
-        };
-        for (variable, interval) in &extra {
-            res.values.set(*variable, interval, registry);
         }
-        res
     }
 
     pub fn narrow(&self, other: &TypeToNumDomain) -> TypeToNumDomain {

@@ -1216,36 +1216,59 @@ fn transform_assume(
     match &cond.right {
         Value::Reg(src_reg) => {
             let src = reg_pack(src_reg, registry);
-            // This should have been checked by EbpfChecker
-            debug_assert!(dom.state.types.same_type(&cond.left, src_reg, registry));
             let left_reg = cond.left;
             let op = cond.op;
             let is64 = cond.is64;
-            dom.state = dom
+            if dom.state.types.same_type(&cond.left, src_reg, registry) {
+                dom.state =
+                    dom.state
+                        .join_over_types(&left_reg, registry, |state, te, registry| {
+                            if te == T_NUM {
+                                let constraints = state.values.assume_cst_reg(
+                                    op, is64, dst.svalue, dst.uvalue, src.svalue, src.uvalue,
+                                    registry,
+                                );
+                                for cst in &constraints {
+                                    state.values.add_constraint(cst, registry);
+                                }
+                            } else {
+                                // Either pointers to a singleton region,
+                                // or an equality comparison on map descriptors/pointers to
+                                // non-singleton locations
+                                if let Some(dst_offset) =
+                                    get_type_offset_variable(&left_reg, te, registry)
+                                    && let Some(src_offset) =
+                                        get_type_offset_variable(src_reg, te, registry)
+                                {
+                                    state.values.add_constraint(
+                                        &assume_cst_offsets_reg(op, dst_offset, src_offset),
+                                        registry,
+                                    );
+                                }
+                            }
+                        });
+            } else if dom
                 .state
-                .join_over_types(&left_reg, registry, |state, te, registry| {
-                    if te == T_NUM {
-                        let constraints = state.values.assume_cst_reg(
-                            op, is64, dst.svalue, dst.uvalue, src.svalue, src.uvalue, registry,
-                        );
-                        for cst in &constraints {
-                            state.values.add_constraint(cst, registry);
-                        }
-                    } else {
-                        // Either pointers to a singleton region,
-                        // or an equality comparison on map descriptors/pointers to
-                        // non-singleton locations
-                        if let Some(dst_offset) = get_type_offset_variable(&left_reg, te, registry)
-                            && let Some(src_offset) =
-                                get_type_offset_variable(src_reg, te, registry)
-                        {
-                            state.values.add_constraint(
-                                &assume_cst_offsets_reg(op, dst_offset, src_offset),
-                                registry,
-                            );
-                        }
-                    }
-                });
+                .types
+                .entail_type(reg_type(src_reg, registry), T_NUM)
+            {
+                // Different types but src is a number — apply only numeric constraints.
+                // This does not split dst by concrete type via join_over_types: the numeric
+                // constraints are applied to the global state across all type possibilities.
+                // This is sound (pointer registers carry meaningful svalue/uvalue bounds)
+                // but less precise than a type-split approach for non-numeric type paths.
+                let constraints = dom.state.values.assume_cst_reg(
+                    op, is64, dst.svalue, dst.uvalue, src.svalue, src.uvalue, registry,
+                );
+                for cst in &constraints {
+                    dom.state.values.add_constraint(cst, registry);
+                }
+            } else {
+                // Different types and src is not a number.
+                // The checker may not have seen this Assume (e.g., implicit Assume or
+                // CFG-split edge), so go to bottom conservatively.
+                dom.state.set_to_bottom();
+            }
         }
         Value::Imm(imm_val) => {
             let imm = imm_val.v as i64;
