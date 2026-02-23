@@ -1295,146 +1295,162 @@ impl<'a> ProgramReader<'a> {
 
     // ── CO-RE relocations ──────────────────────────────────────────
 
+    /// Process CO-RE relocations from the `.BTF.ext` core_relo subsection.
+    ///
+    /// Mirrors C++ `ProgramReader::process_core_relocations`.  Directly parses
+    /// the core_relo subsection rather than going through ELF relocation entries.
     fn process_core_relocations(
         &mut self,
         btf_data: &BtfTypeData,
         btf_section_data: &[u8],
     ) -> Result<(), UnmarshalError> {
-        // Find .rel.BTF or .rela.BTF section
-        let relo_sec = self.elf.sections().find(|s| {
-            let name = s.name().unwrap_or("");
-            name == ".rel.BTF" || name == ".rela.BTF"
-        });
-        let relo_sec = match relo_sec {
+        let btf_ext_sec = match self.elf.section_by_name(".BTF.ext") {
             Some(s) => s,
             None => return Ok(()),
         };
-
-        // Find .BTF.ext section
-        let btf_ext_sec = self.elf.section_by_name(".BTF.ext").ok_or_else(|| {
-            UnmarshalError(".BTF.ext section missing for CO-RE relocations".into())
-        })?;
-        let btf_ext_data = btf_ext_sec
+        let ext = btf_ext_sec
             .data()
             .map_err(|e| UnmarshalError(format!("Cannot read .BTF.ext section: {e}")))?;
-
-        // R_BPF_64_NODYLD32 from the kernel UAPI
-        const R_BPF_64_NODYLD32: u32 = 19;
-
-        let sh = relo_sec.elf_section_header();
-        let sh_type = sh.sh_type(ENDIAN);
-
-        if sh_type == elf::SHT_RELA {
-            if let Some((entries, _link)) = sh
-                .rela(ENDIAN, self.data)
-                .map_err(|e| UnmarshalError(format!("Cannot read .rela.BTF section: {e}")))?
-            {
-                for rela in entries {
-                    let relo_type = (rela.r_info(ENDIAN, false) & 0xffff_ffff) as u32;
-                    if relo_type != R_BPF_64_NODYLD32 {
-                        continue;
-                    }
-                    let sym_idx = rela.symbol(ENDIAN, false).map(|s| s.0).unwrap_or(0);
-                    self.apply_core_relo_from_ext(
-                        btf_data,
-                        btf_section_data,
-                        btf_ext_data,
-                        sym_idx,
-                    )?;
-                }
-            }
-        } else if sh_type == elf::SHT_REL
-            && let Some((entries, _link)) = sh
-                .rel(ENDIAN, self.data)
-                .map_err(|e| UnmarshalError(format!("Cannot read .rel.BTF section: {e}")))?
-        {
-            for rel in entries {
-                let relo_type = (rel.r_info(ENDIAN) & 0xffff_ffff) as u32;
-                if relo_type != R_BPF_64_NODYLD32 {
-                    continue;
-                }
-                let sym_idx = rel.symbol(ENDIAN).map(|s| s.0).unwrap_or(0);
-                self.apply_core_relo_from_ext(btf_data, btf_section_data, btf_ext_data, sym_idx)?;
-            }
+        if ext.len() < 8 {
+            return Ok(());
         }
 
-        Ok(())
-    }
+        // BTF.ext header: magic(2), version(1), flags(1), hdr_len(4),
+        //   func_info_off(4), func_info_len(4), line_info_off(4), line_info_len(4),
+        //   core_relo_off(4), core_relo_len(4)
+        let magic = u16::from_le_bytes([ext[0], ext[1]]);
+        let version = ext[2];
+        if magic != 0xEB9F || version != 1 {
+            return Err(UnmarshalError("Invalid .BTF.ext header".into()));
+        }
+        let hdr_len = u32::from_le_bytes([ext[4], ext[5], ext[6], ext[7]]) as usize;
+        if hdr_len < 32 || hdr_len > ext.len() {
+            return Ok(()); // Header too short for core_relo fields — no CO-RE data.
+        }
 
-    fn apply_core_relo_from_ext(
-        &mut self,
-        btf_data: &BtfTypeData,
-        btf_section_data: &[u8],
-        btf_ext_data: &[u8],
-        sym_idx: usize,
-    ) -> Result<(), UnmarshalError> {
-        let sd = get_symbol_details(self.symbols, sym_idx)?;
+        let core_relo_off = u32::from_le_bytes([ext[24], ext[25], ext[26], ext[27]]) as usize;
+        let core_relo_len = u32::from_le_bytes([ext[28], ext[29], ext[30], ext[31]]) as usize;
 
-        // Read the bpf_core_relo struct from BTF.ext at the symbol value offset
-        let relo_offset = sd.value as usize;
-        if relo_offset + 16 > btf_ext_data.len() {
+        let core_start = hdr_len + core_relo_off;
+        let core_end = core_start + core_relo_len;
+        if core_start >= core_end || core_end > ext.len() {
+            return Ok(());
+        }
+
+        // First u32 is the record size.
+        if core_end - core_start < 4 {
             return Err(UnmarshalError(
-                "CO-RE relocation offset out of BTF.ext bounds".into(),
+                "BTF.ext core_relo subsection truncated".into(),
+            ));
+        }
+        let rec_size = u32::from_le_bytes([
+            ext[core_start],
+            ext[core_start + 1],
+            ext[core_start + 2],
+            ext[core_start + 3],
+        ]) as usize;
+        if rec_size < 16 {
+            return Err(UnmarshalError(
+                "Invalid CO-RE relocation record size".into(),
             ));
         }
 
-        // Read 4 u32 fields: insn_off, type_id, access_str_off, kind
-        let insn_off = u32::from_le_bytes([
-            btf_ext_data[relo_offset],
-            btf_ext_data[relo_offset + 1],
-            btf_ext_data[relo_offset + 2],
-            btf_ext_data[relo_offset + 3],
-        ]);
-        let type_id = u32::from_le_bytes([
-            btf_ext_data[relo_offset + 4],
-            btf_ext_data[relo_offset + 5],
-            btf_ext_data[relo_offset + 6],
-            btf_ext_data[relo_offset + 7],
-        ]);
-        let access_str_off = u32::from_le_bytes([
-            btf_ext_data[relo_offset + 8],
-            btf_ext_data[relo_offset + 9],
-            btf_ext_data[relo_offset + 10],
-            btf_ext_data[relo_offset + 11],
-        ]);
-        let kind_raw = u32::from_le_bytes([
-            btf_ext_data[relo_offset + 12],
-            btf_ext_data[relo_offset + 13],
-            btf_ext_data[relo_offset + 14],
-            btf_ext_data[relo_offset + 15],
-        ]);
+        // Build section-name → programs map for matching.
+        let mut progs_by_section: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+        for (idx, prog) in self.raw_programs.iter().enumerate() {
+            progs_by_section
+                .entry(prog.section_name.clone())
+                .or_default()
+                .push(idx);
+        }
 
-        // Find the matching program
         let inst_size = size_of::<EbpfInst>();
-        let mut applied = false;
-        for prog in &mut self.raw_programs {
-            let prog_start = prog.insn_off;
-            let prog_end = prog.insn_off + (prog.prog.len() as u32) * (inst_size as u32);
-            if insn_off >= prog_start && insn_off < prog_end {
-                let inst_idx = ((insn_off - prog.insn_off) as usize) / inst_size;
-                if inst_idx >= prog.prog.len() {
-                    return Err(UnmarshalError(
-                        "CO-RE relocation offset out of bounds".into(),
-                    ));
-                }
-                apply_core_relocation(
-                    &mut prog.prog[inst_idx],
-                    btf_data,
-                    btf_section_data,
-                    type_id,
-                    access_str_off,
-                    kind_raw,
-                )?;
-                applied = true;
+        let mut offset = core_start + 4;
+        while offset < core_end {
+            // Per-section header: sec_name_off(4), num_info(4).
+            if offset + 8 > core_end {
                 break;
             }
+            let sec_name_off = u32::from_le_bytes([
+                ext[offset],
+                ext[offset + 1],
+                ext[offset + 2],
+                ext[offset + 3],
+            ]);
+            let num_info = u32::from_le_bytes([
+                ext[offset + 4],
+                ext[offset + 5],
+                ext[offset + 6],
+                ext[offset + 7],
+            ]) as usize;
+            offset += 8;
+
+            let records_size = num_info * rec_size;
+            if offset + records_size > core_end {
+                return Err(UnmarshalError("CO-RE section records out of bounds".into()));
+            }
+
+            let section_name = crate::btf::parse::read_btf_string(btf_section_data, sec_name_off)?;
+
+            let prog_indices = match progs_by_section.get(&section_name) {
+                Some(v) => v.clone(),
+                None => {
+                    offset += records_size;
+                    continue;
+                }
+            };
+
+            for i in 0..num_info {
+                let rpos = offset + i * rec_size;
+                let insn_off =
+                    u32::from_le_bytes([ext[rpos], ext[rpos + 1], ext[rpos + 2], ext[rpos + 3]]);
+                let type_id = u32::from_le_bytes([
+                    ext[rpos + 4],
+                    ext[rpos + 5],
+                    ext[rpos + 6],
+                    ext[rpos + 7],
+                ]);
+                let access_str_off = u32::from_le_bytes([
+                    ext[rpos + 8],
+                    ext[rpos + 9],
+                    ext[rpos + 10],
+                    ext[rpos + 11],
+                ]);
+                let kind_raw = u32::from_le_bytes([
+                    ext[rpos + 12],
+                    ext[rpos + 13],
+                    ext[rpos + 14],
+                    ext[rpos + 15],
+                ]);
+
+                // Find the program that contains this instruction.
+                let mut applied = false;
+                for &pidx in &prog_indices {
+                    let prog = &self.raw_programs[pidx];
+                    let prog_start = prog.insn_off;
+                    let prog_end = prog_start + (prog.prog.len() as u32) * (inst_size as u32);
+                    if insn_off >= prog_start && insn_off < prog_end {
+                        let inst_idx = ((insn_off - prog_start) as usize) / inst_size;
+                        apply_core_relocation(
+                            &mut self.raw_programs[pidx].prog[inst_idx],
+                            btf_data,
+                            btf_section_data,
+                            type_id,
+                            access_str_off,
+                            kind_raw,
+                        )?;
+                        applied = true;
+                        break;
+                    }
+                }
+                // Silently skip relocations for programs not in our set
+                // (e.g. filtered by desired_section).
+                let _ = applied;
+            }
+
+            offset += records_size;
         }
 
-        if !applied {
-            return Err(UnmarshalError(format!(
-                "Failed to find program for CO-RE relocation at instruction offset {insn_off}"
-            )));
-        }
         Ok(())
     }
 
