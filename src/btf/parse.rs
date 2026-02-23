@@ -106,11 +106,11 @@ fn read_struct<T: zerocopy::FromBytes + Copy>(
     let size = mem::size_of::<T>();
     if *offset < min || *offset + size > max {
         return Err(UnmarshalError(
-            "Invalid .BTF section — offset out of range".into(),
+            "Invalid .BTF section - offset out of range".into(),
         ));
     }
     let val = T::read_from_bytes(&data[*offset..*offset + size])
-        .map_err(|_| UnmarshalError("Invalid .BTF section — read error".into()))?;
+        .map_err(|_| UnmarshalError("Invalid .BTF section - read error".into()))?;
     *offset += size;
     Ok(val)
 }
@@ -124,7 +124,7 @@ fn read_string(
 ) -> Result<String, UnmarshalError> {
     if *offset < min || *offset >= max {
         return Err(UnmarshalError(
-            "Invalid .BTF section — string offset out of range".into(),
+            "Invalid .BTF section - string offset out of range".into(),
         ));
     }
     let start = *offset;
@@ -135,11 +135,11 @@ fn read_string(
     }
     if end >= max {
         return Err(UnmarshalError(
-            "Invalid .BTF section — unterminated string".into(),
+            "Invalid .BTF section - unterminated string".into(),
         ));
     }
     let s = std::str::from_utf8(&data[start..end])
-        .map_err(|e| UnmarshalError(format!("Invalid .BTF section — non-UTF8 string: {e}")))?
+        .map_err(|e| UnmarshalError(format!("Invalid .BTF section - non-UTF8 string: {e}")))?
         .to_string();
     *offset = end + 1; // skip null byte
     Ok(s)
@@ -152,7 +152,7 @@ pub fn parse_string_table(data: &[u8]) -> Result<(BTreeMap<usize, String>, bool)
     let hdr_size = mem::size_of::<BtfHeader>();
     if data.len() < hdr_size {
         return Err(UnmarshalError(
-            "Invalid .BTF section — too small for header".into(),
+            "Invalid .BTF section - too small for header".into(),
         ));
     }
 
@@ -165,20 +165,20 @@ pub fn parse_string_table(data: &[u8]) -> Result<(BTreeMap<usize, String>, bool)
             swap_header(&mut header);
             true
         }
-        _ => return Err(UnmarshalError("Invalid .BTF section — wrong magic".into())),
+        _ => return Err(UnmarshalError("Invalid .BTF section - wrong magic".into())),
     };
 
     if header.version != BTF_HEADER_VERSION {
         return Err(UnmarshalError(
-            "Invalid .BTF section — wrong version".into(),
+            "Invalid .BTF section - wrong version".into(),
         ));
     }
     if (header.hdr_len as usize) < hdr_size {
-        return Err(UnmarshalError("Invalid .BTF section — wrong size".into()));
+        return Err(UnmarshalError("Invalid .BTF section - wrong size".into()));
     }
     if header.hdr_len as usize > data.len() {
         return Err(UnmarshalError(
-            "Invalid .BTF section — invalid header length".into(),
+            "Invalid .BTF section - invalid header length".into(),
         ));
     }
 
@@ -186,7 +186,7 @@ pub fn parse_string_table(data: &[u8]) -> Result<(BTreeMap<usize, String>, bool)
     let str_end = str_start + header.str_len as usize;
     if str_end > data.len() {
         return Err(UnmarshalError(
-            "Invalid .BTF section — string table out of range".into(),
+            "Invalid .BTF section - string table out of range".into(),
         ));
     }
 
@@ -208,7 +208,7 @@ fn find_string(
     string_table
         .get(&offset)
         .cloned()
-        .ok_or_else(|| UnmarshalError("Invalid .BTF section — invalid string offset".into()))
+        .ok_or_else(|| UnmarshalError("Invalid .BTF section - invalid string offset".into()))
 }
 
 /// Parse struct/union member records from a BTF type.
@@ -261,7 +261,7 @@ pub fn parse_types(
     let type_end = type_start + header.type_len as usize;
     if type_end > data.len() {
         return Err(UnmarshalError(
-            "Invalid .BTF section — type section out of range".into(),
+            "Invalid .BTF section - type section out of range".into(),
         ));
     }
 
@@ -285,7 +285,7 @@ pub fn parse_types(
             // Types that require a name
             match kind_raw {
                 1 | 7 | 8 | 12 | 14 | 15 | 16 | 17 | 18 => {
-                    return Err(UnmarshalError("Invalid .BTF section — missing name".into()));
+                    return Err(UnmarshalError("Invalid .BTF section - missing name".into()));
                 }
                 _ => None,
             }
@@ -294,14 +294,14 @@ pub fn parse_types(
         let kind_raw = btf_type_info_kind(raw.info);
         let kind_idx = BtfKindIndex::from_raw(kind_raw).ok_or_else(|| {
             UnmarshalError(format!(
-                "Invalid .BTF section — invalid BTF_KIND {kind_raw}"
+                "Invalid .BTF section - invalid BTF_KIND - {kind_raw}"
             ))
         })?;
 
         let kind = match kind_idx {
             BtfKindIndex::Void => {
                 return Err(UnmarshalError(format!(
-                    "Invalid .BTF section — invalid BTF_KIND {kind_raw}"
+                    "Invalid .BTF section - invalid BTF_KIND - {kind_raw}"
                 )));
             }
 
@@ -382,7 +382,7 @@ pub fn parse_types(
                     }
                     if e.name_off == 0 {
                         return Err(UnmarshalError(
-                            "Invalid .BTF section — invalid BTF_KIND_ENUM member name".into(),
+                            "Invalid .BTF section - invalid BTF_KIND_ENUM member name".into(),
                         ));
                     }
                     members.push(BtfEnumMember {
@@ -559,7 +559,7 @@ pub fn parse_line_information(
     let ext_hdr_size = mem::size_of::<BtfExtHeader>();
     if btf_ext_data.len() < ext_hdr_size {
         return Err(UnmarshalError(
-            "Invalid .BTF.ext section — too small for header".into(),
+            "Invalid .BTF.ext section - too small for header".into(),
         ));
     }
 
@@ -575,24 +575,24 @@ pub fn parse_line_information(
         }
         _ => {
             return Err(UnmarshalError(
-                "Invalid .BTF.ext section — wrong magic".into(),
+                "Invalid .BTF.ext section - wrong magic".into(),
             ));
         }
     };
 
     if (ext_header.hdr_len as usize) < ext_hdr_size {
         return Err(UnmarshalError(
-            "Invalid .BTF.ext section — wrong size".into(),
+            "Invalid .BTF.ext section - wrong size".into(),
         ));
     }
     if ext_header.version != BTF_HEADER_VERSION {
         return Err(UnmarshalError(
-            "Invalid .BTF.ext section — wrong version".into(),
+            "Invalid .BTF.ext section - wrong version".into(),
         ));
     }
     if ext_header.hdr_len as usize > btf_ext_data.len() {
         return Err(UnmarshalError(
-            "Invalid .BTF.ext section — invalid header length".into(),
+            "Invalid .BTF.ext section - invalid header length".into(),
         ));
     }
 
@@ -600,7 +600,7 @@ pub fn parse_line_information(
     let line_info_end = line_info_start + ext_header.line_info_len as usize;
     if line_info_end > btf_ext_data.len() {
         return Err(UnmarshalError(
-            "Invalid .BTF.ext section — line info out of range".into(),
+            "Invalid .BTF.ext section - line info out of range".into(),
         ));
     }
 
@@ -614,7 +614,7 @@ pub fn parse_line_information(
     }
     if (record_size as usize) < mem::size_of::<BpfLineInfo>() {
         return Err(UnmarshalError(
-            "Invalid .BTF.ext section — invalid line info record size".into(),
+            "Invalid .BTF.ext section - invalid line info record size".into(),
         ));
     }
 
@@ -639,7 +639,7 @@ pub fn parse_line_information(
             if extra > 0 {
                 if pos + extra > line_info_end {
                     return Err(UnmarshalError(
-                        "Invalid .BTF.ext section — record extends past line info".into(),
+                        "Invalid .BTF.ext section - record extends past line info".into(),
                     ));
                 }
                 pos += extra;
@@ -669,7 +669,7 @@ pub fn read_btf_string(btf_data: &[u8], string_offset: u32) -> Result<String, Un
     let hdr_size = mem::size_of::<BtfHeader>();
     if btf_data.len() < hdr_size {
         return Err(UnmarshalError(
-            "Invalid .BTF section — too small for header".into(),
+            "Invalid .BTF section - too small for header".into(),
         ));
     }
 
@@ -685,7 +685,7 @@ pub fn read_btf_string(btf_data: &[u8], string_offset: u32) -> Result<String, Un
 
     if target >= str_end {
         return Err(UnmarshalError(
-            "Invalid .BTF section — access string offset out of range".into(),
+            "Invalid .BTF section - access string offset out of range".into(),
         ));
     }
 
@@ -698,7 +698,7 @@ pub fn read_btf_string(btf_data: &[u8], string_offset: u32) -> Result<String, Un
         .map(|s| s.to_string())
         .map_err(|e| {
             UnmarshalError(format!(
-                "Invalid .BTF section — non-UTF8 access string: {e}"
+                "Invalid .BTF section - non-UTF8 access string: {e}"
             ))
         })
 }

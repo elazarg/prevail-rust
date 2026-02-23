@@ -1,17 +1,18 @@
 // Copyright (c) Prevail Verifier contributors.
 // SPDX-License-Identifier: MIT
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
+use serde::Deserialize;
 
 use crate::util::{git, paths, process};
 
 pub struct ParityEnv {
     pub rust_bin: PathBuf,
-    pub baseline_dir: PathBuf,
-    pub manifest_path: PathBuf,
+    pub cpp_bin: PathBuf,
     pub upstream_hash: String,
 }
 
@@ -28,10 +29,10 @@ pub fn prepare(root: &Path) -> Result<ParityEnv> {
         .clone()
         .unwrap_or_else(|| paths::cpp_bin(root));
 
-    if explicit_rust_bin.is_none() {
+    if explicit_rust_bin.is_none() && !rust_bin.exists() {
         let auto = std::env::var("AUTO_BUILD_RUST").unwrap_or_else(|_| "1".into());
         if auto == "1" {
-            eprintln!("info: refreshing Rust CLI with cargo build --release");
+            eprintln!("info: Rust binary missing; running cargo build --release");
             let status = process::run_status(process::cargo(root).args(["build", "--release"]))?;
             if !status.success() || !rust_bin.exists() {
                 bail!(
@@ -52,46 +53,89 @@ pub fn prepare(root: &Path) -> Result<ParityEnv> {
     if !upstream_dir.join(".git").exists() {
         bail!("upstream repo not found at {}", upstream_dir.display());
     }
-    if !cpp_bin.exists() {
-        bail!(
-            "C++ binary not found at {}\n\
-             Set CPP=/path/to/binary or build upstream check first.",
-            cpp_bin.display()
-        );
-    }
 
     let upstream_hash = git::rev_parse_short(&upstream_dir, "HEAD")?;
-    let baseline_dir = paths::parity_baseline_dir(root, &upstream_hash);
-    let manifest_path = baseline_dir.join("manifest.tsv");
-    let metadata_path = baseline_dir.join("baseline.meta");
 
-    if !manifest_path.exists() {
-        let auto = std::env::var("AUTO_GENERATE_BASELINE").unwrap_or_else(|_| "1".into());
+    // Auto-build C++ binary if not explicitly provided.
+    if explicit_cpp_bin.is_none() {
+        let auto = std::env::var("AUTO_BUILD_CPP").unwrap_or_else(|_| "1".into());
         if auto == "1" {
-            eprintln!("info: no baseline found for upstream {upstream_hash}; generating baseline");
-            crate::cmd::generate_baseline::run(root)?;
-        } else {
-            bail!(
-                "No baseline found for upstream {upstream_hash}\n\
-                 Run: cargo xtask parity generate-baseline or set AUTO_GENERATE_BASELINE=1"
-            );
+            auto_build_cpp(&upstream_dir, &upstream_hash, &cpp_bin)?;
         }
     }
 
-    ensure_fresh_baseline(root, &upstream_hash, &metadata_path, &cpp_bin)?;
-    if !manifest_path.exists() {
+    if !cpp_bin.exists() {
         bail!(
-            "baseline generation did not produce {}",
-            manifest_path.display()
+            "C++ binary not found at {}\n\
+             Set CPP=/path/to/binary or build upstream with AUTO_BUILD_CPP=1.",
+            cpp_bin.display()
         );
     }
 
     Ok(ParityEnv {
         rust_bin,
-        baseline_dir,
-        manifest_path,
+        cpp_bin,
         upstream_hash,
     })
+}
+
+// ── C++ auto-build ──────────────────────────────────────────────────────────
+
+fn auto_build_cpp(upstream_dir: &Path, upstream_hash: &str, cpp_bin: &Path) -> Result<()> {
+    let build_dir = std::env::var("UPSTREAM_BUILD_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| upstream_dir.join("build"));
+
+    let stamp_path = build_dir.join(".prevail_upstream_hash");
+    let previous = fs::read_to_string(&stamp_path)
+        .ok()
+        .map(|s| s.trim().to_string());
+    let stamp_matches = previous.as_deref() == Some(upstream_hash);
+
+    // Binary already exists and stamp matches — nothing to do.
+    if cpp_bin.exists() && stamp_matches {
+        return Ok(());
+    }
+
+    // Binary exists but stamp is missing/stale — assume it's good, update stamp.
+    if cpp_bin.exists() {
+        eprintln!("info: C++ binary exists; updating build stamp to {upstream_hash}");
+        write_build_stamp(&build_dir, &stamp_path, upstream_hash)?;
+        return Ok(());
+    }
+
+    // Binary missing and stamp is stale — clean before rebuilding.
+    if !stamp_matches {
+        for dir in [&upstream_dir.join("bin"), &build_dir] {
+            if dir.exists() {
+                eprintln!("info: upstream hash changed; cleaning {}", dir.display());
+                fs::remove_dir_all(dir)
+                    .with_context(|| format!("failed to clean directory {}", dir.display()))?;
+            }
+        }
+    }
+
+    eprintln!(
+        "info: building upstream C++ verifier in {}",
+        build_dir.display()
+    );
+    process::cmake_build_release(upstream_dir, &build_dir)?;
+
+    if !cpp_bin.exists() {
+        bail!(
+            "built upstream project but C++ binary not found at {}",
+            cpp_bin.display()
+        );
+    }
+
+    write_build_stamp(&build_dir, &stamp_path, upstream_hash)?;
+    Ok(())
+}
+
+fn write_build_stamp(build_dir: &Path, stamp_path: &Path, upstream_hash: &str) -> Result<()> {
+    fs::create_dir_all(build_dir)?;
+    fs::write(stamp_path, format!("{upstream_hash}\n"))
+        .with_context(|| format!("failed to write build stamp {}", stamp_path.display()))
 }
 
 pub fn strip_stats_line(text: &str) -> String {
@@ -130,64 +174,146 @@ pub fn print_diff(expected: &str, actual: &str, max_lines: usize) {
     }
 }
 
-fn ensure_fresh_baseline(
-    root: &Path,
-    upstream_hash: &str,
-    metadata_path: &Path,
-    cpp_bin: &Path,
-) -> Result<()> {
-    let current_cpp_fp = cpp_fingerprint(cpp_bin)?;
-    let baseline_cpp_fp = read_metadata_value(metadata_path, "cpp_fingerprint");
-    if baseline_cpp_fp.as_deref() == Some(current_cpp_fp.as_str()) {
-        return Ok(());
+/// Build a filesystem-safe prefix for parity output files.
+pub fn output_prefix(elf: &str, section: &str, function: &str) -> String {
+    let safe_elf = elf.replace('/', "__");
+    let safe_sec = section.replace('/', "__").replace('.', "");
+    let safe_func = function.replace('/', "__").replace('.', "");
+    format!("{safe_elf}__{safe_sec}__{safe_func}")
+}
+
+/// Parity output directory for a specific upstream hash.
+pub fn parity_output_dir(root: &Path, upstream_hash: &str) -> PathBuf {
+    paths::target_dir(root)
+        .join("xtask/parity_output")
+        .join(upstream_hash)
+}
+
+// ── ELF inventory ───────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct ElfInventory {
+    pub projects: BTreeMap<String, Project>,
+}
+
+#[derive(Deserialize)]
+pub struct Project {
+    pub objects: BTreeMap<String, ObjectEntry>,
+}
+
+#[derive(Deserialize)]
+pub struct ObjectEntry {
+    pub sections: BTreeMap<String, Vec<FunctionEntry>>,
+    #[serde(default)]
+    pub test_overrides: TestOverrides,
+}
+
+#[derive(Deserialize, Default)]
+pub struct TestOverrides {
+    #[serde(default)]
+    pub sections: BTreeMap<String, SectionOverride>,
+}
+
+#[derive(Deserialize)]
+pub struct SectionOverride {
+    #[serde(default)]
+    pub status: String,
+}
+
+#[derive(Deserialize)]
+pub struct FunctionEntry {
+    pub function: String,
+    #[serde(default)]
+    pub invalid: bool,
+}
+
+/// A single test case: one (elf, section, function) tuple.
+pub struct TestCase {
+    pub project: String,
+    pub object: String,
+    pub elf_path: PathBuf,
+    pub section: String,
+    pub function: String,
+    /// Whether the verifier is expected to accept this program (exit 0).
+    /// False when the function is marked `invalid` (load rejection) or the
+    /// section has a `test_overrides` status of `reject_load`, `reject`, or
+    /// `expected_failure`.
+    pub expected_pass: bool,
+}
+
+impl TestCase {
+    /// A human-readable label for progress and error output.
+    pub fn label(&self) -> String {
+        format!(
+            "{}/{} section={} function={}",
+            self.project, self.object, self.section, self.function
+        )
+    }
+}
+
+/// Load the ELF inventory and return all test cases, verifying that every
+/// .o file exists on disk. Returns an error if any file is missing (likely
+/// means submodules were not recursively initialized).
+pub fn load_test_cases(root: &Path) -> Result<Vec<TestCase>> {
+    let inv_path = paths::elf_inventory(root);
+    if !inv_path.exists() {
+        bail!(
+            "ELF inventory not found at {}\n\
+             Have you run `git submodule update --init --recursive`?",
+            inv_path.display()
+        );
+    }
+    let inv_text = fs::read_to_string(&inv_path)
+        .with_context(|| format!("failed to read {}", inv_path.display()))?;
+    let inv: ElfInventory =
+        serde_json::from_str(&inv_text).context("failed to parse elf_inventory.json")?;
+
+    let samples_dir = paths::samples_dir(root);
+    let mut cases = Vec::new();
+    let mut missing = Vec::new();
+
+    for (proj_name, proj) in &inv.projects {
+        for (obj_name, obj) in &proj.objects {
+            let elf_path = samples_dir.join(proj_name).join(obj_name);
+            if !elf_path.exists() {
+                missing.push(format!("{proj_name}/{obj_name}"));
+                continue;
+            }
+            for (sec_name, funcs) in &obj.sections {
+                let section_status = obj
+                    .test_overrides
+                    .sections
+                    .get(sec_name)
+                    .map(|o| o.status.as_str())
+                    .unwrap_or("");
+                let section_fails = matches!(
+                    section_status,
+                    "reject_load" | "reject" | "expected_failure"
+                );
+                for func in funcs {
+                    let expected_pass = !func.invalid && !section_fails;
+                    cases.push(TestCase {
+                        project: proj_name.clone(),
+                        object: obj_name.clone(),
+                        elf_path: elf_path.clone(),
+                        section: sec_name.clone(),
+                        function: func.function.clone(),
+                        expected_pass,
+                    });
+                }
+            }
+        }
     }
 
-    let auto = std::env::var("AUTO_GENERATE_BASELINE").unwrap_or_else(|_| "1".into());
-    if auto != "1" {
+    if !missing.is_empty() {
         bail!(
-            "baseline metadata mismatch for upstream {upstream_hash}:\n\
-             baseline cpp_fingerprint={:?}\n\
-             current cpp_fingerprint={}\n\
-             Run: cargo xtask parity generate-baseline",
-            baseline_cpp_fp,
-            current_cpp_fp
+            "{} ELF object(s) listed in elf_inventory.json are missing on disk.\n\
+             First missing: {}\n\
+             Run: git submodule update --init --recursive",
+            missing.len(),
+            missing[0]
         );
     }
 
-    eprintln!(
-        "info: baseline fingerprint mismatch for upstream {upstream_hash}; regenerating baseline"
-    );
-    crate::cmd::generate_baseline::run(root)
-}
-
-fn read_metadata_value(path: &Path, key: &str) -> Option<String> {
-    let content = fs::read_to_string(path).ok()?;
-    for line in content.lines() {
-        let (k, v) = line.split_once('=')?;
-        if k == key {
-            return Some(v.to_string());
-        }
-    }
-    None
-}
-
-fn cpp_fingerprint(path: &Path) -> Result<String> {
-    let bytes = fs::read(path).with_context(|| {
-        format!(
-            "failed to read C++ binary for fingerprint {}",
-            path.display()
-        )
-    })?;
-    Ok(fnv1a64_hex(&bytes))
-}
-
-pub fn fnv1a64_hex(bytes: &[u8]) -> String {
-    const OFFSET: u64 = 0xcbf29ce484222325;
-    const PRIME: u64 = 0x100000001b3;
-    let mut hash = OFFSET;
-    for b in bytes {
-        hash ^= u64::from(*b);
-        hash = hash.wrapping_mul(PRIME);
-    }
-    format!("{hash:016x}")
+    Ok(cases)
 }

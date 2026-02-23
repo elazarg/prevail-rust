@@ -1197,7 +1197,7 @@ pub fn print_failure_slices(
         writeln!(out, "=== Failure Slice {} of {} ===\n", i + 1, slices.len())?;
 
         // Error summary
-        writeln!(out, "[ERROR] {}", slice.error)?;
+        writeln!(out, "[ERROR] {}", slice.error.message)?;
         writeln!(out, "[LOCATION] {}", slice.failing_label)?;
 
         // Relevant registers at failure point

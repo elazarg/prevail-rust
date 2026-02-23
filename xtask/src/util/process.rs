@@ -73,11 +73,15 @@ pub fn is_debug_elf(path: &Path) -> bool {
 /// Runs `cmake -S <upstream> -B <build> -DCMAKE_BUILD_TYPE=Release` followed
 /// by `cmake --build <build> --parallel`.
 pub fn cmake_build_upstream_release(upstream_dir: &Path) -> Result<()> {
-    let build_dir = upstream_dir.join("build");
+    cmake_build_release(upstream_dir, &upstream_dir.join("build"))
+}
+
+/// Build a CMake project in Release mode into an explicit build directory.
+pub fn cmake_build_release(source_dir: &Path, build_dir: &Path) -> Result<()> {
     let status = Command::new("cmake")
         .args([
             "-S",
-            &upstream_dir.to_string_lossy(),
+            &source_dir.to_string_lossy(),
             "-B",
             &build_dir.to_string_lossy(),
             "-DCMAKE_BUILD_TYPE=Release",

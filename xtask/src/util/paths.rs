@@ -82,11 +82,7 @@ pub fn tmp_dir(root: &Path) -> PathBuf {
     root.join("target/xtask/tmp")
 }
 
-/// Parity baseline directory for a specific upstream hash.
-pub fn parity_baseline_dir(root: &Path, upstream_hash: &str) -> PathBuf {
-    if let Ok(dir) = std::env::var("PREVAIL_PARITY_BASELINE_DIR") {
-        return PathBuf::from(dir).join(upstream_hash);
-    }
-    root.join("target/xtask/upstream_parity")
-        .join(upstream_hash)
+/// ELF inventory JSON that enumerates all test programs.
+pub fn elf_inventory(root: &Path) -> PathBuf {
+    root.join("tests/upstream/test-data/elf_inventory.json")
 }

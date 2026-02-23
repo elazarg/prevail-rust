@@ -48,6 +48,14 @@ impl StringInvariant {
         self.maybe_inv.as_ref().is_some_and(|s| s.is_empty())
     }
 
+    /// Keep only constraints matching the predicate.
+    pub fn retain(mut self, pred: impl Fn(&str) -> bool) -> Self {
+        if let Some(ref mut inv) = self.maybe_inv {
+            inv.retain(|c| pred(c));
+        }
+        self
+    }
+
     /// Get the inner set. Panics if bottom.
     pub fn value(&self) -> &BTreeSet<String> {
         self.maybe_inv

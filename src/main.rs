@@ -5,7 +5,6 @@
 //! Port of `src/main/check.cpp`.
 
 use std::process::ExitCode;
-use std::time::Instant;
 
 use clap::Parser;
 use clap::builder::PossibleValuesParser;
@@ -45,6 +44,15 @@ fn serialize_inst_bytes(insts: &[EbpfInst]) -> Vec<u8> {
         out.extend_from_slice(&inst.imm.to_ne_bytes());
     }
     out
+}
+
+/// Format the program label as "section/function" or just "section" if they match.
+fn program_label(raw_prog: &RawProgram) -> String {
+    if raw_prog.function_name.is_empty() || raw_prog.function_name == raw_prog.section_name {
+        raw_prog.section_name.clone()
+    } else {
+        format!("{}/{}", raw_prog.section_name, raw_prog.function_name)
+    }
 }
 
 // ── CLI definition ──────────────────────────────────────────────────────────
@@ -99,8 +107,17 @@ struct Cli {
     #[arg(short = 'l')]
     list: bool,
 
-    /// Abstract domain
-    #[arg(long, default_value = "zoneCrab", value_parser = ["stats", "linux", "zoneCrab", "cfg"])]
+    /// No stdout output, exit code only
+    #[arg(short = 'q', long = "quiet")]
+    quiet: bool,
+
+    /// Print control-flow graph and exit
+    #[arg(long = "cfg")]
+    print_cfg: bool,
+
+    /// Abstract domain (hidden, kept for xtask backward compatibility)
+    #[arg(long, default_value = "zoneCrab", hide = true,
+          value_parser = ["stats", "linux", "zoneCrab", "cfg"])]
     domain: String,
 
     /// Verify termination
@@ -178,6 +195,10 @@ struct Cli {
     /// Print failure slices for verification errors
     #[arg(long = "failure-slice")]
     failure_slice: bool,
+
+    /// Maximum backward steps for failure slicing (default: 200)
+    #[arg(long = "failure-slice-depth", default_value_t = 200)]
+    failure_slice_depth: usize,
 }
 
 // ── Custom help text (matches C++ upstream exactly) ─────────────────────────
@@ -202,8 +223,8 @@ fn print_help() {
     println!("          --section SECTION   Section to analyze ");
     println!("          --function FUNCTION Function to analyze ");
     println!("  -l                          List programs ");
-    println!("          --domain DOMAIN:{{stats,linux,zoneCrab,cfg}} [zoneCrab]  ");
-    println!("                              Abstract domain ");
+    println!("  -q,     --quiet             No stdout output, exit code only ");
+    println!("          --cfg               Print control-flow graph and exit ");
     println!();
     println!("Features:");
     println!("          --termination, --no-verify-termination{{false}} ");
@@ -227,14 +248,22 @@ fn print_help() {
     println!(
         "                              Simplify the display of the CFG by merging chains of instructions "
     );
-    println!("                              into a single basic block. Default: enabled ");
+    println!(
+        "                              into a single basic block. Default: enabled (disabled with "
+    );
+    println!("                              --failure-slice) ");
     println!("          --line-info         Print line information ");
     println!("          --print-btf-types   Print BTF types ");
     println!("  -v                          Print invariants and first failure ");
     println!("  -f                          Print first failure ");
-    println!();
-    println!("Diagnostics:");
-    println!("          --failure-slice     Print failure slices for verification errors ");
+    println!(
+        "          --failure-slice     Print minimal failure slices showing only instructions that "
+    );
+    println!("                              contributed to errors ");
+    println!("          --failure-slice-depth UINT ");
+    println!(
+        "                              Maximum backward steps for failure slicing (default: 200) "
+    );
     println!();
     println!("CFG output:");
     println!("          --asm FILE          Print disassembly to FILE ");
@@ -264,7 +293,13 @@ fn main() -> ExitCode {
     // Build options struct (matches C++ defaults from config.hpp).
     let check_for_termination = cli.termination && !cli.no_verify_termination;
     let allow_division_by_zero = !cli.no_division_by_zero;
-    let simplify = cli.simplify && !cli.no_simplify;
+    let simplify_explicit = std::env::args().any(|a| a == "--simplify" || a == "--no-simplify");
+    let mut simplify = cli.simplify && !cli.no_simplify;
+    // When --failure-slice is set and user didn't explicitly pass --simplify,
+    // disable simplification so each instruction is shown individually.
+    if cli.failure_slice && !simplify_explicit {
+        simplify = false;
+    }
 
     let mut opts = EbpfVerifierOptions {
         cfg_opts: PrepareCfgOptions {
@@ -336,50 +371,63 @@ fn main() -> ExitCode {
     }
     rust_platform.conformance_groups = groups;
 
-    let raw_progs = match elf_loader::read_elf_file(
-        &path,
-        section.as_deref().unwrap_or(""),
-        function.as_deref().unwrap_or(""),
-        &opts,
-        &mut rust_platform,
-    ) {
-        Ok(progs) => progs,
+    let mut elf = match elf_loader::ElfObject::new(&path, opts) {
+        Ok(e) => e,
         Err(e) => {
-            let msg = e.to_string();
-            if let Some(idx) = msg.find("unsupported function: ") {
-                // Preserve upstream C++ CLI behaviour for parity runs:
-                // unmarshal throws std::runtime_error for unsupported helpers,
-                // which is reported by the C++ runtime in this exact shape.
-                let what = &msg[idx..];
-                eprintln!("terminate called after throwing an instance of 'std::runtime_error'");
-                eprintln!("  what():  {what}");
-            } else {
-                eprintln!("error: {msg}");
-            }
+            eprintln!("error: {e}");
             return ExitCode::from(1);
         }
     };
 
-    if cli.list || raw_progs.len() != 1 {
-        if !cli.list {
+    let mut load_error: Option<String> = None;
+    let raw_progs = if !cli.list {
+        match elf.get_programs(
+            section.as_deref().unwrap_or(""),
+            function.as_deref().unwrap_or(""),
+            &mut rust_platform,
+        ) {
+            Ok(progs) => progs,
+            Err(e) => {
+                load_error = Some(e.to_string());
+                vec![]
+            }
+        }
+    } else {
+        vec![]
+    };
+
+    // Handle "unsupported function:" errors with C++ parity format.
+    if let Some(ref err) = load_error
+        && let Some(idx) = err.find("unsupported function: ")
+    {
+        let what = &err[idx..];
+        eprintln!("terminate called after throwing an instance of 'std::runtime_error'");
+        eprintln!("  what():  {what}");
+        return ExitCode::from(1);
+    }
+
+    if cli.list || load_error.is_some() || raw_progs.len() != 1 {
+        if let Some(ref err) = load_error {
+            eprintln!("error: {err}");
+        }
+        if !cli.list && load_error.is_none() && raw_progs.len() != 1 {
             println!("please specify a program");
+        }
+        if !cli.list {
             println!("available programs:");
         }
-        // Always list all programs (matching C++ elf.list_programs() behavior).
-        let reloaded;
-        let progs: &[RawProgram] = if section.is_some() {
-            reloaded = elf_loader::read_elf_file(&path, "", "", &opts, &mut rust_platform)
-                .unwrap_or_default();
-            &reloaded
-        } else {
-            &raw_progs
-        };
-        for rp in progs {
-            println!("section={} function={}", rp.section_name, rp.function_name);
+        for p in elf.list_programs(&mut rust_platform) {
+            print!("section={} function={}", p.section_name, p.function_name);
+            if p.invalid {
+                print!(" [invalid: {}]", p.invalid_reason);
+            }
+            println!();
         }
         println!();
         return if cli.list {
             ExitCode::SUCCESS
+        } else if load_error.is_some() {
+            ExitCode::from(1)
         } else {
             ExitCode::from(64)
         };
@@ -463,20 +511,20 @@ fn main() -> ExitCode {
         }
     };
 
-    if cli.domain == "cfg" {
-        println!("CFG built with {} labels.", program.cfg().size());
+    // Optional DOT output (before --cfg early exit, matching C++ order).
+    if let Some(ref dot_file) = cli.dot_file
+        && let Err(e) = prevail::printing::print_dot_to_file(&program, dot_file)
+    {
+        eprintln!("error writing dot: {e}");
+        return ExitCode::from(1);
+    }
+
+    if cli.print_cfg || cli.domain == "cfg" {
+        let _ = prevail::printing::print_program(&program, info, &mut std::io::stdout(), simplify);
         return ExitCode::SUCCESS;
     }
 
     if cli.domain == "stats" {
-        // Optional DOT output.
-        if let Some(ref dot_file) = cli.dot_file
-            && let Err(e) = prevail::printing::print_dot_to_file(&program, dot_file)
-        {
-            eprintln!("error writing dot: {e}");
-            return ExitCode::from(1);
-        }
-
         // Hash the raw bytes of the program.
         let raw_bytes = serialize_inst_bytes(insts);
         let hash = fnv1a64(&raw_bytes);
@@ -495,8 +543,6 @@ fn main() -> ExitCode {
 
     // ── zoneCrab domain: run the Rust forward analyzer ──────────────────
 
-    let start = Instant::now();
-
     let ctx = DomainContext {
         program_info: info,
         options: &opts,
@@ -506,47 +552,76 @@ fn main() -> ExitCode {
     let mut registry = VariableRegistry::new();
     let result = fwd_analyzer::analyze(&program, &ctx, &mut registry);
 
-    let elapsed = start.elapsed().as_secs_f64();
-    let mem_kb = memsize::resident_set_size_kb();
-
-    if cli.failure_slice && result.failed {
-        let slices = result.compute_failure_slices(
-            &program,
-            &ctx,
-            &mut registry,
-            prevail::result::SliceParams::default(),
-        );
-        let _ = prevail::printing::print_failure_slices(
-            &mut std::io::stdout(),
-            &program,
-            info,
-            simplify,
-            &result,
-            &registry,
-            &slices,
-            false,
-        );
-    } else if opts.verbosity_opts.print_invariants {
-        let _ = prevail::printing::print_invariants(
-            &mut std::io::stdout(),
-            &program,
-            info,
-            simplify,
-            &result,
-            &registry,
-        );
-    } else if opts.verbosity_opts.print_failures
-        && let Some(ref error) = result.find_first_error()
-    {
-        println!("{}", error);
+    if !cli.quiet {
+        if opts.verbosity_opts.print_invariants {
+            let _ = prevail::printing::print_invariants(
+                &mut std::io::stdout(),
+                &program,
+                info,
+                simplify,
+                &result,
+                &registry,
+            );
+        }
+        if opts.verbosity_opts.print_failures
+            && let Some(ref error) = result.find_first_error()
+        {
+            let _ = prevail::printing::print_error(&mut std::io::stdout(), error);
+        }
+        if cli.failure_slice && result.failed {
+            let slice_params = prevail::result::SliceParams {
+                max_steps: cli.failure_slice_depth,
+                max_slices: 1,
+            };
+            let slices = result.compute_failure_slices(&program, &ctx, &mut registry, slice_params);
+            let _ = prevail::printing::print_failure_slices(
+                &mut std::io::stdout(),
+                &program,
+                info,
+                simplify,
+                &result,
+                &registry,
+                &slices,
+                false,
+            );
+        } else if cli.failure_slice && !result.failed {
+            println!("Program passed verification; no failure slices to display.");
+        }
     }
 
-    let pass = if result.failed { 0 } else { 1 };
-    println!("{pass},{elapsed:.6},{mem_kb}");
+    let pass = !result.failed;
+    let label = program_label(raw_prog);
 
-    if result.failed {
-        ExitCode::from(1)
-    } else {
+    if !cli.quiet {
+        if pass {
+            print!("PASS: {label}");
+            if check_for_termination {
+                print!(
+                    " (terminates within {} loop iterations)",
+                    result.max_loop_count
+                );
+            }
+            println!();
+        } else {
+            println!("FAIL: {label}");
+            // Print the first error if not already printed by -v or -f.
+            if !opts.verbosity_opts.print_invariants
+                && !opts.verbosity_opts.print_failures
+                && !cli.failure_slice
+            {
+                if let Some(ref error) = result.find_first_error() {
+                    let _ = prevail::printing::print_error(&mut std::io::stdout(), error);
+                }
+                println!(
+                    "Hint: run with --failure-slice for a causal trace, or -v for full invariants."
+                );
+            }
+        }
+    }
+
+    if pass {
         ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
     }
 }

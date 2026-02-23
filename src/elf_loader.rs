@@ -2113,6 +2113,265 @@ fn update_line_info(
     Ok(())
 }
 
+// ── ElfObject helpers ───────────────────────────────────────────────
+
+/// Filter programs by desired function name (empty = keep all).
+/// Returns an error if the name is specified but not found or ambiguous.
+fn filter_by_program(
+    programs: &[RawProgram],
+    desired_program: &str,
+) -> Result<Vec<RawProgram>, UnmarshalError> {
+    if desired_program.is_empty() {
+        return Ok(programs.to_vec());
+    }
+    let selected: Vec<RawProgram> = programs
+        .iter()
+        .filter(|p| p.function_name == desired_program)
+        .cloned()
+        .collect();
+    if selected.is_empty() {
+        return Err(UnmarshalError(format!(
+            "Program not found: {desired_program}"
+        )));
+    }
+    Ok(selected)
+}
+
+// ── ElfObject ───────────────────────────────────────────────────────
+
+/// Information about a program discovered in an ELF file.
+///
+/// Mirrors C++ `ElfProgramInfo` from `elf_loader.hpp`.
+pub struct ElfProgramInfo {
+    pub section_name: String,
+    pub function_name: String,
+    pub section_offset: u32,
+    pub invalid: bool,
+    pub invalid_reason: String,
+}
+
+/// Cached result of loading a single ELF section.
+///
+/// Mirrors C++ `SectionCacheEntry`.
+struct SectionCacheEntry {
+    valid: bool,
+    error: String,
+    programs: Vec<RawProgram>,
+}
+
+/// ELF object that supports listing programs even when some sections fail to load.
+///
+/// Mirrors C++ `ElfObject` from `elf_loader.hpp`.  Separates program discovery
+/// (enumerating section/function names from the symbol table) from full loading
+/// (BTF, relocations, subprogram linking), so that `list_programs` can report
+/// per-section errors without aborting.
+pub struct ElfObject {
+    data: Vec<u8>,
+    path: String,
+    options: EbpfVerifierOptions,
+
+    catalog_loaded: bool,
+    programs: Vec<ElfProgramInfo>,
+    section_order: Vec<String>,
+    section_program_indices: BTreeMap<String, Vec<usize>>,
+    section_cache: BTreeMap<String, SectionCacheEntry>,
+}
+
+impl ElfObject {
+    /// Create a new `ElfObject` by reading the file into memory.
+    pub fn new(path: &str, options: EbpfVerifierOptions) -> Result<Self, UnmarshalError> {
+        let data =
+            std::fs::read(path).map_err(|e| UnmarshalError(format!("{e} opening {path}")))?;
+        Ok(Self {
+            data,
+            path: path.to_string(),
+            options,
+            catalog_loaded: false,
+            programs: Vec::new(),
+            section_order: Vec::new(),
+            section_program_indices: BTreeMap::new(),
+            section_cache: BTreeMap::new(),
+        })
+    }
+
+    /// Discover all programs from the ELF symbol table without full loading.
+    ///
+    /// Catalogs `(section_name, function_name, section_offset)` from executable
+    /// sections.  Does not process BTF or relocations.
+    fn discover_programs(&mut self) -> Result<(), UnmarshalError> {
+        if self.catalog_loaded {
+            return Ok(());
+        }
+
+        let data: &[u8] = &self.data;
+        let elf: ElfFile<'_, Elf64> = ElfFile::parse(data)
+            .map_err(|e| UnmarshalError(format!("Can't process ELF file {}: {e}", self.path)))?;
+        let header = elf.elf_header();
+        let sections = header
+            .sections(ENDIAN, data)
+            .map_err(|e| UnmarshalError(format!("Cannot read sections: {e}")))?;
+        let symbols = sections
+            .symbols(ENDIAN, data, elf::SHT_SYMTAB)
+            .map_err(|e| {
+                UnmarshalError(format!(
+                    "No symbol section found in ELF file {}: {e}",
+                    self.path
+                ))
+            })?;
+        let sym_count = symbols.len();
+
+        for section in elf.sections() {
+            let sh = section.elf_section_header();
+            let flags = sh.sh_flags(ENDIAN);
+            if flags & u64::from(elf::SHF_EXECINSTR) == 0 {
+                continue;
+            }
+            let sec_size = section.size();
+            if sec_size == 0 {
+                continue;
+            }
+            if section.data().map(|d| d.is_empty()).unwrap_or(true) {
+                continue;
+            }
+            let sec_name = section.name().unwrap_or("").to_string();
+            let sec_idx = section.index().0;
+
+            if !self.section_order.contains(&sec_name) {
+                self.section_order.push(sec_name.clone());
+            }
+
+            let mut offset: u64 = 0;
+            while offset < sec_size {
+                let (name, initial_size) = get_program_name_and_size(
+                    sec_idx, &sec_name, sec_size, offset, &symbols, sym_count,
+                );
+                let prog_idx = self.programs.len();
+                self.programs.push(ElfProgramInfo {
+                    section_name: sec_name.clone(),
+                    function_name: name,
+                    section_offset: offset as u32,
+                    invalid: false,
+                    invalid_reason: String::new(),
+                });
+                self.section_program_indices
+                    .entry(sec_name.clone())
+                    .or_default()
+                    .push(prog_idx);
+                offset += initial_size;
+            }
+        }
+
+        self.catalog_loaded = true;
+        Ok(())
+    }
+
+    /// Mark all programs in a section as valid or invalid.
+    fn mark_section_validity(&mut self, section_name: &str, valid: bool, reason: &str) {
+        if let Some(indices) = self.section_program_indices.get(section_name) {
+            for &idx in indices {
+                self.programs[idx].invalid = !valid;
+                if !valid {
+                    self.programs[idx].invalid_reason = reason.to_string();
+                }
+            }
+        }
+    }
+
+    /// Load a single section, caching the result and marking programs invalid on error.
+    fn load_section(&mut self, section_name: &str, platform: &mut dyn EbpfPlatform) {
+        if self.section_cache.contains_key(section_name) {
+            return;
+        }
+        let entry = match read_elf(
+            &self.data,
+            &self.path,
+            section_name,
+            "",
+            &self.options,
+            platform,
+        ) {
+            Ok(programs) => {
+                self.mark_section_validity(section_name, true, "");
+                SectionCacheEntry {
+                    valid: true,
+                    error: String::new(),
+                    programs,
+                }
+            }
+            Err(e) => {
+                let error = e.to_string();
+                self.mark_section_validity(section_name, false, &error);
+                SectionCacheEntry {
+                    valid: false,
+                    error,
+                    programs: Vec::new(),
+                }
+            }
+        };
+        self.section_cache.insert(section_name.to_string(), entry);
+    }
+
+    /// List all programs in the ELF file, loading each section to check validity.
+    ///
+    /// Mirrors C++ `ElfObject::list_programs()`.
+    pub fn list_programs(&mut self, platform: &mut dyn EbpfPlatform) -> &[ElfProgramInfo] {
+        if self.discover_programs().is_err() {
+            return &[];
+        }
+        let sections: Vec<String> = self.section_order.clone();
+        for sec in &sections {
+            self.load_section(sec, platform);
+        }
+        &self.programs
+    }
+
+    /// Load and return programs matching the given section and program name.
+    ///
+    /// Mirrors C++ `ElfObject::get_programs()`.  When `desired_section` is
+    /// non-empty, loads only that section.  When empty, loads all sections
+    /// individually (catching per-section errors) and collects valid programs.
+    pub fn get_programs(
+        &mut self,
+        desired_section: &str,
+        desired_program: &str,
+        platform: &mut dyn EbpfPlatform,
+    ) -> Result<Vec<RawProgram>, UnmarshalError> {
+        self.discover_programs()?;
+
+        if !desired_section.is_empty() {
+            self.load_section(desired_section, platform);
+            let entry = self
+                .section_cache
+                .get(desired_section)
+                .ok_or_else(|| UnmarshalError("Section not found".into()))?;
+            if !entry.valid {
+                return Err(UnmarshalError(entry.error.clone()));
+            }
+            let programs = filter_by_program(&entry.programs, desired_program)?;
+            return Ok(programs);
+        }
+
+        // No specific section requested — load all sections, collect valid programs.
+        let sections: Vec<String> = self.section_order.clone();
+        for sec in &sections {
+            self.load_section(sec, platform);
+        }
+        let mut all_programs = Vec::new();
+        for sec in &sections {
+            if let Some(entry) = self.section_cache.get(sec)
+                && entry.valid
+            {
+                all_programs.extend(entry.programs.iter().cloned());
+            }
+        }
+        if all_programs.is_empty() {
+            return Err(UnmarshalError("No executable sections".into()));
+        }
+        let programs = filter_by_program(&all_programs, desired_program)?;
+        Ok(programs)
+    }
+}
+
 // ── Public API ──────────────────────────────────────────────────────
 
 /// Parse an ELF file from bytes and return the BPF programs it contains.

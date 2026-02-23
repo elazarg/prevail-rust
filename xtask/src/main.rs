@@ -145,22 +145,39 @@ enum BenchAction {
 
 #[derive(Subcommand)]
 enum ParityAction {
-    /// Compare Rust output against C++ baseline.
-    Compare,
-    /// Compare a single ELF/section pair against C++ baseline.
-    CompareOne {
+    /// Compare Rust vs C++ output live on all inventory programs.
+    Compare {
+        /// Substring filter on project/object, section, or function name.
+        #[arg(long)]
+        filter: Option<String>,
+        /// Randomly sample N test cases instead of running all.
+        #[arg(long)]
+        sample: Option<usize>,
+        /// Deterministic seed for --sample. When set, verbosity is also
+        /// randomized per test case (unless --verbosity is given).
+        #[arg(long)]
+        seed: Option<u64>,
+        /// Verbosity mode: default, v, f, or failure-slice.
+        /// Omit to use `-v` (or random when --seed is set).
+        #[arg(long)]
+        verbosity: Option<String>,
+    },
+    /// Compare a single ELF/section/function triple.
+    One {
         /// ELF path (absolute or relative to repo root).
         elf: PathBuf,
-        /// Section name, e.g. "2/7" or "tail-4".
+        /// Section name.
+        #[arg(long)]
         section: String,
-        /// Maximum differing lines to print per stream.
-        #[arg(long, default_value_t = 80)]
-        max_lines: usize,
+        /// Function name.
+        #[arg(long)]
+        function: String,
+        /// Verbosity mode: default, v, f, or failure-slice (default: v).
+        #[arg(long)]
+        verbosity: Option<String>,
     },
-    /// Generate C++ baseline.
-    GenerateBaseline,
-    /// Live side-by-side invariant comparison.
-    CompareInvariants,
+    /// Compare --help output between Rust and C++ binaries.
+    Usage,
 }
 
 #[derive(Subcommand)]
@@ -227,14 +244,27 @@ fn run(cli: Cli) -> Result<()> {
         }
         Command::Profile { workload } => cmd::profile::run(&root, &workload),
         Command::Parity { action } => match action {
-            ParityAction::Compare => cmd::compare_parity::run(&root),
-            ParityAction::CompareOne {
+            ParityAction::Compare {
+                filter,
+                sample,
+                seed,
+                verbosity,
+            } => cmd::compare_parity::run(
+                &root,
+                filter.as_deref(),
+                sample,
+                seed,
+                verbosity.as_deref(),
+            ),
+            ParityAction::One {
                 elf,
                 section,
-                max_lines,
-            } => cmd::compare_parity_one::run(&root, &elf.to_string_lossy(), &section, max_lines),
-            ParityAction::GenerateBaseline => cmd::generate_baseline::run(&root),
-            ParityAction::CompareInvariants => cmd::compare_invariants::run(&root),
+                function,
+                verbosity,
+            } => {
+                cmd::compare_parity::run_one(&root, &elf, &section, &function, verbosity.as_deref())
+            }
+            ParityAction::Usage => cmd::compare_parity::run_usage(&root),
         },
         Command::UpstreamDiff { dir } => cmd::upstream_diff::run(&root, dir.as_deref()),
         Command::RunUpstream { bin, args } => cmd::run_upstream::run(&root, &args, bin.as_ref()),

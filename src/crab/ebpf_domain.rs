@@ -407,6 +407,7 @@ impl EbpfDomain {
 
     /// Write this domain filtered to only show constraints involving relevant
     /// registers/stack. When `filter` is `None`, delegates to `write_to`.
+    /// Uses the same multi-line bracket format as `write_to`.
     pub fn write_to_filtered(
         &self,
         f: &mut dyn std::fmt::Write,
@@ -419,54 +420,20 @@ impl EbpfDomain {
         if self.is_bottom() {
             return write!(f, "_|_");
         }
-        // Collect all constraints from the sub-domains
-        let type_set = self.state.types.to_set(registry);
-        let value_set = self.state.values.to_set(registry);
-        let stack_set = self.stack.to_set();
 
-        let mut first = true;
-        // Filter and format type constraints
-        if !type_set.is_bottom() {
-            for c in type_set.value() {
-                if filter.is_relevant_constraint(c) {
-                    if !first {
-                        write!(f, " ")?;
-                    }
-                    write!(f, "{c}")?;
-                    first = false;
-                }
-            }
-        }
-        // Filter and format value constraints
-        if !value_set.is_bottom() {
-            for c in value_set.value() {
-                if filter.is_relevant_constraint(c) {
-                    if !first {
-                        write!(f, " ")?;
-                    }
-                    write!(f, "{c}")?;
-                    first = false;
-                }
-            }
-        }
-        // Filter and format stack constraints
-        if !stack_set.is_bottom() {
-            let stack_constraints: Vec<_> = stack_set
-                .value()
-                .iter()
-                .filter(|c| filter.is_relevant_constraint(c))
-                .collect();
-            if !stack_constraints.is_empty() {
-                write!(f, "\nStack: ")?;
-                for (i, c) in stack_constraints.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, " ")?;
-                    }
-                    write!(f, "{c}")?;
-                }
-            }
-        }
-        Ok(())
+        let type_set = self
+            .state
+            .types
+            .to_set(registry)
+            .retain(|c| filter.is_relevant_constraint(c));
+        let value_set = self
+            .state
+            .values
+            .to_set(registry)
+            .retain(|c| filter.is_relevant_constraint(c));
+
+        // Stack uses its own Display format (Numbers -> {...}), not StringInvariant.
+        write!(f, "{type_set}{value_set}\nStack: {}", self.stack)
     }
 
     // ========================================================================
