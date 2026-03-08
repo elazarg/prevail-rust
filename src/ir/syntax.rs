@@ -275,9 +275,12 @@ pub struct Callx {
 }
 
 /// Call helper by BTF id (CALL src=2).
+/// The module field (i16, matching BPF instruction offset width) identifies
+/// which kernel module provides the kfunc; 0 means vmlinux (the default).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CallBtf {
     pub btf_id: i32,
+    pub module: i16,
 }
 
 /// Memory dereference descriptor.

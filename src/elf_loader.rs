@@ -20,8 +20,8 @@ use crate::platform::EbpfPlatform;
 use crate::spec::config::EbpfVerifierOptions;
 use crate::spec::type_descriptors::{BtfLineInfo, EbpfMapDescriptor, ProgramInfo, RawProgram};
 use crate::spec::vm_isa::{
-    EbpfInst, INST_ALU_OP_MOV, INST_CALL_LOCAL, INST_CALL_STATIC_HELPER, INST_CLS_ALU,
-    INST_CLS_ALU64, INST_CLS_LD, INST_CLS_LDX, INST_CLS_MASK, INST_LD_MODE_MAP_FD,
+    EbpfInst, INST_ALU_OP_MOV, INST_CALL_BTF_HELPER, INST_CALL_LOCAL, INST_CALL_STATIC_HELPER,
+    INST_CLS_ALU, INST_CLS_ALU64, INST_CLS_LD, INST_CLS_LDX, INST_CLS_MASK, INST_LD_MODE_MAP_FD,
     INST_LD_MODE_MAP_VALUE, INST_MODE_MEM, INST_MODE_MEMSX, INST_OP_CALL, INST_OP_LDDW_IMM,
     INST_SIZE_B, INST_SIZE_DW, INST_SIZE_H, INST_SIZE_MASK, INST_SIZE_W, INST_SRC_IMM,
     INST_SRC_REG,
@@ -126,6 +126,7 @@ struct SymbolDetails {
     value: u64,
     size: u64,
     sym_type: u8,
+    bind: u8,
     section_index: usize,
 }
 
@@ -148,6 +149,7 @@ fn get_symbol_details(
         value: sym.st_value(ENDIAN),
         size: sym.st_size(ENDIAN),
         sym_type: sym.st_type(),
+        bind: sym.st_bind(),
         section_index: sym.st_shndx(ENDIAN) as usize,
     })
 }
@@ -320,6 +322,25 @@ fn rewrite_extern_address_load_to_zero(instructions: &mut [EbpfInst], location: 
     }
     instructions[location].imm = 0;
     instructions[location + 1].imm = 0;
+    true
+}
+
+/// Rewrite a CALL src=INST_CALL_LOCAL instruction to a CALL src=INST_CALL_BTF_HELPER
+/// with the resolved ksym BTF id and module offset.
+fn rewrite_extern_kfunc_call(inst: &mut EbpfInst, resolved: &crate::platform::KsymBtfId) -> bool {
+    if inst.opcode != INST_OP_CALL || inst.src_raw() != INST_CALL_LOCAL || inst.dst_raw() != 0 {
+        return false;
+    }
+    if inst.offset != 0 {
+        return false;
+    }
+    if resolved.btf_id <= 0 || resolved.module < 0 {
+        return false;
+    }
+
+    inst.set_src(INST_CALL_BTF_HELPER);
+    inst.offset = resolved.module;
+    inst.imm = resolved.btf_id;
     true
 }
 
@@ -834,6 +855,7 @@ struct ProgramReader<'a> {
     function_relocations: Vec<FunctionRelocation>,
     unresolved_symbol_errors: Vec<UnresolvedSymbolError>,
     builtin_offsets_for_current_program: BTreeSet<usize>,
+    ksym_function_resolution_cache: BTreeMap<String, Option<crate::platform::KsymBtfId>>,
 }
 
 #[expect(clippy::too_many_arguments)]
@@ -863,7 +885,61 @@ impl<'a> ProgramReader<'a> {
             function_relocations: Vec::new(),
             unresolved_symbol_errors: Vec::new(),
             builtin_offsets_for_current_program: BTreeSet::new(),
+            ksym_function_resolution_cache: BTreeMap::new(),
         }
+    }
+
+    // ── Ksym resolution cache ─────────────────────────────────────
+
+    fn build_ksym_function_resolution_cache(&mut self) -> Result<(), UnmarshalError> {
+        use crate::btf::type_data::BtfTypeData;
+        use crate::btf::{BtfKind, BtfKindIndex};
+
+        self.ksym_function_resolution_cache.clear();
+
+        // Find the .BTF section.
+        let btf_section = self.elf.sections().find(|s| s.name() == Ok(".BTF"));
+        let btf_data_bytes = match btf_section.and_then(|s| s.data().ok()) {
+            Some(d) if !d.is_empty() => d,
+            _ => return Ok(()),
+        };
+
+        let btf_data = match BtfTypeData::new(btf_data_bytes) {
+            Ok(td) => td,
+            Err(e) => return Err(UnmarshalError(e.to_string())),
+        };
+
+        let ksyms_id = btf_data.get_id(".ksyms");
+        if ksyms_id == 0 {
+            return Ok(());
+        }
+
+        let members = match btf_data.get_kind(ksyms_id) {
+            Ok(BtfKind::DataSection { members, .. }) => members.clone(),
+            _ => return Ok(()),
+        };
+
+        for member in &members {
+            if !matches!(
+                btf_data.get_kind_index(member.type_id),
+                Ok(BtfKindIndex::Function)
+            ) {
+                continue;
+            }
+            let func_name = match btf_data.get_kind(member.type_id) {
+                Ok(BtfKind::Function { name, .. }) => name.clone(),
+                _ => continue,
+            };
+            if func_name.is_empty() || self.ksym_function_resolution_cache.contains_key(&func_name)
+            {
+                continue;
+            }
+
+            let resolved = self.platform.resolve_ksym_btf_id(&func_name);
+            self.ksym_function_resolution_cache
+                .insert(func_name, resolved);
+        }
+        Ok(())
     }
 
     // ── Map relocation helpers ──────────────────────────────────────
@@ -951,6 +1027,7 @@ impl<'a> ProgramReader<'a> {
         symbol_name: &str,
         symbol_section_index: usize,
         symbol_type: u8,
+        symbol_bind: u8,
         instructions: &mut [EbpfInst],
         location: usize,
         sym_index: usize,
@@ -977,6 +1054,22 @@ impl<'a> ProgramReader<'a> {
         let inst = &instructions[location];
         if inst.opcode == INST_OP_CALL && inst.src_raw() == INST_CALL_LOCAL {
             if symbol_section_index == elf::SHN_UNDEF as usize {
+                // Check ksym function resolution cache before builtin fallback.
+                if let Some(cached) = self.ksym_function_resolution_cache.get(symbol_name) {
+                    if let Some(resolved) = cached {
+                        if !rewrite_extern_kfunc_call(&mut instructions[location], resolved) {
+                            return Err(UnmarshalError(format!(
+                                "Invalid kfunc call rewrite for symbol {}: \
+                                 instruction encoding or resolver output is invalid",
+                                symbol_name
+                            )));
+                        }
+                        return Ok(true);
+                    }
+                    if symbol_bind != elf::STB_WEAK {
+                        return Ok(false);
+                    }
+                }
                 if let Some(builtin_id) = self.platform.resolve_builtin_call(symbol_name) {
                     instructions[location].set_src(INST_CALL_STATIC_HELPER);
                     instructions[location].imm = builtin_id;
@@ -1175,6 +1268,7 @@ impl<'a> ProgramReader<'a> {
             &sd.name,
             sd.section_index,
             sd.sym_type,
+            sd.bind,
             instructions,
             loc,
             sym_idx,
@@ -1470,7 +1564,7 @@ impl<'a> ProgramReader<'a> {
             match self.resolve_subprograms_for(prog_idx, &prog_lookup, &mut resolved, &mut visiting)
             {
                 Ok(()) => {}
-                Err(e)
+                Err(_)
                     if !self.desired_section.is_empty()
                         && self.raw_programs[prog_idx].section_name != self.desired_section =>
                 {
@@ -1582,6 +1676,7 @@ impl<'a> ProgramReader<'a> {
     // ── Main read loop ──────────────────────────────────────────────
 
     fn read_programs(&mut self) -> Result<(), UnmarshalError> {
+        self.build_ksym_function_resolution_cache()?;
         for section in self.elf.sections() {
             let sh = section.elf_section_header();
             let flags = sh.sh_flags(ENDIAN);

@@ -339,12 +339,28 @@ pub fn parse_instruction_with_platform(
         }
     }
 
+    // call_btf <imm> module <imm>
+    {
+        let pat = format!(r"^call_btf {}\s+module\s+{}$", IMM, IMM);
+        if let Some(m) = Regex::new(&pat).unwrap().captures(text) {
+            let module_val = to_int(m.get(2).unwrap().as_str());
+            if module_val < 0 || module_val > i16::MAX as i32 {
+                panic!("module value out of range in call_btf");
+            }
+            return Instruction::CallBtf(CallBtf {
+                btf_id: to_int(m.get(1).unwrap().as_str()),
+                module: module_val as i16,
+            });
+        }
+    }
+
     // call_btf <imm>
     {
         let pat = format!("^call_btf {}$", IMM);
         if let Some(m) = Regex::new(&pat).unwrap().captures(text) {
             return Instruction::CallBtf(CallBtf {
                 btf_id: to_int(m.get(1).unwrap().as_str()),
+                module: 0,
             });
         }
     }

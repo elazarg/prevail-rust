@@ -24,7 +24,7 @@ struct KfuncPrototypeEntry {
     requires_privileged: bool,
 }
 
-const KFUNC_PROTOTYPES: [KfuncPrototypeEntry; 10] = [
+const KFUNC_PROTOTYPES: [KfuncPrototypeEntry; 12] = [
     KfuncPrototypeEntry {
         btf_id: 12,
         proto: HelperPrototype {
@@ -180,6 +180,36 @@ const KFUNC_PROTOTYPES: [KfuncPrototypeEntry; 10] = [
             unsupported: false,
         },
         flags: KFUNC_FLAG_RELEASE,
+        required_program_type: "",
+        requires_privileged: false,
+    },
+    // bpf_cpumask_create/bpf_cpumask_release form an acquire/release pair.
+    // Acquire without enforced release — verifier does not yet track release obligations (see ID 1010).
+    KfuncPrototypeEntry {
+        btf_id: 1009,
+        proto: HelperPrototype {
+            name: "bpf_cpumask_create",
+            return_type: EbpfReturnType::Integer,
+            argument_type: [EbpfArgumentType::DontCare; 5],
+            reallocate_packet: false,
+            context_descriptor: None,
+            unsupported: false,
+        },
+        flags: KFUNC_FLAG_ACQUIRE,
+        required_program_type: "",
+        requires_privileged: false,
+    },
+    KfuncPrototypeEntry {
+        btf_id: 1010,
+        proto: HelperPrototype {
+            name: "bpf_cpumask_release",
+            return_type: EbpfReturnType::Integer,
+            argument_type: [EbpfArgumentType::DontCare; 5],
+            reallocate_packet: false,
+            context_descriptor: None,
+            unsupported: false,
+        },
+        flags: KFUNC_FLAG_NONE, // release semantics not yet enforced by verifier
         required_program_type: "",
         requires_privileged: false,
     },

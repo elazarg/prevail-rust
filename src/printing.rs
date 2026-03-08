@@ -337,7 +337,11 @@ impl fmt::Display for Callx {
 
 impl fmt::Display for CallBtf {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "call_btf {}", self.btf_id)
+        write!(f, "call_btf {}", self.btf_id)?;
+        if self.module != 0 {
+            write!(f, " module {}", self.module)?;
+        }
+        Ok(())
     }
 }
 

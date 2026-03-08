@@ -10,6 +10,15 @@ use crate::linux::spec_prototypes::HelperPrototype;
 use crate::spec::config::EbpfVerifierOptions;
 use crate::spec::type_descriptors::{EbpfMapDescriptor, EbpfMapType, EbpfProgramType, ProgramInfo};
 
+/// Resolved ksym BTF identifier for a kfunc symbol.
+///
+/// Mirrors C++ `KsymBtfId` from `platform.hpp`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct KsymBtfId {
+    pub btf_id: i32,
+    pub module: i16,
+}
+
 /// Trait abstracting platform-specific eBPF behavior.
 ///
 /// The C++ code uses a struct of function pointers (`ebpf_platform_t`).
@@ -29,6 +38,13 @@ pub trait EbpfPlatform {
     ///
     /// Platforms that do not model builtin call relocation should return `None`.
     fn resolve_builtin_call(&self, _name: &str) -> Option<i32> {
+        None
+    }
+
+    /// Resolve a `.ksyms` kfunc symbol name to its BTF id and module offset.
+    ///
+    /// Platforms that do not support `.ksyms` kfunc relocation should return `None`.
+    fn resolve_ksym_btf_id(&self, _name: &str) -> Option<KsymBtfId> {
         None
     }
 

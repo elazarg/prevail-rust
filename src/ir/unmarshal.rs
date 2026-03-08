@@ -665,15 +665,15 @@ impl<'a> Unmarshaller<'a> {
                         inst.opcode,
                     ));
                 }
-                if inst.offset != 0 {
-                    return Err(UnmarshalError::invalid_opcode(
-                        pc,
-                        "nonzero offset for",
-                        inst.opcode,
-                    ));
-                }
 
                 if inst.src_raw() == INST_CALL_LOCAL {
+                    if inst.offset != 0 {
+                        return Err(UnmarshalError::invalid_opcode(
+                            pc,
+                            "nonzero offset for",
+                            inst.opcode,
+                        ));
+                    }
                     if (inst.opcode & INST_SRC_REG) != 0 {
                         return Err(UnmarshalError::invalid_opcode(
                             pc,
@@ -711,6 +711,13 @@ impl<'a> Unmarshaller<'a> {
                             inst.opcode,
                         ));
                     }
+                    if inst.offset != 0 {
+                        return Err(UnmarshalError::invalid_opcode(
+                            pc,
+                            "nonzero offset for",
+                            inst.opcode,
+                        ));
+                    }
                     // Callx
                     if inst.dst() > R10_STACK_POINTER {
                         return Err(UnmarshalError::invalid(pc, "bad register"));
@@ -741,13 +748,30 @@ impl<'a> Unmarshaller<'a> {
                             inst.opcode,
                         ));
                     }
-                    return Ok(Instruction::CallBtf(CallBtf { btf_id: inst.imm }));
+                    if inst.offset < 0 {
+                        return Err(UnmarshalError::invalid_opcode(
+                            pc,
+                            "negative module for",
+                            inst.opcode,
+                        ));
+                    }
+                    return Ok(Instruction::CallBtf(CallBtf {
+                        btf_id: inst.imm,
+                        module: inst.offset,
+                    }));
                 }
 
                 if inst.dst_raw() != 0 {
                     return Err(UnmarshalError::invalid_opcode(
                         pc,
                         "nonzero dst for register",
+                        inst.opcode,
+                    ));
+                }
+                if inst.offset != 0 {
+                    return Err(UnmarshalError::invalid_opcode(
+                        pc,
+                        "nonzero offset for",
                         inst.opcode,
                     ));
                 }

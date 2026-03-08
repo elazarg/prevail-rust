@@ -1559,7 +1559,10 @@ mod tests {
         let seq = vec![
             (
                 Label::new(0),
-                Instruction::CallBtf(CallBtf { btf_id: 1 }),
+                Instruction::CallBtf(CallBtf {
+                    btf_id: 1,
+                    module: 0,
+                }),
                 None,
             ),
             (
@@ -1590,7 +1593,10 @@ mod tests {
         let seq = vec![
             (
                 Label::new(0),
-                Instruction::CallBtf(CallBtf { btf_id: 1000 }),
+                Instruction::CallBtf(CallBtf {
+                    btf_id: 1000,
+                    module: 0,
+                }),
                 None,
             ),
             (
@@ -1622,7 +1628,10 @@ mod tests {
         for i in 0..34 {
             seq.push((
                 Label::new(i),
-                Instruction::CallBtf(CallBtf { btf_id: 12 }),
+                Instruction::CallBtf(CallBtf {
+                    btf_id: 12,
+                    module: 0,
+                }),
                 None,
             ));
         }

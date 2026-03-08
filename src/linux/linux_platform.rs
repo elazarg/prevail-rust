@@ -20,7 +20,7 @@ use crate::linux::spec_type_descriptors::{
     SOCK_OPS_DESCR, SOCKET_FILTER_DESCR, SOCKOPT_DESCR, SYSCALL_DESCR, TRACEPOINT_DESCR,
     TRACING_DESCR, UNSPEC_DESCR, XDP_DESCR,
 };
-use crate::platform::EbpfPlatform;
+use crate::platform::{EbpfPlatform, KsymBtfId};
 use crate::spec::config::EbpfVerifierOptions;
 use crate::spec::ebpf_base::EbpfContextDescriptor;
 use crate::spec::type_descriptors::{
@@ -818,6 +818,65 @@ impl EbpfPlatform for LinuxPlatform {
         )
     }
 
+    fn resolve_ksym_btf_id(&self, name: &str) -> Option<KsymBtfId> {
+        // Synthetic BTF IDs for test/sample kfunc symbols.  IDs 20001-20012, 21000 are
+        // intentionally NOT in kfunc_prototypes — they exist only to exercise the ELF
+        // relocation rewrite path and will fail prototype lookup during verification.
+        // IDs 1009-1010 (cpumask) have prototype entries and will verify.
+        // In production, the platform callout resolves to real kernel/module BTF IDs.
+        match name {
+            "bpf_skb_ct_lookup" => Some(KsymBtfId {
+                btf_id: 20001,
+                module: 0,
+            }),
+            "bpf_ct_release" => Some(KsymBtfId {
+                btf_id: 20002,
+                module: 0,
+            }),
+            "bpf_fentry_test1" => Some(KsymBtfId {
+                btf_id: 20003,
+                module: 0,
+            }),
+            "bpf_cpumask_create" => Some(KsymBtfId {
+                btf_id: 1009,
+                module: 0,
+            }),
+            "bpf_cpumask_release" => Some(KsymBtfId {
+                btf_id: 1010,
+                module: 0,
+            }),
+            "bpf_kfunc_call_test_mem_len_pass1" => Some(KsymBtfId {
+                btf_id: 20007,
+                module: 0,
+            }),
+            "tcp_cong_avoid_ai" => Some(KsymBtfId {
+                btf_id: 20008,
+                module: 0,
+            }),
+            "tcp_reno_cong_avoid" => Some(KsymBtfId {
+                btf_id: 20009,
+                module: 0,
+            }),
+            "tcp_reno_undo_cwnd" => Some(KsymBtfId {
+                btf_id: 20010,
+                module: 0,
+            }),
+            "tcp_slow_start" => Some(KsymBtfId {
+                btf_id: 20011,
+                module: 0,
+            }),
+            "bpf_map_sum_elem_count" => Some(KsymBtfId {
+                btf_id: 20012,
+                module: 0,
+            }),
+            "bpf_testmod_test_mod_kfunc" => Some(KsymBtfId {
+                btf_id: 21000,
+                module: 1,
+            }),
+            _ => None,
+        }
+    }
+
     fn resolve_builtin_call(&self, name: &str) -> Option<i32> {
         match name {
             "memset" => Some(LINUX_BUILTIN_CALL_MEMSET),
@@ -1100,5 +1159,19 @@ mod tests {
         let helper_id = platform.resolve_builtin_call("bpf_map_lookup_elem");
         assert!(helper_id.is_some());
         assert!(helper_id.unwrap() >= 0);
+    }
+
+    #[test]
+    fn test_ksym_relocation_resolver_maps_known_kfunc_symbols() {
+        let platform = LinuxPlatform::new();
+
+        let known = platform.resolve_ksym_btf_id("bpf_testmod_test_mod_kfunc");
+        assert!(known.is_some());
+        let known = known.unwrap();
+        assert_eq!(known.module, 1);
+        assert!(known.btf_id > 0);
+
+        let unknown = platform.resolve_ksym_btf_id("__does_not_exist");
+        assert!(unknown.is_none());
     }
 }
