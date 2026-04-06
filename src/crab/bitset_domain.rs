@@ -14,7 +14,7 @@ use std::sync::LazyLock;
 
 use super::string_constraints::StringInvariant;
 
-const STACK_SIZE: LazyLock<usize> = LazyLock::new(|| {
+static STACK_SIZE: LazyLock<usize> = LazyLock::new(|| {
     let stack_size = *EBPF_TOTAL_STACK_SIZE as usize;
     assert!(
         stack_size.is_multiple_of(64),
@@ -23,7 +23,7 @@ const STACK_SIZE: LazyLock<usize> = LazyLock::new(|| {
     stack_size
 });
 
-const NUM_WORDS: LazyLock<usize> = LazyLock::new(|| *STACK_SIZE / 64);
+static NUM_WORDS: LazyLock<usize> = LazyLock::new(|| *STACK_SIZE / 64);
 
 /// A bitset domain tracking which stack bytes are numerical.
 ///
@@ -37,14 +37,16 @@ pub struct BitsetDomain {
     bits: Vec<u64>,
 }
 
+
+static ALL_SET: LazyLock<Vec<u64>> = LazyLock::new(|| vec![u64::MAX; *NUM_WORDS]);
+static ALL_CLEAR: LazyLock<Vec<u64>> = LazyLock::new(|| vec![0; *NUM_WORDS]);
+
 impl BitsetDomain {
-    const ALL_SET: LazyLock<Vec<u64>> = LazyLock::new(|| vec![u64::MAX; *NUM_WORDS]);
-    const ALL_CLEAR: LazyLock<Vec<u64>> = LazyLock::new(|| vec![0; *NUM_WORDS]);
 
     /// Create a new BitsetDomain with all bytes non-numerical (top).
     pub fn new() -> Self {
         BitsetDomain {
-            bits: Self::ALL_SET.clone(),
+            bits: ALL_SET.clone(),
         }
     }
 
@@ -70,15 +72,15 @@ impl BitsetDomain {
     }
 
     pub fn set_to_top(&mut self) {
-        self.bits.copy_from_slice(&*Self::ALL_SET);
+        self.bits.copy_from_slice(&ALL_SET);
     }
 
     pub fn set_to_bottom(&mut self) {
-        self.bits.copy_from_slice(&*Self::ALL_CLEAR);
+        self.bits.copy_from_slice(&ALL_CLEAR);
     }
 
     pub fn is_top(&self) -> bool {
-        self.bits == *Self::ALL_SET
+        self.bits == *ALL_SET
     }
 
     /// Always false for BitsetDomain (matching C++ semantics).
