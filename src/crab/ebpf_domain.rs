@@ -455,7 +455,10 @@ impl EbpfDomain {
             inv.add_value_constraint(&leq(r.uvalue.into(), (u32::MAX as i64).into()), registry);
             inv.add_value_constraint(&geq(r.uvalue.into(), 0i64.into()), registry);
             inv.add_value_constraint(
-                &leq(r.stack_offset.into(), (*EBPF_TOTAL_STACK_SIZE as i64).into()),
+                &leq(
+                    r.stack_offset.into(),
+                    (*EBPF_TOTAL_STACK_SIZE as i64).into(),
+                ),
                 registry,
             );
             inv.add_value_constraint(&geq(r.stack_offset.into(), 0i64.into()), registry);

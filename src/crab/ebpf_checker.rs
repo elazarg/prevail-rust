@@ -25,7 +25,9 @@ use crate::ir::syntax::{
     ValidStore, Value, ZeroCtxOffset,
 };
 use crate::ir::unmarshal::make_call;
-use crate::spec::ebpf_base::{ebpf_subprogram_stack_size, max_call_stack_frames, EBPF_TOTAL_STACK_SIZE};
+use crate::spec::ebpf_base::{
+    EBPF_TOTAL_STACK_SIZE, ebpf_subprogram_stack_size, max_call_stack_frames,
+};
 use crate::spec::vm_isa::R10_STACK_POINTER;
 
 pub fn ebpf_domain_check(

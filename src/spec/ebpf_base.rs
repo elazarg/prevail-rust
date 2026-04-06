@@ -78,7 +78,6 @@ pub fn max_call_stack_frames() -> i32 {
     *MAX_CALL_STACK_FRAMES.get_or_init(|| 8)
 }
 
-
 /// Defaults to `512` if not set earlier using [`OnceLock::set`].
 pub static EBPF_SUBPROGRAM_STACK_SIZE: OnceLock<i32> = OnceLock::new();
 
@@ -86,6 +85,5 @@ pub fn ebpf_subprogram_stack_size() -> i32 {
     *EBPF_SUBPROGRAM_STACK_SIZE.get_or_init(|| 512)
 }
 
-pub static EBPF_TOTAL_STACK_SIZE: LazyLock<i32> = LazyLock::new(|| {
-    max_call_stack_frames() * ebpf_subprogram_stack_size()
-});
+pub static EBPF_TOTAL_STACK_SIZE: LazyLock<i32> =
+    LazyLock::new(|| max_call_stack_frames() * ebpf_subprogram_stack_size());

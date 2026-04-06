@@ -257,7 +257,8 @@ fn havoc_subprogram_stack(
     if !intv.is_singleton() {
         return;
     }
-    let stack_start = intv.singleton().unwrap().narrow_to_i64() - ebpf_subprogram_stack_size() as i64;
+    let stack_start =
+        intv.singleton().unwrap().narrow_to_i64() - ebpf_subprogram_stack_size() as i64;
     let idx = Interval::from_i64(stack_start);
     let width = Interval::from_i64(ebpf_subprogram_stack_size() as i64);
     dom.stack.havoc_type(

@@ -7,16 +7,19 @@
 //! Each bit represents whether a stack byte is "non-numerical" (bit=1) or
 //! "numerical" (bit=0). Default is all non-numerical (top).
 
+use crate::spec::ebpf_base::EBPF_TOTAL_STACK_SIZE;
 use std::collections::BTreeSet;
 use std::fmt;
 use std::sync::LazyLock;
-use crate::spec::ebpf_base::EBPF_TOTAL_STACK_SIZE;
 
 use super::string_constraints::StringInvariant;
 
 const STACK_SIZE: LazyLock<usize> = LazyLock::new(|| {
     let stack_size = *EBPF_TOTAL_STACK_SIZE as usize;
-    assert!(stack_size.is_multiple_of(64), "STACK_SIZE must be a multiple of 64");
+    assert!(
+        stack_size.is_multiple_of(64),
+        "STACK_SIZE must be a multiple of 64"
+    );
     stack_size
 });
 
