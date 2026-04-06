@@ -37,12 +37,10 @@ pub struct BitsetDomain {
     bits: Vec<u64>,
 }
 
-
 static ALL_SET: LazyLock<Vec<u64>> = LazyLock::new(|| vec![u64::MAX; *NUM_WORDS]);
 static ALL_CLEAR: LazyLock<Vec<u64>> = LazyLock::new(|| vec![0; *NUM_WORDS]);
 
 impl BitsetDomain {
-
     /// Create a new BitsetDomain with all bytes non-numerical (top).
     pub fn new() -> Self {
         BitsetDomain {
