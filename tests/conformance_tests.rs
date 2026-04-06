@@ -144,7 +144,7 @@ fn add_stack_variable(
     memory_bytes: &[u8],
     size: usize,
 ) {
-    let base = EBPF_TOTAL_STACK_SIZE - memory_bytes.len() as i32;
+    let base = *EBPF_TOTAL_STACK_SIZE - memory_bytes.len() as i32;
     let buf_offset = (*offset - base) as usize;
     let src = &memory_bytes[buf_offset..buf_offset + size];
 
@@ -186,8 +186,8 @@ fn add_stack_variable(
 }
 
 fn stack_contents_invariant(memory_bytes: &[u8]) -> StringInvariant {
-    let base = EBPF_TOTAL_STACK_SIZE - memory_bytes.len() as i32;
-    let end = EBPF_TOTAL_STACK_SIZE;
+    let base = *EBPF_TOTAL_STACK_SIZE - memory_bytes.len() as i32;
+    let end = *EBPF_TOTAL_STACK_SIZE;
 
     let mut constraints = BTreeSet::new();
     constraints.insert("r1.type=stack".to_string());
@@ -211,7 +211,7 @@ fn stack_contents_invariant(memory_bytes: &[u8]) -> StringInvariant {
         add_stack_variable(&mut constraints, &mut offset, memory_bytes, 4);
     }
     // Fill with 8-byte values
-    while offset < EBPF_TOTAL_STACK_SIZE {
+    while offset < *EBPF_TOTAL_STACK_SIZE {
         add_stack_variable(&mut constraints, &mut offset, memory_bytes, 8);
     }
 
@@ -261,7 +261,7 @@ fn run_conformance_test_case(data_file: &Path) -> ConformanceTestResult {
     // Build pre-invariant with optional memory
     let pre_invariant = if !parsed.memory_bytes.is_empty() {
         assert!(
-            parsed.memory_bytes.len() <= EBPF_TOTAL_STACK_SIZE as usize,
+            parsed.memory_bytes.len() <= *EBPF_TOTAL_STACK_SIZE as usize,
             "memory size overflow"
         );
         let stack_inv = stack_contents_invariant(&parsed.memory_bytes);

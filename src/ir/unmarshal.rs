@@ -471,7 +471,7 @@ impl<'a> Unmarshaller<'a> {
                 }
                 if inst.src() == R10_STACK_POINTER
                     && (inst.offset + width.bytes() as i16 > 0
-                        || inst.offset < -EBPF_TOTAL_STACK_SIZE as i16)
+                        || inst.offset < -*EBPF_TOTAL_STACK_SIZE as i16)
                 {
                     self.note("Stack access out of bounds".to_string());
                 }

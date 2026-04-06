@@ -87,7 +87,7 @@ pub struct OffsetMap {
 
 impl Default for OffsetMap {
     fn default() -> Self {
-        let n = EBPF_TOTAL_STACK_SIZE as usize;
+        let n = *EBPF_TOTAL_STACK_SIZE as usize;
         OffsetMap {
             sizes: vec![Vec::new(); n],
         }
@@ -241,8 +241,8 @@ fn clamped_bounds(interval: &Interval) -> (i32, i32) {
         .ub()
         .number()
         .and_then(|n| n.to_i64())
-        .map(|n| n.min(EBPF_TOTAL_STACK_SIZE as i64) as i32)
-        .unwrap_or(EBPF_TOTAL_STACK_SIZE);
+        .map(|n| n.min(*EBPF_TOTAL_STACK_SIZE as i64) as i32)
+        .unwrap_or(*EBPF_TOTAL_STACK_SIZE);
     (lb, ub)
 }
 
@@ -412,7 +412,7 @@ impl ArrayDomain {
     }
 
     pub fn to_set(&self) -> StringInvariant {
-        self.num_bytes.to_set()
+        self.num_bytes.clone().to_set()
     }
 
     // ========================================================================
@@ -770,7 +770,7 @@ impl ArrayDomain {
         };
         let idx_i = idx_n.to_i64().unwrap_or(0);
         let width_i = width_n.to_i64().unwrap_or(0);
-        if idx_i + width_i > EBPF_TOTAL_STACK_SIZE as i64 {
+        if idx_i + width_i > *EBPF_TOTAL_STACK_SIZE as i64 {
             return;
         }
         self.num_bytes.reset(idx_i as usize, width_i as i32);

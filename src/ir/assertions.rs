@@ -9,7 +9,7 @@
 
 use crate::cfg::label::Label;
 use crate::crab::type_encoding::TypeGroup;
-use crate::spec::ebpf_base::EBPF_SUBPROGRAM_STACK_SIZE;
+use crate::spec::ebpf_base::ebpf_subprogram_stack_size;
 use crate::spec::type_descriptors::ProgramInfo;
 use crate::spec::vm_isa::{R0_RETURN_VALUE, R6, R10_STACK_POINTER};
 
@@ -419,7 +419,7 @@ fn assertions_mem(ins: &Mem, info: &ProgramInfo, label: &Option<Label>) -> Vec<A
 
     if basereg == R10_STACK_POINTER {
         // We know we are accessing the stack.
-        if offset < -EBPF_SUBPROGRAM_STACK_SIZE || offset + (width.v as i32) > 0 {
+        if offset < -ebpf_subprogram_stack_size() || offset + (width.v as i32) > 0 {
             // This assertion will fail.
             res.push(Assertion::ValidAccess(make_valid_access(
                 label,

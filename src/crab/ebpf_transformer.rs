@@ -257,9 +257,9 @@ fn havoc_subprogram_stack(
     if !intv.is_singleton() {
         return;
     }
-    let stack_start = intv.singleton().unwrap().narrow_to_i64() - EBPF_SUBPROGRAM_STACK_SIZE as i64;
+    let stack_start = intv.singleton().unwrap().narrow_to_i64() - ebpf_subprogram_stack_size() as i64;
     let idx = Interval::from_i64(stack_start);
-    let width = Interval::from_i64(EBPF_SUBPROGRAM_STACK_SIZE as i64);
+    let width = Interval::from_i64(ebpf_subprogram_stack_size() as i64);
     dom.stack.havoc_type(
         &mut dom.state.types,
         &idx,
@@ -1426,7 +1426,7 @@ fn transform_exit(
     add_to_reg(
         dom,
         &R10_STACK_POINTER,
-        EBPF_SUBPROGRAM_STACK_SIZE,
+        ebpf_subprogram_stack_size(),
         64,
         registry,
     );
@@ -1808,7 +1808,7 @@ fn transform_call_local(
     add_to_reg(
         dom,
         &R10_STACK_POINTER,
-        -EBPF_SUBPROGRAM_STACK_SIZE,
+        -ebpf_subprogram_stack_size(),
         64,
         registry,
     );

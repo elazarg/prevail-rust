@@ -21,7 +21,7 @@ use crate::ir::syntax::{
 use crate::ir::unmarshal::conformance_groups;
 use crate::platform::EbpfPlatform;
 use crate::spec::config::EbpfVerifierOptions;
-use crate::spec::ebpf_base::MAX_CALL_STACK_FRAMES;
+use crate::spec::ebpf_base::max_call_stack_frames;
 use crate::spec::type_descriptors::ProgramInfo;
 
 /// Delimiter used between stack frame components in labels.
@@ -1086,7 +1086,7 @@ fn add_cfg_nodes(
         if builder.prog.cfg.contains(&label)
             && let Instruction::CallLocal(cl) = builder.prog.instruction_at(&label)
         {
-            if stack_frame_depth >= MAX_CALL_STACK_FRAMES {
+            if stack_frame_depth >= max_call_stack_frames() {
                 return Err(InvalidControlFlow {
                     message: "too many call stack frames".to_string(),
                 });

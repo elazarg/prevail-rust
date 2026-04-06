@@ -25,9 +25,7 @@ use crate::ir::syntax::{
     ValidStore, Value, ZeroCtxOffset,
 };
 use crate::ir::unmarshal::make_call;
-use crate::spec::ebpf_base::{
-    EBPF_SUBPROGRAM_STACK_SIZE, EBPF_TOTAL_STACK_SIZE, MAX_CALL_STACK_FRAMES,
-};
+use crate::spec::ebpf_base::{ebpf_subprogram_stack_size, max_call_stack_frames, EBPF_TOTAL_STACK_SIZE};
 use crate::spec::vm_isa::R10_STACK_POINTER;
 
 pub fn ebpf_domain_check(
@@ -123,14 +121,14 @@ impl<'a> EbpfChecker<'a> {
         // var - expr is not impl?
         // Use full LinearExpression arithmetic
         let lhs = LinearExpression::from(r10.stack_offset)
-            - LinearExpression::from(EBPF_SUBPROGRAM_STACK_SIZE as i64);
+            - LinearExpression::from(ebpf_subprogram_stack_size() as i64);
 
         self.require_value(
             leq(lhs, lb),
             "Lower bound must be at least r10.stack_offset - EBPF_SUBPROGRAM_STACK_SIZE",
         )?;
         self.require_value(
-            leq(ub, LinearExpression::from(EBPF_TOTAL_STACK_SIZE as i64)),
+            leq(ub, LinearExpression::from(*EBPF_TOTAL_STACK_SIZE as i64)),
             "Upper bound must be at most EBPF_TOTAL_STACK_SIZE",
         )
     }
@@ -255,7 +253,7 @@ impl<'a> EbpfChecker<'a> {
             }
             // And, to avoid wraparound errors, they must be within bounds.
             let va1 = ValidAccess {
-                call_stack_depth: MAX_CALL_STACK_FRAMES,
+                call_stack_depth: max_call_stack_frames(),
                 reg: s.r1,
                 offset: 0,
                 width: Value::Imm(Imm { v: 0 }),
@@ -264,7 +262,7 @@ impl<'a> EbpfChecker<'a> {
             };
             self.check_valid_access(&va1)?;
             let va2 = ValidAccess {
-                call_stack_depth: MAX_CALL_STACK_FRAMES,
+                call_stack_depth: max_call_stack_frames(),
                 reg: s.r2,
                 offset: 0,
                 width: Value::Imm(Imm { v: 0 }),

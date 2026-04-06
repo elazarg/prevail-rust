@@ -9,17 +9,18 @@
 
 use std::collections::BTreeSet;
 use std::fmt;
-
+use std::sync::LazyLock;
 use crate::spec::ebpf_base::EBPF_TOTAL_STACK_SIZE;
 
 use super::string_constraints::StringInvariant;
 
-const STACK_SIZE: usize = EBPF_TOTAL_STACK_SIZE as usize;
-const NUM_WORDS: usize = STACK_SIZE / 64;
-const _: () = assert!(
-    STACK_SIZE.is_multiple_of(64),
-    "STACK_SIZE must be a multiple of 64"
-);
+const STACK_SIZE: LazyLock<usize> = LazyLock::new(|| {
+    let stack_size = *EBPF_TOTAL_STACK_SIZE as usize;
+    assert!(stack_size.is_multiple_of(64), "STACK_SIZE must be a multiple of 64");
+    stack_size
+});
+
+const NUM_WORDS: LazyLock<usize> = LazyLock::new(|| *STACK_SIZE / 64);
 
 /// A bitset domain tracking which stack bytes are numerical.
 ///
@@ -27,20 +28,20 @@ const _: () = assert!(
 /// or numerical (0).
 /// Top = all non-numerical (all bits set).
 /// Bottom concept is not used (is_bottom always returns false).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct BitsetDomain {
     /// Bit i is 1 if byte i is non-numerical.
-    bits: [u64; NUM_WORDS],
+    bits: Vec<u64>,
 }
 
 impl BitsetDomain {
-    const ALL_SET: [u64; NUM_WORDS] = [u64::MAX; NUM_WORDS];
-    const ALL_CLEAR: [u64; NUM_WORDS] = [0; NUM_WORDS];
+    const ALL_SET: LazyLock<Vec<u64>> = LazyLock::new(|| vec![u64::MAX; *NUM_WORDS]);
+    const ALL_CLEAR: LazyLock<Vec<u64>> = LazyLock::new(|| vec![0; *NUM_WORDS]);
 
     /// Create a new BitsetDomain with all bytes non-numerical (top).
     pub fn new() -> Self {
         BitsetDomain {
-            bits: Self::ALL_SET,
+            bits: Self::ALL_SET.clone(),
         }
     }
 
@@ -66,15 +67,15 @@ impl BitsetDomain {
     }
 
     pub fn set_to_top(&mut self) {
-        self.bits = Self::ALL_SET;
+        self.bits.copy_from_slice(&*Self::ALL_SET);
     }
 
     pub fn set_to_bottom(&mut self) {
-        self.bits = Self::ALL_CLEAR;
+        self.bits.copy_from_slice(&*Self::ALL_CLEAR);
     }
 
     pub fn is_top(&self) -> bool {
-        self.bits == Self::ALL_SET
+        self.bits == *Self::ALL_SET
     }
 
     /// Always false for BitsetDomain (matching C++ semantics).
@@ -104,7 +105,7 @@ impl BitsetDomain {
 
     /// Inclusion: self <= other iff every non-numerical bit in self is also set in other.
     pub fn is_included_in(&self, other: &BitsetDomain) -> bool {
-        for i in 0..NUM_WORDS {
+        for i in 0..*NUM_WORDS {
             // If self has a bit set that other doesn't, not included.
             if self.bits[i] & !other.bits[i] != 0 {
                 return false;
@@ -115,7 +116,7 @@ impl BitsetDomain {
 
     /// Join: bitwise OR (union of non-numerical bytes).
     pub fn join(&self, other: &BitsetDomain) -> BitsetDomain {
-        let mut bits = self.bits;
+        let mut bits = self.bits.clone();
         for (a, b) in bits.iter_mut().zip(&other.bits) {
             *a |= b;
         }
@@ -124,14 +125,14 @@ impl BitsetDomain {
 
     /// Join in place.
     pub fn join_assign(&mut self, other: &BitsetDomain) {
-        for i in 0..NUM_WORDS {
+        for i in 0..*NUM_WORDS {
             self.bits[i] |= other.bits[i];
         }
     }
 
     /// Meet: bitwise AND (intersection of non-numerical bytes).
     pub fn meet(&self, other: &BitsetDomain) -> BitsetDomain {
-        let mut bits = self.bits;
+        let mut bits = self.bits.clone();
         for (a, b) in bits.iter_mut().zip(&other.bits) {
             *a &= b;
         }
@@ -151,10 +152,10 @@ impl BitsetDomain {
     /// Check uniformity of a range [lb, lb+width).
     /// Returns (all_num, all_non_num).
     pub fn uniformity(&self, lb: usize, width: i32) -> (bool, bool) {
-        if lb >= STACK_SIZE {
+        if lb >= *STACK_SIZE {
             return (true, true);
         }
-        let width = width.min((STACK_SIZE - lb) as i32);
+        let width = width.min((*STACK_SIZE - lb) as i32);
         let mut only_num = true;
         let mut only_non_num = true;
         for j in 0..width {
@@ -167,11 +168,11 @@ impl BitsetDomain {
 
     /// Get the number of contiguous numerical bytes starting at lb.
     pub fn all_num_width(&self, lb: usize) -> i32 {
-        if lb >= STACK_SIZE {
+        if lb >= *STACK_SIZE {
             return 0;
         }
         let mut ub = lb;
-        while ub < STACK_SIZE && !self.get_bit(ub) {
+        while ub < *STACK_SIZE && !self.get_bit(ub) {
             ub += 1;
         }
         (ub - lb) as i32
@@ -179,10 +180,10 @@ impl BitsetDomain {
 
     /// Mark bytes [lb, lb+n) as numerical (clear non-numerical bits).
     pub fn reset(&mut self, lb: usize, n: i32) {
-        if lb >= STACK_SIZE {
+        if lb >= *STACK_SIZE {
             return;
         }
-        let n = n.min((STACK_SIZE - lb) as i32);
+        let n = n.min((*STACK_SIZE - lb) as i32);
         for i in 0..n {
             self.clear_bit(lb + i as usize);
         }
@@ -190,10 +191,10 @@ impl BitsetDomain {
 
     /// Mark bytes [lb, lb+width) as non-numerical (set bits).
     pub fn havoc(&mut self, lb: usize, width: i32) {
-        if lb >= STACK_SIZE {
+        if lb >= *STACK_SIZE {
             return;
         }
-        let width = width.min((STACK_SIZE - lb) as i32);
+        let width = width.min((*STACK_SIZE - lb) as i32);
         for i in 0..width {
             self.set_bit(lb + i as usize);
         }
@@ -205,9 +206,9 @@ impl BitsetDomain {
     /// `[start..=end]` where no bit is set (i.e., all bytes are numerical).
     fn numerical_ranges(&self) -> Vec<(usize, usize)> {
         let mut ranges = Vec::new();
-        let mut i: i32 = -(STACK_SIZE as i32);
+        let mut i: i32 = -(*STACK_SIZE as i32);
         while i < 0 {
-            let idx = (STACK_SIZE as i32 + i) as usize;
+            let idx = (*STACK_SIZE as i32 + i) as usize;
             if self.get_bit(idx) {
                 i += 1;
                 continue;
@@ -215,13 +216,13 @@ impl BitsetDomain {
             let start = idx;
             let mut j = i + 1;
             while j < 0 {
-                let jdx = (STACK_SIZE as i32 + j) as usize;
+                let jdx = (*STACK_SIZE as i32 + j) as usize;
                 if self.get_bit(jdx) {
                     break;
                 }
                 j += 1;
             }
-            let end = (STACK_SIZE as i32 + j - 1) as usize;
+            let end = (*STACK_SIZE as i32 + j - 1) as usize;
             ranges.push((start, end));
             i = j;
         }
@@ -234,7 +235,7 @@ impl BitsetDomain {
             return true;
         }
         let lb = lb.max(0);
-        let ub = ub.min(STACK_SIZE as i32);
+        let ub = ub.min(*STACK_SIZE as i32);
         assert!(lb <= ub);
         for i in lb..ub {
             if self.get_bit(i as usize) {
@@ -360,7 +361,7 @@ mod tests {
     fn test_copy_semantics() {
         let mut a = BitsetDomain::new();
         a.reset(0, 8);
-        let b = a; // Copy, not move
+        let b = a.clone(); // Copy, not move
         assert!(!b.get_bit(0));
         a.set_to_top(); // Doesn't affect b
         assert!(!b.get_bit(0));

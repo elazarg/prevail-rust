@@ -135,7 +135,7 @@ impl RelevantState {
         let abs_stack_offsets: Vec<i64> = self
             .stack_offsets
             .iter()
-            .map(|&rel| EBPF_TOTAL_STACK_SIZE as i64 + rel)
+            .map(|&rel| *EBPF_TOTAL_STACK_SIZE as i64 + rel)
             .collect();
 
         // Check for stack range pattern: s[start...end]
@@ -797,7 +797,7 @@ pub fn extract_instruction_deps(
                     pre_state.get_stack_offset(&mem.access.basereg, registry)
                 {
                     deps.stack_read.insert(
-                        mem.access.offset as i64 + (stack_off - EBPF_TOTAL_STACK_SIZE as i64),
+                        mem.access.offset as i64 + (stack_off - *EBPF_TOTAL_STACK_SIZE as i64),
                     );
                 }
             } else {
@@ -811,7 +811,7 @@ pub fn extract_instruction_deps(
                     pre_state.get_stack_offset(&mem.access.basereg, registry)
                 {
                     deps.stack_written.insert(
-                        mem.access.offset as i64 + (stack_off - EBPF_TOTAL_STACK_SIZE as i64),
+                        mem.access.offset as i64 + (stack_off - *EBPF_TOTAL_STACK_SIZE as i64),
                     );
                 }
             }
@@ -829,7 +829,7 @@ pub fn extract_instruction_deps(
                 pre_state.get_stack_offset(&atomic.access.basereg, registry)
             {
                 let adjusted =
-                    atomic.access.offset as i64 + (stack_off - EBPF_TOTAL_STACK_SIZE as i64);
+                    atomic.access.offset as i64 + (stack_off - *EBPF_TOTAL_STACK_SIZE as i64);
                 deps.stack_read.insert(adjusted);
                 deps.stack_written.insert(adjusted);
             }
