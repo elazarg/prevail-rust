@@ -15,7 +15,9 @@ use crate::arith::number::Number;
 use crate::arith::variable::Variable;
 use crate::cfg::label::Label;
 use crate::crab::array_domain::{ArrayDomain, ArrayMap};
-use crate::crab::ebpf_domain::{DomainContext, EbpfDomain, MAX_PACKET_SIZE, PTR_MAX};
+use crate::crab::ebpf_domain::{
+    DomainContext, EbpfDomain, MAX_PACKET_SIZE, PTR_MAX, VerificationError,
+};
 use crate::crab::interval::Interval;
 use crate::crab::type_domain::reg_type;
 use crate::crab::type_encoding::*;
@@ -109,15 +111,22 @@ fn atomic_to_bin(a: &Atomic) -> Bin {
 // ============================================================================
 
 /// Apply the abstract transformer for `ins` to `dom`.
+///
+/// Mirrors C++ `EbpfTransformer::operator()` dispatch. Returns
+/// `Err(VerificationError)` for conditions that upstream signals via
+/// `throw` and catches at the `verify()` boundary (e.g. missing map
+/// descriptor, program-map used as a data map). Panics remain reserved
+/// for verifier-internal invariant violations (e.g. unresolved pseudo
+/// loads that should have been lowered before analysis).
 pub fn ebpf_domain_transform(
     dom: &mut EbpfDomain,
     ins: &Instruction,
     ctx: &DomainContext,
     registry: &mut VariableRegistry,
     array_map: &mut ArrayMap,
-) {
+) -> Result<(), VerificationError> {
     if dom.is_bottom() {
-        return;
+        return Ok(());
     }
     let pre = dom.clone();
     match ins {
@@ -125,9 +134,9 @@ pub fn ebpf_domain_transform(
         Instruction::Bin(s) => transform_bin(dom, s, ctx, registry),
         Instruction::Un(s) => transform_un(dom, s, ctx, registry),
         Instruction::Mem(s) => transform_mem(dom, s, ctx, registry, array_map),
-        Instruction::Call(s) => transform_call(dom, s, ctx, registry, array_map),
+        Instruction::Call(s) => transform_call(dom, s, ctx, registry, array_map)?,
         Instruction::CallLocal(s) => transform_call_local(dom, s, ctx, registry),
-        Instruction::Callx(s) => transform_callx(dom, s, ctx, registry, array_map),
+        Instruction::Callx(s) => transform_callx(dom, s, ctx, registry, array_map)?,
         Instruction::CallBtf(_) => {
             panic!("CallBtf should be rejected before abstract transformation")
         }
@@ -135,8 +144,8 @@ pub fn ebpf_domain_transform(
         Instruction::Jmp(_) => { /* NOP: only holds jump preconditions */ }
         Instruction::Packet(s) => transform_packet(dom, s, ctx, registry),
         Instruction::Atomic(s) => transform_atomic(dom, s, ctx, registry, array_map),
-        Instruction::LoadMapFd(s) => transform_load_map_fd(dom, s, ctx, registry),
-        Instruction::LoadMapAddress(s) => transform_load_map_address(dom, s, ctx, registry),
+        Instruction::LoadMapFd(s) => transform_load_map_fd(dom, s, ctx, registry)?,
+        Instruction::LoadMapAddress(s) => transform_load_map_address(dom, s, ctx, registry)?,
         Instruction::LoadPseudo(s) => transform_load_pseudo(dom, s, registry),
         Instruction::Undefined(_) => { /* NOP */ }
         Instruction::IncrementLoopCounter(s) => {
@@ -149,6 +158,7 @@ pub fn ebpf_domain_transform(
             pre, ins
         );
     }
+    Ok(())
 }
 
 /// Initialize a loop counter variable to zero.
@@ -302,25 +312,27 @@ fn do_load_mapfd(
     maybe_null: bool,
     ctx: &DomainContext,
     registry: &mut VariableRegistry,
-) {
-    let desc = ctx.platform.get_map_descriptor(mapfd);
-    if let Some(desc) = desc {
-        let map_type = ctx.platform.get_map_type(desc.map_type);
-        let dst = reg_pack(dst_reg, registry);
-        if map_type.value_type == EbpfMapValueType::Program {
-            dom.state
-                .assign_type_encoding(dst_reg, T_MAP_PROGRAMS, registry);
-            dom.state
-                .values
-                .assign_i64(dst.map_fd_programs, mapfd as i64, registry);
-        } else {
-            dom.state.assign_type_encoding(dst_reg, T_MAP, registry);
-            dom.state
-                .values
-                .assign_i64(dst.map_fd, mapfd as i64, registry);
-        }
+) -> Result<(), VerificationError> {
+    let desc = ctx
+        .platform
+        .get_map_descriptor(mapfd)
+        .ok_or_else(|| VerificationError::new(format!("map_fd {mapfd} not found")))?;
+    let map_type = ctx.platform.get_map_type(desc.map_type);
+    let dst = reg_pack(dst_reg, registry);
+    if map_type.value_type == EbpfMapValueType::Program {
+        dom.state
+            .assign_type_encoding(dst_reg, T_MAP_PROGRAMS, registry);
+        dom.state
+            .values
+            .assign_i64(dst.map_fd_programs, mapfd as i64, registry);
+    } else {
+        dom.state.assign_type_encoding(dst_reg, T_MAP, registry);
+        dom.state
+            .values
+            .assign_i64(dst.map_fd, mapfd as i64, registry);
     }
     assign_valid_ptr(dom, dst_reg, maybe_null, registry);
+    Ok(())
 }
 
 fn do_load_map_address(
@@ -330,23 +342,27 @@ fn do_load_map_address(
     offset: i32,
     ctx: &DomainContext,
     registry: &mut VariableRegistry,
-) {
-    let desc = ctx.platform.get_map_descriptor(mapfd);
-    if let Some(desc) = desc {
-        let map_type = ctx.platform.get_map_type(desc.map_type);
-        if map_type.value_type == EbpfMapValueType::Program {
-            panic!("Cannot load address of program map type - only data maps are supported");
-        }
-        dom.state.assign_type_encoding(dst_reg, T_SHARED, registry);
-        let dst = reg_pack(dst_reg, registry);
-        dom.state
-            .values
-            .assign_i64(dst.shared_offset, offset as i64, registry);
-        dom.state
-            .values
-            .assign_i64(dst.shared_region_size, desc.value_size as i64, registry);
+) -> Result<(), VerificationError> {
+    let desc = ctx
+        .platform
+        .get_map_descriptor(mapfd)
+        .ok_or_else(|| VerificationError::new(format!("map_fd {mapfd} not found")))?;
+    let map_type = ctx.platform.get_map_type(desc.map_type);
+    if map_type.value_type == EbpfMapValueType::Program {
+        return Err(VerificationError::new(
+            "Cannot load address of program map type - only data maps are supported".to_string(),
+        ));
     }
+    dom.state.assign_type_encoding(dst_reg, T_SHARED, registry);
+    let dst = reg_pack(dst_reg, registry);
+    dom.state
+        .values
+        .assign_i64(dst.shared_offset, offset as i64, registry);
+    dom.state
+        .values
+        .assign_i64(dst.shared_region_size, desc.value_size as i64, registry);
     assign_valid_ptr(dom, dst_reg, false, registry);
+    Ok(())
 }
 
 fn merge_imm32_to_u64(lo: i32, hi: i32) -> u64 {
@@ -1598,9 +1614,9 @@ fn transform_call(
     ctx: &DomainContext,
     registry: &mut VariableRegistry,
     array_map: &mut ArrayMap,
-) {
+) -> Result<(), VerificationError> {
     if dom.is_bottom() {
-        return;
+        return Ok(());
     }
 
     let mut maybe_fd_reg: Option<Reg> = None;
@@ -1754,7 +1770,7 @@ fn transform_call(
                         true,
                         ctx,
                         registry,
-                    );
+                    )?;
                 } else {
                     assign_shared_map_value(dom, None, registry);
                 }
@@ -1798,6 +1814,7 @@ fn transform_call(
     if call.reallocate_packet {
         forget_packet_pointers(dom, ctx, registry);
     }
+    Ok(())
 }
 
 fn transform_call_local(
@@ -1827,9 +1844,9 @@ fn transform_callx(
     ctx: &DomainContext,
     registry: &mut VariableRegistry,
     array_map: &mut ArrayMap,
-) {
+) -> Result<(), VerificationError> {
     if dom.is_bottom() {
-        return;
+        return Ok(());
     }
 
     // Look up the helper function id.
@@ -1842,11 +1859,12 @@ fn transform_callx(
     {
         let imm = val as i32;
         if !ctx.platform.is_helper_usable(imm) {
-            return;
+            return Ok(());
         }
         let call = make_call(imm, ctx.platform);
-        transform_call(dom, &call, ctx, registry, array_map);
+        transform_call(dom, &call, ctx, registry, array_map)?;
     }
+    Ok(())
 }
 
 fn transform_load_map_fd(
@@ -1854,11 +1872,11 @@ fn transform_load_map_fd(
     ins: &LoadMapFd,
     ctx: &DomainContext,
     registry: &mut VariableRegistry,
-) {
+) -> Result<(), VerificationError> {
     if dom.is_bottom() {
-        return;
+        return Ok(());
     }
-    do_load_mapfd(dom, &ins.dst, ins.mapfd, false, ctx, registry);
+    do_load_mapfd(dom, &ins.dst, ins.mapfd, false, ctx, registry)
 }
 
 fn transform_load_map_address(
@@ -1866,11 +1884,11 @@ fn transform_load_map_address(
     ins: &LoadMapAddress,
     ctx: &DomainContext,
     registry: &mut VariableRegistry,
-) {
+) -> Result<(), VerificationError> {
     if dom.is_bottom() {
-        return;
+        return Ok(());
     }
-    do_load_map_address(dom, &ins.dst, ins.mapfd, ins.offset, ctx, registry);
+    do_load_map_address(dom, &ins.dst, ins.mapfd, ins.offset, ctx, registry)
 }
 
 fn transform_increment_loop_counter(

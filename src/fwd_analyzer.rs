@@ -197,7 +197,13 @@ impl<'a, P: Program> FwdFixpointIterator<'a, P> {
                 }
             }
         }
-        ebpf_domain_transform(&mut pre, ins, self.ctx, self.registry, &mut self.array_map);
+        if let Err(mut err) =
+            ebpf_domain_transform(&mut pre, ins, self.ctx, self.registry, &mut self.array_map)
+        {
+            err.label = Some(label.clone());
+            self.set_error(label, err);
+            return;
+        }
 
         if let Some(pair) = self.result.invariants.get_mut(label) {
             pair.post = pre;
