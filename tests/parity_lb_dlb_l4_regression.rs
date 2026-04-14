@@ -43,6 +43,7 @@ fn analyze_bpf_lb_dlb_l4_from_netdev() -> (prevail::result::AnalysisResult, Vari
 
     let ctx = DomainContext {
         program_info: &raw_prog.info,
+        runtime: &opts.runtime,
         options: &opts,
         platform: &platform,
     };

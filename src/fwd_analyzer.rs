@@ -114,9 +114,9 @@ impl<'a, P: Program> FwdFixpointIterator<'a, P> {
             result.invariants.insert(
                 label.clone(),
                 InvariantMapPair {
-                    pre: EbpfDomain::bottom(),
+                    pre: EbpfDomain::bottom(ctx.runtime),
                     error: None,
-                    post: EbpfDomain::bottom(),
+                    post: EbpfDomain::bottom(ctx.runtime),
                     deps: None,
                 },
             );
@@ -129,7 +129,7 @@ impl<'a, P: Program> FwdFixpointIterator<'a, P> {
             result,
             ctx,
             registry,
-            array_map: ArrayMap::new(),
+            array_map: ArrayMap::new(ctx.runtime.total_stack_size()),
             skip: true,
         }
     }
@@ -163,7 +163,7 @@ impl<'a, P: Program> FwdFixpointIterator<'a, P> {
             .invariants
             .get(node)
             .map(|pair| pair.pre.clone())
-            .unwrap_or_else(EbpfDomain::bottom)
+            .unwrap_or_else(|| EbpfDomain::bottom(self.ctx.runtime))
     }
 
     // ========================================================================
@@ -177,7 +177,7 @@ impl<'a, P: Program> FwdFixpointIterator<'a, P> {
         // Dependency extraction runs on the pre-state *before* assertions or
         // transformation, so that even failing instructions get deps recorded.
         if self.ctx.options.verbosity_opts.collect_instruction_deps {
-            let deps = extract_instruction_deps(ins, &pre, self.registry);
+            let deps = extract_instruction_deps(ins, &pre, self.ctx.runtime, self.registry);
             if let Some(pair) = self.result.invariants.get_mut(label) {
                 pair.deps = Some(deps);
             }
@@ -210,7 +210,7 @@ impl<'a, P: Program> FwdFixpointIterator<'a, P> {
         if *node == self.cfg.entry_label() {
             return self.get_pre(node);
         }
-        let mut res = EbpfDomain::bottom();
+        let mut res = EbpfDomain::bottom(self.ctx.runtime);
         let parents: Vec<Label> = self.cfg.parents_of(node).iter().cloned().collect();
         for prev in &parents {
             // Access post directly from the map to avoid cloning.
@@ -345,7 +345,7 @@ impl<'a, P: Program> FwdFixpointIterator<'a, P> {
             }
         }
 
-        let mut invariant = EbpfDomain::bottom();
+        let mut invariant = EbpfDomain::bottom(self.ctx.runtime);
         if entry_in_this_cycle {
             invariant = self.get_pre(&self.cfg.entry_label());
         } else {
@@ -409,7 +409,13 @@ impl<'a, P: Program> FwdFixpointIterator<'a, P> {
         ctx: &'a DomainContext<'a>,
         registry: &'a mut VariableRegistry,
     ) -> AnalysisResult {
-        Self::run_with_array_map(prog, entry_inv, ctx, registry, ArrayMap::new())
+        Self::run_with_array_map(
+            prog,
+            entry_inv,
+            ctx,
+            registry,
+            ArrayMap::new(ctx.runtime.total_stack_size()),
+        )
     }
 
     /// Run the forward fixpoint analysis with a pre-populated array map.
@@ -478,13 +484,13 @@ impl<'a, P: Program> FwdFixpointIterator<'a, P> {
 /// Run the forward fixpoint analysis on a program using the default entry state.
 ///
 /// The entry state is initialized with `EbpfDomain::setup_entry`, using
-/// `ctx.options.setup_constraints` to decide whether R1 is initialized.
+/// `ctx.runtime.setup_constraints` to decide whether R1 is initialized.
 pub fn analyze<P: Program>(
     prog: &P,
     ctx: &DomainContext,
     registry: &mut VariableRegistry,
 ) -> AnalysisResult {
-    let entry_inv = EbpfDomain::setup_entry(ctx.options.setup_constraints, ctx, registry);
+    let entry_inv = EbpfDomain::setup_entry(ctx.runtime.setup_constraints, ctx, registry);
     FwdFixpointIterator::run(prog, entry_inv, ctx, registry)
 }
 
@@ -498,10 +504,10 @@ pub fn analyze_with_entry<P: Program>(
     ctx: &DomainContext,
     registry: &mut VariableRegistry,
 ) -> AnalysisResult {
-    let mut array_map = ArrayMap::new();
+    let mut array_map = ArrayMap::new(ctx.runtime.total_stack_size());
     let entry_inv = EbpfDomain::from_constraints(
         entry.value(),
-        ctx.options.setup_constraints,
+        ctx.runtime.setup_constraints,
         ctx,
         registry,
         &mut array_map,

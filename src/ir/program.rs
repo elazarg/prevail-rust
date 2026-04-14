@@ -21,7 +21,6 @@ use crate::ir::syntax::{
 use crate::ir::unmarshal::conformance_groups;
 use crate::platform::EbpfPlatform;
 use crate::spec::config::EbpfVerifierOptions;
-use crate::spec::ebpf_base::MAX_CALL_STACK_FRAMES;
 use crate::spec::type_descriptors::ProgramInfo;
 
 /// Delimiter used between stack frame components in labels.
@@ -363,6 +362,7 @@ impl Program {
             inst_seq,
             info,
             options.cfg_opts.must_have_exit,
+            options.runtime.max_call_stack_frames,
             &resolved_kfunc_calls,
         )?;
         let wto = Wto::new(&builder.prog.cfg);
@@ -442,7 +442,7 @@ impl Program {
         let labels: Vec<Label> = builder.prog.cfg.labels().cloned().collect();
         for label in &labels {
             let ins = builder.prog.instruction_at(label);
-            let assertions = get_assertions(ins, info, &Some(label.clone()));
+            let assertions = get_assertions(ins, info, &options.runtime, &Some(label.clone()));
             builder.set_assertions(label, assertions);
         }
 
@@ -840,6 +840,7 @@ fn instruction_seq_to_cfg(
     insts: &InstructionSeq,
     info: &ProgramInfo,
     must_have_exit: bool,
+    max_call_stack_frames: i32,
     resolved_kfunc_calls: &ResolvedKfuncCalls,
 ) -> Result<CfgBuilder, InvalidControlFlow> {
     let mut builder = CfgBuilder::new();
@@ -964,7 +965,7 @@ fn instruction_seq_to_cfg(
         .collect();
 
     for (label, target) in macro_labels {
-        add_cfg_nodes(&mut builder, &label, &target)?;
+        add_cfg_nodes(&mut builder, &label, &target, max_call_stack_frames)?;
     }
 
     Ok(builder)
@@ -982,6 +983,7 @@ fn add_cfg_nodes(
     builder: &mut CfgBuilder,
     caller_label: &Label,
     entry_label: &Label,
+    max_call_stack_frames: i32,
 ) -> Result<(), InvalidControlFlow> {
     // Guard at the entry so the check applies uniformly to all invocations
     // (including the top-level one), matching upstream PR #1070.
@@ -991,7 +993,7 @@ fn add_cfg_nodes(
         .filter(|&c| c == STACK_FRAME_DELIMITER)
         .count() as i32
         + 2;
-    if stack_frame_depth > MAX_CALL_STACK_FRAMES {
+    if stack_frame_depth > max_call_stack_frames {
         return Err(InvalidControlFlow {
             message: "too many call stack frames".to_string(),
         });
@@ -1098,7 +1100,7 @@ fn add_cfg_nodes(
             && let Instruction::CallLocal(cl) = builder.prog.instruction_at(&label)
         {
             let target = cl.target.clone();
-            add_cfg_nodes(builder, &label, &target)?;
+            add_cfg_nodes(builder, &label, &target, max_call_stack_frames)?;
         }
     }
 

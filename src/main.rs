@@ -18,7 +18,9 @@ use prevail::ir::unmarshal;
 use prevail::linux::linux_platform::LinuxPlatform;
 use prevail::linux_verifier;
 use prevail::memsize;
-use prevail::spec::config::{EbpfVerifierOptions, PrepareCfgOptions, VerbosityOptions};
+use prevail::spec::config::{
+    EbpfRuntimeConfig, EbpfVerifierOptions, PrepareCfgOptions, VerbosityOptions,
+};
 use prevail::spec::type_descriptors::RawProgram;
 use prevail::spec::vm_isa::EbpfInst;
 
@@ -147,13 +149,13 @@ struct Cli {
     strict: bool,
 
     /// Per-subprogram stack frame size in bytes (default: 512)
-    #[arg(long = "stack-size", default_value_t = EbpfVerifierOptions::DEFAULT_SUBPROGRAM_STACK_SIZE,
-          value_parser = clap::value_parser!(i32).range(1..=EbpfVerifierOptions::MAX_SUBPROGRAM_STACK_SIZE as i64))]
+    #[arg(long = "stack-size", default_value_t = EbpfRuntimeConfig::DEFAULT_SUBPROGRAM_STACK_SIZE,
+          value_parser = clap::value_parser!(i32).range(1..=EbpfRuntimeConfig::MAX_SUBPROGRAM_STACK_SIZE as i64))]
     stack_size: i32,
 
     /// Maximum number of nested function calls (default: 8)
-    #[arg(long = "max-call-stack-frames", default_value_t = EbpfVerifierOptions::DEFAULT_MAX_CALL_STACK_FRAMES,
-          value_parser = clap::value_parser!(i32).range(1..=EbpfVerifierOptions::MAX_CALL_STACK_FRAMES_LIMIT as i64))]
+    #[arg(long = "max-call-stack-frames", default_value_t = EbpfRuntimeConfig::DEFAULT_MAX_CALL_STACK_FRAMES,
+          value_parser = clap::value_parser!(i32).range(1..=EbpfRuntimeConfig::MAX_CALL_STACK_FRAMES_LIMIT as i64))]
     max_call_stack_frames: i32,
 
     /// Include conformance groups
@@ -317,12 +319,14 @@ fn main() -> ExitCode {
             must_have_exit: true,
         },
         mock_map_fds: true,
-        strict: cli.strict,
-        allow_division_by_zero,
-        setup_constraints: true,
-        big_endian: false,
-        subprogram_stack_size: cli.stack_size,
-        max_call_stack_frames: cli.max_call_stack_frames,
+        runtime: EbpfRuntimeConfig {
+            strict: cli.strict,
+            allow_division_by_zero,
+            setup_constraints: true,
+            big_endian: false,
+            subprogram_stack_size: cli.stack_size,
+            max_call_stack_frames: cli.max_call_stack_frames,
+        },
         verbosity_opts: VerbosityOptions {
             simplify,
             print_invariants: cli.print_invariants,
@@ -557,6 +561,7 @@ fn main() -> ExitCode {
 
     let ctx = DomainContext {
         program_info: info,
+        runtime: &opts.runtime,
         options: &opts,
         platform: &rust_platform,
     };

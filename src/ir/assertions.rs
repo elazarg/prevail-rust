@@ -9,7 +9,7 @@
 
 use crate::cfg::label::Label;
 use crate::crab::type_encoding::TypeGroup;
-use crate::spec::ebpf_base::EBPF_SUBPROGRAM_STACK_SIZE;
+use crate::spec::config::EbpfRuntimeConfig;
 use crate::spec::type_descriptors::ProgramInfo;
 use crate::spec::vm_isa::{R0_RETURN_VALUE, R6, R10_STACK_POINTER};
 
@@ -409,7 +409,12 @@ fn assertions_jmp(ins: &Jmp, info: &ProgramInfo, label: &Option<Label>) -> Vec<A
     }
 }
 
-fn assertions_mem(ins: &Mem, info: &ProgramInfo, label: &Option<Label>) -> Vec<Assertion> {
+fn assertions_mem(
+    ins: &Mem,
+    info: &ProgramInfo,
+    runtime: &EbpfRuntimeConfig,
+    label: &Option<Label>,
+) -> Vec<Assertion> {
     let mut res = Vec::new();
     let basereg = ins.access.basereg;
     let width = Imm {
@@ -419,7 +424,7 @@ fn assertions_mem(ins: &Mem, info: &ProgramInfo, label: &Option<Label>) -> Vec<A
 
     if basereg == R10_STACK_POINTER {
         // We know we are accessing the stack.
-        if offset < -EBPF_SUBPROGRAM_STACK_SIZE || offset + (width.v as i32) > 0 {
+        if offset < -runtime.subprogram_stack_size || offset + (width.v as i32) > 0 {
             // This assertion will fail.
             res.push(Assertion::ValidAccess(make_valid_access(
                 label,
@@ -635,6 +640,7 @@ fn assertions_bin(ins: &Bin) -> Vec<Assertion> {
 pub fn get_assertions(
     ins: &Instruction,
     info: &ProgramInfo,
+    runtime: &EbpfRuntimeConfig,
     label: &Option<Label>,
 ) -> Vec<Assertion> {
     match ins {
@@ -650,7 +656,7 @@ pub fn get_assertions(
         Instruction::CallBtf(i) => assertions_call_btf(i),
         Instruction::Exit(i) => assertions_exit(i, label),
         Instruction::Jmp(i) => assertions_jmp(i, info, label),
-        Instruction::Mem(i) => assertions_mem(i, info, label),
+        Instruction::Mem(i) => assertions_mem(i, info, runtime, label),
         Instruction::Packet(i) => assertions_packet(i),
         Instruction::Atomic(i) => assertions_atomic(i, label),
         Instruction::Assume(i) => assertions_assume(i, info, label),

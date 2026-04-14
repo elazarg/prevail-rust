@@ -6,75 +6,60 @@
 //! Ported from `src/crab/bitset_domain.hpp` and `src/crab/bitset_domain.cpp`.
 //! Each bit represents whether a stack byte is "non-numerical" (bit=1) or
 //! "numerical" (bit=0). Default is all non-numerical (top).
+//!
+//! Backed by `fixedbitset::FixedBitSet` for runtime-sized stacks (matches
+//! upstream's `boost::dynamic_bitset`).
 
 use std::collections::BTreeSet;
 use std::fmt;
 
-use crate::spec::ebpf_base::EBPF_TOTAL_STACK_SIZE;
+use fixedbitset::FixedBitSet;
 
 use super::string_constraints::StringInvariant;
 
-const STACK_SIZE: usize = EBPF_TOTAL_STACK_SIZE as usize;
-const NUM_WORDS: usize = STACK_SIZE / 64;
-const _: () = assert!(
-    STACK_SIZE.is_multiple_of(64),
-    "STACK_SIZE must be a multiple of 64"
-);
-
 /// A bitset domain tracking which stack bytes are numerical.
 ///
-/// Each bit `i` indicates whether byte `i` of the stack is non-numerical (1)
-/// or numerical (0).
-/// Top = all non-numerical (all bits set).
-/// Bottom concept is not used (is_bottom always returns false).
-#[derive(Clone, Copy, Debug)]
+/// Bit `i` is `1` if byte `i` is non-numerical, `0` if numerical.
+/// Top = all bits set; the bottom concept is unused
+/// (`is_bottom` always returns false).
+///
+/// Lattice operations require both operands to share the same length.
+#[derive(Clone, Debug)]
 pub struct BitsetDomain {
     /// Bit i is 1 if byte i is non-numerical.
-    bits: [u64; NUM_WORDS],
+    bits: FixedBitSet,
 }
 
 impl BitsetDomain {
-    const ALL_SET: [u64; NUM_WORDS] = [u64::MAX; NUM_WORDS];
-    const ALL_CLEAR: [u64; NUM_WORDS] = [0; NUM_WORDS];
-
-    /// Create a new BitsetDomain with all bytes non-numerical (top).
-    pub fn new() -> Self {
-        BitsetDomain {
-            bits: Self::ALL_SET,
-        }
+    /// Create a new BitsetDomain of `total_bits` bytes, all marked
+    /// non-numerical (top).
+    pub fn new(total_bits: i32) -> Self {
+        let n = total_bits.max(0) as usize;
+        let mut bits = FixedBitSet::with_capacity(n);
+        bits.insert_range(..);
+        BitsetDomain { bits }
     }
 
+    /// Number of stack bytes tracked.
     #[inline]
-    fn get_bit(&self, i: usize) -> bool {
-        let word = i / 64;
-        let bit = i % 64;
-        (self.bits[word] >> bit) & 1 != 0
+    pub fn len(&self) -> usize {
+        self.bits.len()
     }
 
-    #[inline]
-    fn set_bit(&mut self, i: usize) {
-        let word = i / 64;
-        let bit = i % 64;
-        self.bits[word] |= 1u64 << bit;
-    }
-
-    #[inline]
-    fn clear_bit(&mut self, i: usize) {
-        let word = i / 64;
-        let bit = i % 64;
-        self.bits[word] &= !(1u64 << bit);
+    pub fn is_empty(&self) -> bool {
+        self.bits.is_empty()
     }
 
     pub fn set_to_top(&mut self) {
-        self.bits = Self::ALL_SET;
+        self.bits.insert_range(..);
     }
 
     pub fn set_to_bottom(&mut self) {
-        self.bits = Self::ALL_CLEAR;
+        self.bits.clear();
     }
 
     pub fn is_top(&self) -> bool {
-        self.bits == Self::ALL_SET
+        self.bits.count_ones(..) == self.bits.len()
     }
 
     /// Always false for BitsetDomain (matching C++ semantics).
@@ -82,7 +67,7 @@ impl BitsetDomain {
         false
     }
 
-    pub fn to_set(self) -> StringInvariant {
+    pub fn to_set(&self) -> StringInvariant {
         if self.is_bottom() {
             return StringInvariant::bottom();
         }
@@ -102,40 +87,33 @@ impl BitsetDomain {
         StringInvariant::from_set(result)
     }
 
-    /// Inclusion: self <= other iff every non-numerical bit in self is also set in other.
+    /// Inclusion: self <= other iff every non-numerical bit in self is
+    /// also set in other (i.e. `self ⊆ other` as sets of non-numerical bytes).
     pub fn is_included_in(&self, other: &BitsetDomain) -> bool {
-        for i in 0..NUM_WORDS {
-            // If self has a bit set that other doesn't, not included.
-            if self.bits[i] & !other.bits[i] != 0 {
-                return false;
-            }
-        }
-        true
+        debug_assert_eq!(self.bits.len(), other.bits.len());
+        self.bits.is_subset(&other.bits)
     }
 
     /// Join: bitwise OR (union of non-numerical bytes).
     pub fn join(&self, other: &BitsetDomain) -> BitsetDomain {
-        let mut bits = self.bits;
-        for (a, b) in bits.iter_mut().zip(&other.bits) {
-            *a |= b;
+        debug_assert_eq!(self.bits.len(), other.bits.len());
+        BitsetDomain {
+            bits: &self.bits | &other.bits,
         }
-        BitsetDomain { bits }
     }
 
     /// Join in place.
     pub fn join_assign(&mut self, other: &BitsetDomain) {
-        for i in 0..NUM_WORDS {
-            self.bits[i] |= other.bits[i];
-        }
+        debug_assert_eq!(self.bits.len(), other.bits.len());
+        self.bits.union_with(&other.bits);
     }
 
     /// Meet: bitwise AND (intersection of non-numerical bytes).
     pub fn meet(&self, other: &BitsetDomain) -> BitsetDomain {
-        let mut bits = self.bits;
-        for (a, b) in bits.iter_mut().zip(&other.bits) {
-            *a &= b;
+        debug_assert_eq!(self.bits.len(), other.bits.len());
+        BitsetDomain {
+            bits: &self.bits & &other.bits,
         }
-        BitsetDomain { bits }
     }
 
     /// Widen: same as join for bitset domain.
@@ -151,14 +129,15 @@ impl BitsetDomain {
     /// Check uniformity of a range [lb, lb+width).
     /// Returns (all_num, all_non_num).
     pub fn uniformity(&self, lb: usize, width: i32) -> (bool, bool) {
-        if lb >= STACK_SIZE {
+        let n = self.bits.len();
+        if lb >= n {
             return (true, true);
         }
-        let width = width.min((STACK_SIZE - lb) as i32);
+        let width = width.min((n - lb) as i32);
         let mut only_num = true;
         let mut only_non_num = true;
         for j in 0..width {
-            let b = self.get_bit(lb + j as usize);
+            let b = self.bits.contains(lb + j as usize);
             only_num &= !b;
             only_non_num &= b;
         }
@@ -167,11 +146,12 @@ impl BitsetDomain {
 
     /// Get the number of contiguous numerical bytes starting at lb.
     pub fn all_num_width(&self, lb: usize) -> i32 {
-        if lb >= STACK_SIZE {
+        let n = self.bits.len();
+        if lb >= n {
             return 0;
         }
         let mut ub = lb;
-        while ub < STACK_SIZE && !self.get_bit(ub) {
+        while ub < n && !self.bits.contains(ub) {
             ub += 1;
         }
         (ub - lb) as i32
@@ -179,50 +159,47 @@ impl BitsetDomain {
 
     /// Mark bytes [lb, lb+n) as numerical (clear non-numerical bits).
     pub fn reset(&mut self, lb: usize, n: i32) {
-        if lb >= STACK_SIZE {
+        let len = self.bits.len();
+        if lb >= len {
             return;
         }
-        let n = n.min((STACK_SIZE - lb) as i32);
-        for i in 0..n {
-            self.clear_bit(lb + i as usize);
+        let n = n.min((len - lb) as i32);
+        if n <= 0 {
+            return;
         }
+        self.bits.remove_range(lb..lb + n as usize);
     }
 
     /// Mark bytes [lb, lb+width) as non-numerical (set bits).
     pub fn havoc(&mut self, lb: usize, width: i32) {
-        if lb >= STACK_SIZE {
+        let len = self.bits.len();
+        if lb >= len {
             return;
         }
-        let width = width.min((STACK_SIZE - lb) as i32);
-        for i in 0..width {
-            self.set_bit(lb + i as usize);
+        let width = width.min((len - lb) as i32);
+        if width <= 0 {
+            return;
         }
+        self.bits.insert_range(lb..lb + width as usize);
     }
 
-    /// Iterate over contiguous ranges of numerical (non-set) bytes.
-    ///
-    /// Each yielded pair `(start, end)` represents a maximal run of indices
-    /// `[start..=end]` where no bit is set (i.e., all bytes are numerical).
+    /// Iterate over contiguous ranges of numerical (cleared) bytes,
+    /// yielded as inclusive `(start, end)` pairs.
     fn numerical_ranges(&self) -> Vec<(usize, usize)> {
         let mut ranges = Vec::new();
-        let mut i: i32 = -(STACK_SIZE as i32);
-        while i < 0 {
-            let idx = (STACK_SIZE as i32 + i) as usize;
-            if self.get_bit(idx) {
+        let n = self.bits.len();
+        let mut i = 0usize;
+        while i < n {
+            if self.bits.contains(i) {
                 i += 1;
                 continue;
             }
-            let start = idx;
+            let start = i;
             let mut j = i + 1;
-            while j < 0 {
-                let jdx = (STACK_SIZE as i32 + j) as usize;
-                if self.get_bit(jdx) {
-                    break;
-                }
+            while j < n && !self.bits.contains(j) {
                 j += 1;
             }
-            let end = (STACK_SIZE as i32 + j - 1) as usize;
-            ranges.push((start, end));
+            ranges.push((start, j - 1));
             i = j;
         }
         ranges
@@ -233,21 +210,21 @@ impl BitsetDomain {
         if lb == ub {
             return true;
         }
+        let n = self.bits.len() as i32;
         let lb = lb.max(0);
-        let ub = ub.min(STACK_SIZE as i32);
-        assert!(lb <= ub);
+        let ub = ub.min(n);
+        debug_assert!(lb <= ub);
         for i in lb..ub {
-            if self.get_bit(i as usize) {
+            if self.bits.contains(i as usize) {
                 return false;
             }
         }
         true
     }
-}
 
-impl Default for BitsetDomain {
-    fn default() -> Self {
-        Self::new()
+    #[cfg(test)]
+    fn get_bit(&self, i: usize) -> bool {
+        self.bits.contains(i)
     }
 }
 
@@ -282,16 +259,22 @@ impl fmt::Display for BitsetDomain {
 mod tests {
     use super::*;
 
+    const TEST_SIZE: i32 = 4096;
+
+    fn new() -> BitsetDomain {
+        BitsetDomain::new(TEST_SIZE)
+    }
+
     #[test]
     fn test_default_is_top() {
-        let d = BitsetDomain::new();
+        let d = new();
         assert!(d.is_top());
         assert!(!d.is_bottom());
     }
 
     #[test]
     fn test_reset_and_all_num() {
-        let mut d = BitsetDomain::new();
+        let mut d = new();
         d.reset(100, 4);
         assert!(d.all_num(100, 104));
         assert!(!d.all_num(100, 105));
@@ -299,7 +282,7 @@ mod tests {
 
     #[test]
     fn test_uniformity() {
-        let mut d = BitsetDomain::new();
+        let mut d = new();
         assert_eq!(d.uniformity(0, 4), (false, true));
         d.reset(0, 4);
         assert_eq!(d.uniformity(0, 4), (true, false));
@@ -307,31 +290,24 @@ mod tests {
 
     #[test]
     fn test_join() {
-        let mut a = BitsetDomain::new();
+        let mut a = new();
         a.set_to_bottom();
         a.reset(0, 4);
-        let mut b = BitsetDomain::new();
+        let mut b = new();
         b.set_to_bottom();
         b.reset(2, 4);
         let c = a.join(&b);
-        // After set_to_bottom, both are all false (numerical).
-        // reset is a no-op on already-false bits.
-        // join = OR of all-false | all-false = all false.
         assert!(!c.get_bit(0));
         assert!(!c.get_bit(1));
     }
 
     #[test]
     fn test_join_meaningful() {
-        let mut a = BitsetDomain::new(); // all non-numerical
-        a.reset(0, 4); // bytes 0-3 numerical
-        let mut b = BitsetDomain::new(); // all non-numerical
-        b.reset(2, 4); // bytes 2-5 numerical
+        let mut a = new();
+        a.reset(0, 4);
+        let mut b = new();
+        b.reset(2, 4);
         let c = a.join(&b);
-        // join = OR of non-numerical bits
-        // a: 0-3 false, rest true
-        // b: 2-5 false, rest true
-        // c: 0-1 true (non-num in b), 2-3 false, 4-5 true (non-num in a), rest true
         assert!(c.get_bit(0));
         assert!(c.get_bit(1));
         assert!(!c.get_bit(2));
@@ -342,7 +318,7 @@ mod tests {
 
     #[test]
     fn test_all_num_width() {
-        let mut d = BitsetDomain::new();
+        let mut d = new();
         d.reset(10, 5);
         assert_eq!(d.all_num_width(10), 5);
         assert_eq!(d.all_num_width(12), 3);
@@ -350,60 +326,52 @@ mod tests {
 
     #[test]
     fn test_havoc() {
-        let mut d = BitsetDomain::new();
+        let mut d = new();
         d.set_to_bottom();
         d.havoc(0, 4);
         assert_eq!(d.uniformity(0, 4), (false, true));
     }
 
     #[test]
-    fn test_copy_semantics() {
-        let mut a = BitsetDomain::new();
+    fn test_clone_independence() {
+        let mut a = new();
         a.reset(0, 8);
-        let b = a; // Copy, not move
+        let b = a.clone();
         assert!(!b.get_bit(0));
-        a.set_to_top(); // Doesn't affect b
+        a.set_to_top();
         assert!(!b.get_bit(0));
         assert!(a.get_bit(0));
     }
 
     #[test]
     fn test_is_included_in() {
-        let mut a = BitsetDomain::new();
+        let mut a = new();
         a.set_to_bottom();
-        a.havoc(10, 5); // bits 10-14 set
-        let mut b = BitsetDomain::new();
+        a.havoc(10, 5);
+        let mut b = new();
         b.set_to_bottom();
-        b.havoc(8, 10); // bits 8-17 set (superset)
+        b.havoc(8, 10);
         assert!(a.is_included_in(&b));
         assert!(!b.is_included_in(&a));
     }
 
     #[test]
     fn test_meet() {
-        let mut a = BitsetDomain::new();
-        a.reset(0, 4); // bytes 0-3 numerical
-        let mut b = BitsetDomain::new();
-        b.reset(2, 4); // bytes 2-5 numerical
+        let mut a = new();
+        a.reset(0, 4);
+        let mut b = new();
+        b.reset(2, 4);
         let c = a.meet(&b);
-        // meet = AND of non-numerical bits
-        // a: 0-3 false, rest true
-        // b: 2-5 false, rest true
-        // c: 0-5 false (both have at least one clear), rest true
-        // Actually: AND means both must be non-numerical
-        // a[0]=false AND b[0]=true = false → byte 0 numerical in c
-        // a[4]=true AND b[4]=false = false → byte 4 numerical in c
-        assert!(!c.get_bit(0)); // false AND true = false
-        assert!(!c.get_bit(2)); // false AND false = false
-        assert!(!c.get_bit(4)); // true AND false = false
-        assert!(c.get_bit(6)); // true AND true = true
+        assert!(!c.get_bit(0));
+        assert!(!c.get_bit(2));
+        assert!(!c.get_bit(4));
+        assert!(c.get_bit(6));
     }
 
     #[test]
     fn test_word_boundary() {
-        // Test operations that cross word boundaries (bit 63-64)
-        let mut d = BitsetDomain::new();
-        d.reset(62, 4); // Clear bits 62, 63, 64, 65 (crosses word boundary)
+        let mut d = new();
+        d.reset(62, 4);
         assert!(!d.get_bit(62));
         assert!(!d.get_bit(63));
         assert!(!d.get_bit(64));
@@ -412,5 +380,20 @@ mod tests {
         assert!(d.get_bit(66));
         assert!(d.all_num(62, 66));
         assert_eq!(d.all_num_width(62), 4);
+    }
+
+    #[test]
+    fn test_custom_size() {
+        let d = BitsetDomain::new(256);
+        assert_eq!(d.len(), 256);
+        assert!(d.is_top());
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_join_size_mismatch_panics() {
+        let a = BitsetDomain::new(256);
+        let b = BitsetDomain::new(512);
+        let _ = a.join(&b);
     }
 }

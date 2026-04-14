@@ -62,6 +62,7 @@ fn analyze_section(path: &str, section: &str, opts: &EbpfVerifierOptions) -> Vec
 
         let ctx = DomainContext {
             program_info: info,
+            runtime: &opts.runtime,
             options: opts,
             platform: &platform,
         };

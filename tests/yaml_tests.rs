@@ -55,13 +55,10 @@ impl TestPlatform {
         TestPlatform {
             linux: LinuxPlatform::new(),
             test_map: EbpfMapDescriptor {
-                original_fd: 0,
-                map_type: 0,
                 key_size: 4, // sizeof(uint32_t)
                 value_size: 4,
                 max_entries: 4,
-                inner_map_fd: 0,
-                name: String::new(),
+                ..Default::default()
             },
         }
     }
@@ -274,19 +271,19 @@ fn parse_options(raw: &[String]) -> EbpfVerifierOptions {
     let mut opts = EbpfVerifierOptions::default();
     // YAML test defaults (match C++)
     opts.verbosity_opts.simplify = false;
-    opts.setup_constraints = false;
+    opts.runtime.setup_constraints = false;
     opts.cfg_opts.must_have_exit = false;
     // Default to little-endian (x86 host)
-    opts.big_endian = false;
+    opts.runtime.big_endian = false;
 
     for name in raw {
         match name.as_str() {
-            "!allow_division_by_zero" => opts.allow_division_by_zero = false,
+            "!allow_division_by_zero" => opts.runtime.allow_division_by_zero = false,
             "termination" => opts.cfg_opts.check_for_termination = true,
-            "strict" => opts.strict = true,
+            "strict" => opts.runtime.strict = true,
             "simplify" => opts.verbosity_opts.simplify = true,
-            "big_endian" => opts.big_endian = true,
-            "!big_endian" => opts.big_endian = false,
+            "big_endian" => opts.runtime.big_endian = true,
+            "!big_endian" => opts.runtime.big_endian = false,
             other => panic!("Unknown option: {}", other),
         }
     }
@@ -472,13 +469,10 @@ fn run_test_case(test_case: &TestCase, platform: &TestPlatform) -> Option<Failur
     let info = ProgramInfo {
         program_type,
         map_descriptors: vec![EbpfMapDescriptor {
-            original_fd: 0,
-            map_type: 0,
             key_size: 4,
             value_size: 4,
             max_entries: 4,
-            inner_map_fd: 0,
-            name: String::new(),
+            ..Default::default()
         }],
         ..ProgramInfo::default()
     };
@@ -517,6 +511,7 @@ fn run_test_case(test_case: &TestCase, platform: &TestPlatform) -> Option<Failur
 
     let ctx = DomainContext {
         program_info: &info,
+        runtime: &options.runtime,
         options: &options,
         platform,
     };
@@ -539,7 +534,7 @@ fn run_test_case(test_case: &TestCase, platform: &TestPlatform) -> Option<Failur
 
     // Evaluate observation checks.
     for obs in &test_case.observations {
-        let mut array_map = ArrayMap::new();
+        let mut array_map = ArrayMap::new(options.runtime.total_stack_size());
         let check = result.check_observation_at_label(
             &obs.label,
             obs.point,

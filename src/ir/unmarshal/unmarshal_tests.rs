@@ -10,6 +10,7 @@ use crate::ir::syntax::{
     TypeConstraint, ValidAccess, ValidSize, Value,
 };
 use crate::linux::linux_platform::LinuxPlatform;
+use crate::spec::config::EbpfRuntimeConfig;
 use crate::spec::vm_isa::{
     AccessSize, EbpfInst, INST_LD_MODE_CODE_ADDR, INST_LD_MODE_MAP_BY_IDX, INST_LD_MODE_MAP_FD,
     INST_LD_MODE_MAP_VALUE, INST_LD_MODE_VARIABLE_ADDR, INST_OP_EXIT, INST_OP_LDDW_IMM,
@@ -18,7 +19,10 @@ use crate::spec::vm_isa::{
 fn get_test_options() -> EbpfVerifierOptions {
     EbpfVerifierOptions {
         mock_map_fds: true,
-        setup_constraints: false,
+        runtime: EbpfRuntimeConfig {
+            setup_constraints: false,
+            ..Default::default()
+        },
         ..Default::default()
     }
 }
@@ -120,7 +124,7 @@ fn test_unmarshal_div_zero() {
     let platform = LinuxPlatform::new();
     let info = ProgramInfo::default();
     let mut options = get_test_options();
-    options.allow_division_by_zero = false; // Enable checking
+    options.runtime.allow_division_by_zero = false; // Enable checking
     let mut notes = Vec::new();
     let insts = vec![ins, EbpfInst::new(INST_OP_EXIT, 0, 0, 0, 0)];
 
@@ -425,6 +429,7 @@ fn test_unmarshal_builtin_calls_only_when_relocation_gated() {
     let assertions = get_assertions(
         &Instruction::Call(gated_call.clone()),
         &gated_info,
+        &EbpfRuntimeConfig::default(),
         &Some(Label::new(0)),
     );
     assert!(assertions.iter().any(|a| {

@@ -24,8 +24,15 @@ use prevail::ir::assembler::bpf_assemble;
 use prevail::ir::program::Program;
 use prevail::ir::unmarshal;
 use prevail::linux::linux_platform::LinuxPlatform;
+use prevail::spec::config::EbpfRuntimeConfig;
 use prevail::spec::config::EbpfVerifierOptions;
-use prevail::spec::ebpf_base::{EBPF_TOTAL_STACK_SIZE, EbpfContextDescriptor};
+use prevail::spec::ebpf_base::EbpfContextDescriptor;
+
+/// Default total stack size used for conformance-test harness purposes.
+/// The conformance tests always run with default stack options, so using
+/// the default here preserves historical behavior.
+const EBPF_TOTAL_STACK_SIZE: i32 = EbpfRuntimeConfig::DEFAULT_SUBPROGRAM_STACK_SIZE
+    * EbpfRuntimeConfig::DEFAULT_MAX_CALL_STACK_FRAMES;
 use prevail::spec::type_descriptors::{EbpfProgramType, ProgramInfo};
 
 // ============================================================================
@@ -302,6 +309,7 @@ fn run_conformance_test_case(data_file: &Path) -> ConformanceTestResult {
 
     let ctx = DomainContext {
         program_info: &info,
+        runtime: &options.runtime,
         options: &options,
         platform: &platform,
     };

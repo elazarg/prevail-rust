@@ -34,6 +34,7 @@ impl AnalysisState {
     fn compute_slices(&mut self) -> Vec<FailureSlice> {
         let ctx = DomainContext {
             program_info: &self.info,
+            runtime: &self.opts.runtime,
             options: &self.opts,
             platform: &self.platform,
         };
@@ -83,6 +84,7 @@ fn analyze_with_deps(filename: &str, section: &str) -> AnalysisState {
 
     let ctx = DomainContext {
         program_info: &info,
+        runtime: &opts.runtime,
         options: &opts,
         platform: &platform,
     };

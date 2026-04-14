@@ -55,6 +55,7 @@ fn verbose_output(elf_relative: &str, section: &str) -> String {
 
     let ctx = DomainContext {
         program_info: info,
+        runtime: &opts.runtime,
         options: &opts,
         platform: &platform,
     };

@@ -16,7 +16,7 @@ use crate::crab::interval::Interval;
 use crate::crab::string_constraints::StringInvariant;
 use crate::crab::var_registry::VariableRegistry;
 use crate::ir::syntax::{Assertion, BinOp, Instruction, Reg, Value};
-use crate::spec::ebpf_base::EBPF_TOTAL_STACK_SIZE;
+use crate::spec::config::EbpfRuntimeConfig;
 use crate::spec::vm_isa::R10_STACK_POINTER;
 
 // ============================================================================
@@ -102,7 +102,7 @@ impl RelevantState {
     /// - `s[(\d+)...(\d+)]` — stack range references
     /// - `s[(\d+)].` — single stack slot references
     /// - `packet_size`, `meta_offset` — always relevant
-    pub fn is_relevant_constraint(&self, constraint: &str) -> bool {
+    pub fn is_relevant_constraint(&self, constraint: &str, total_stack_size: i32) -> bool {
         let mut parsed_any_pattern = false;
         let bytes = constraint.as_bytes();
 
@@ -135,7 +135,7 @@ impl RelevantState {
         let abs_stack_offsets: Vec<i64> = self
             .stack_offsets
             .iter()
-            .map(|&rel| EBPF_TOTAL_STACK_SIZE as i64 + rel)
+            .map(|&rel| total_stack_size as i64 + rel)
             .collect();
 
         // Check for stack range pattern: s[start...end]
@@ -301,7 +301,7 @@ impl AnalysisResult {
     ) -> bool {
         let abstract_state = EbpfDomain::from_constraints(
             state.value(),
-            ctx.options.setup_constraints,
+            ctx.runtime.setup_constraints,
             ctx,
             registry,
             array_map,
@@ -360,11 +360,11 @@ impl AnalysisResult {
         };
 
         let observed_state = if observation.is_bottom() {
-            EbpfDomain::bottom()
+            EbpfDomain::bottom(ctx.runtime)
         } else {
             EbpfDomain::from_constraints(
                 observation.value(),
-                ctx.options.setup_constraints,
+                ctx.runtime.setup_constraints,
                 ctx,
                 registry,
                 array_map,
@@ -752,6 +752,7 @@ impl Default for AnalysisResult {
 pub fn extract_instruction_deps(
     ins: &Instruction,
     pre_state: &EbpfDomain,
+    runtime: &EbpfRuntimeConfig,
     registry: &mut VariableRegistry,
 ) -> InstructionDeps {
     let mut deps = InstructionDeps::default();
@@ -797,7 +798,7 @@ pub fn extract_instruction_deps(
                     pre_state.get_stack_offset(&mem.access.basereg, registry)
                 {
                     deps.stack_read.insert(
-                        mem.access.offset as i64 + (stack_off - EBPF_TOTAL_STACK_SIZE as i64),
+                        mem.access.offset as i64 + (stack_off - runtime.total_stack_size() as i64),
                     );
                 }
             } else {
@@ -811,7 +812,7 @@ pub fn extract_instruction_deps(
                     pre_state.get_stack_offset(&mem.access.basereg, registry)
                 {
                     deps.stack_written.insert(
-                        mem.access.offset as i64 + (stack_off - EBPF_TOTAL_STACK_SIZE as i64),
+                        mem.access.offset as i64 + (stack_off - runtime.total_stack_size() as i64),
                     );
                 }
             }
@@ -829,7 +830,7 @@ pub fn extract_instruction_deps(
                 pre_state.get_stack_offset(&atomic.access.basereg, registry)
             {
                 let adjusted =
-                    atomic.access.offset as i64 + (stack_off - EBPF_TOTAL_STACK_SIZE as i64);
+                    atomic.access.offset as i64 + (stack_off - runtime.total_stack_size() as i64);
                 deps.stack_read.insert(adjusted);
                 deps.stack_written.insert(adjusted);
             }
@@ -947,9 +948,10 @@ mod tests {
             is64: true,
             lddw: false,
         });
-        let dom = EbpfDomain::top();
+        let dom = EbpfDomain::top(&EbpfRuntimeConfig::default());
         let mut registry = VariableRegistry::new();
-        let deps = extract_instruction_deps(&ins, &dom, &mut registry);
+        let deps =
+            extract_instruction_deps(&ins, &dom, &EbpfRuntimeConfig::default(), &mut registry);
 
         assert!(deps.regs_written.contains(&Reg { v: 1 }));
         assert!(deps.regs_read.contains(&Reg { v: 1 })); // ADD also reads dst
@@ -966,9 +968,10 @@ mod tests {
             is64: true,
             lddw: false,
         });
-        let dom = EbpfDomain::top();
+        let dom = EbpfDomain::top(&EbpfRuntimeConfig::default());
         let mut registry = VariableRegistry::new();
-        let deps = extract_instruction_deps(&ins, &dom, &mut registry);
+        let deps =
+            extract_instruction_deps(&ins, &dom, &EbpfRuntimeConfig::default(), &mut registry);
 
         assert!(deps.regs_written.contains(&Reg { v: 1 }));
         assert!(!deps.regs_read.contains(&Reg { v: 1 })); // MOV doesn't read dst
@@ -988,9 +991,10 @@ mod tests {
             is_load: true,
             is_signed: false,
         });
-        let dom = EbpfDomain::top();
+        let dom = EbpfDomain::top(&EbpfRuntimeConfig::default());
         let mut registry = VariableRegistry::new();
-        let deps = extract_instruction_deps(&ins, &dom, &mut registry);
+        let deps =
+            extract_instruction_deps(&ins, &dom, &EbpfRuntimeConfig::default(), &mut registry);
 
         assert!(deps.regs_written.contains(&Reg { v: 1 }));
         assert!(deps.regs_read.contains(&Reg { v: 10 }));
@@ -1010,9 +1014,10 @@ mod tests {
             is_load: false,
             is_signed: false,
         });
-        let dom = EbpfDomain::top();
+        let dom = EbpfDomain::top(&EbpfRuntimeConfig::default());
         let mut registry = VariableRegistry::new();
-        let deps = extract_instruction_deps(&ins, &dom, &mut registry);
+        let deps =
+            extract_instruction_deps(&ins, &dom, &EbpfRuntimeConfig::default(), &mut registry);
 
         assert!(deps.regs_read.contains(&Reg { v: 10 }));
         assert!(deps.regs_read.contains(&Reg { v: 1 }));
@@ -1078,8 +1083,8 @@ mod tests {
             registers: BTreeSet::from([Reg { v: 1 }]),
             stack_offsets: BTreeSet::new(),
         };
-        assert!(state.is_relevant_constraint("r1.type=number"));
-        assert!(!state.is_relevant_constraint("r2.type=number"));
+        assert!(state.is_relevant_constraint("r1.type=number", 4096));
+        assert!(!state.is_relevant_constraint("r2.type=number", 4096));
     }
 
     #[test]
@@ -1088,20 +1093,20 @@ mod tests {
             registers: BTreeSet::from([Reg { v: 8 }]),
             stack_offsets: BTreeSet::new(),
         };
-        assert!(state.is_relevant_constraint("r1.svalue-r8.svalue<=-100"));
+        assert!(state.is_relevant_constraint("r1.svalue-r8.svalue<=-100", 4096));
     }
 
     #[test]
     fn relevant_constraint_packet() {
         let state = RelevantState::default();
-        assert!(state.is_relevant_constraint("packet_size=54"));
-        assert!(state.is_relevant_constraint("meta_offset=[-4098, 0]"));
+        assert!(state.is_relevant_constraint("packet_size=54", 4096));
+        assert!(state.is_relevant_constraint("meta_offset=[-4098, 0]", 4096));
     }
 
     #[test]
     fn relevant_constraint_unparseable() {
         let state = RelevantState::default();
         // Unparseable → conservative → true
-        assert!(state.is_relevant_constraint("something_unknown"));
+        assert!(state.is_relevant_constraint("something_unknown", 4096));
     }
 }

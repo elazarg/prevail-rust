@@ -68,7 +68,3 @@ pub struct EbpfContextDescriptor {
     pub end: i32,
     pub meta: i32,
 }
-
-pub const MAX_CALL_STACK_FRAMES: i32 = 8;
-pub const EBPF_SUBPROGRAM_STACK_SIZE: i32 = 512;
-pub const EBPF_TOTAL_STACK_SIZE: i32 = MAX_CALL_STACK_FRAMES * EBPF_SUBPROGRAM_STACK_SIZE;

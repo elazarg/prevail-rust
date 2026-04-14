@@ -34,6 +34,7 @@ clap = { version = "4", features = ["derive"] }
 zerocopy = { version = "0.8.39", features = ["derive"] }
 serde = { version = "1", features = ["derive"], optional = true }
 serde_json = { version = "1", optional = true }
+fixedbitset = "0.5.7"
 
 [[bin]]
 name = "prevail"

@@ -26,7 +26,6 @@ use crate::crab::string_constraints::StringInvariant;
 use crate::crab::type_domain::TypeDomain;
 use crate::crab::type_encoding::DataKind;
 use crate::crab::var_registry::VariableRegistry;
-use crate::spec::ebpf_base::EBPF_TOTAL_STACK_SIZE;
 
 // ============================================================================
 // Cell: a (offset, size) pair representing a contiguous byte range
@@ -85,9 +84,9 @@ pub struct OffsetMap {
     sizes: Vec<Vec<u32>>,
 }
 
-impl Default for OffsetMap {
-    fn default() -> Self {
-        let n = EBPF_TOTAL_STACK_SIZE as usize;
+impl OffsetMap {
+    pub fn new(total_stack_size: i32) -> Self {
+        let n = total_stack_size.max(0) as usize;
         OffsetMap {
             sizes: vec![Vec::new(); n],
         }
@@ -95,6 +94,14 @@ impl Default for OffsetMap {
 }
 
 impl OffsetMap {
+    pub fn len(&self) -> usize {
+        self.sizes.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.sizes.is_empty()
+    }
+
     fn remove_cells(&mut self, cells: &[Cell]) {
         for c in cells {
             let off = c.offset as usize;
@@ -185,7 +192,53 @@ impl OffsetMap {
 /// Maps each `DataKind` to its `OffsetMap`, tracking which stack cells
 /// have been allocated. Shared across all domain instances during a
 /// single analysis run.
-pub type ArrayMap = HashMap<DataKind, OffsetMap>;
+///
+/// Carries `total_stack_size` so that lazily-inserted `OffsetMap`s
+/// are sized correctly for the verifier's runtime configuration.
+#[derive(Clone, Debug)]
+pub struct ArrayMap {
+    total_stack_size: i32,
+    inner: HashMap<DataKind, OffsetMap>,
+}
+
+impl ArrayMap {
+    pub fn new(total_stack_size: i32) -> Self {
+        ArrayMap {
+            total_stack_size,
+            inner: HashMap::new(),
+        }
+    }
+
+    /// Total stack size in bytes (used to size new `OffsetMap`s).
+    pub fn total_stack_size(&self) -> i32 {
+        self.total_stack_size
+    }
+
+    /// Return a mutable reference to the `OffsetMap` for `kind`,
+    /// creating one sized to `total_stack_size` if absent.
+    pub fn entry_or_default(&mut self, kind: DataKind) -> &mut OffsetMap {
+        let size = self.total_stack_size;
+        self.inner
+            .entry(kind)
+            .or_insert_with(|| OffsetMap::new(size))
+    }
+
+    pub fn get(&self, kind: &DataKind) -> Option<&OffsetMap> {
+        self.inner.get(kind)
+    }
+
+    pub fn get_mut(&mut self, kind: &DataKind) -> Option<&mut OffsetMap> {
+        self.inner.get_mut(kind)
+    }
+
+    pub fn contains_key(&self, kind: &DataKind) -> bool {
+        self.inner.contains_key(kind)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&DataKind, &OffsetMap)> {
+        self.inner.iter()
+    }
+}
 
 // ============================================================================
 // Trace recording (map-trace feature)
@@ -229,8 +282,9 @@ pub fn flush_array_map_traces(_array_map: &ArrayMap) {}
 // Helper functions
 // ============================================================================
 
-/// Extract clamped (lb, ub) bounds from an interval, clamped to [0, EBPF_TOTAL_STACK_SIZE].
-fn clamped_bounds(interval: &Interval) -> (i32, i32) {
+/// Extract clamped (lb, ub) bounds from an interval, clamped to `[0, total]`
+/// where `total` is the configured total stack size.
+fn clamped_bounds(interval: &Interval, total: i32) -> (i32, i32) {
     let lb = interval
         .lb()
         .number()
@@ -241,13 +295,13 @@ fn clamped_bounds(interval: &Interval) -> (i32, i32) {
         .ub()
         .number()
         .and_then(|n| n.to_i64())
-        .map(|n| n.min(EBPF_TOTAL_STACK_SIZE as i64) as i32)
-        .unwrap_or(EBPF_TOTAL_STACK_SIZE);
+        .map(|n| n.min(total as i64) as i32)
+        .unwrap_or(total);
     (lb, ub)
 }
 
-fn as_numbytes_range(index: &Interval, width: &Interval) -> (i32, i32) {
-    clamped_bounds(&index.join(&(index + width)))
+fn as_numbytes_range(index: &Interval, width: &Interval, total: i32) -> (i32, i32) {
+    clamped_bounds(&index.join(&(index + width)), total)
 }
 
 /// Find overlapping cells and remove them from the offset map.
@@ -266,16 +320,16 @@ fn find_and_remove_overlap(
     {
         let offset = n.to_i64().unwrap_or(0) as u64;
         let size = nb.to_i64().unwrap_or(0) as u32;
-        let om = array_map.entry(kind).or_default();
+        let om = array_map.entry_or_default(kind);
         cells = om.get_overlap_cells(offset, size);
         res = Some((offset, size));
     } else {
         let range = ii.join(&(ii + elem_size));
-        let om = array_map.entry(kind).or_default();
+        let om = array_map.entry_or_default(kind);
         cells = om.get_overlap_cells_symbolic(&range);
     }
     if !cells.is_empty() {
-        let om = array_map.entry(kind).or_default();
+        let om = array_map.entry_or_default(kind);
         om.remove_cells(&cells);
     }
     (res, cells)
@@ -351,10 +405,15 @@ pub struct ArrayDomain {
 }
 
 impl ArrayDomain {
-    pub fn new() -> Self {
+    pub fn new(total_stack_size: i32) -> Self {
         ArrayDomain {
-            num_bytes: BitsetDomain::new(),
+            num_bytes: BitsetDomain::new(total_stack_size),
         }
+    }
+
+    /// Total stack size in bytes (equal to the bitset length).
+    pub fn total_stack_size(&self) -> i32 {
+        self.num_bytes.len() as i32
     }
 
     pub fn from_bitset(num_bytes: BitsetDomain) -> Self {
@@ -421,14 +480,14 @@ impl ArrayDomain {
 
     /// Check whether all bytes in [index, index + width) are numerical.
     pub fn all_num_width(&self, index: &Interval, width: &Interval) -> bool {
-        let (min_lb, max_ub) = as_numbytes_range(index, width);
+        let (min_lb, max_ub) = as_numbytes_range(index, width, self.total_stack_size());
         assert!(min_lb <= max_ub);
         self.num_bytes.all_num(min_lb, max_ub)
     }
 
     /// Check whether all bytes in [lb, ub] are numerical.
     pub fn all_num_lb_ub(&self, lb: &Interval, ub: &Interval) -> bool {
-        let (min_lb, max_ub) = clamped_bounds(&lb.join(ub));
+        let (min_lb, max_ub) = clamped_bounds(&lb.join(ub), self.total_stack_size());
         if min_lb > max_ub {
             return false;
         }
@@ -464,7 +523,7 @@ impl ArrayDomain {
         array_map: &mut ArrayMap,
     ) {
         self.num_bytes.reset(lb as usize, width);
-        let om = array_map.entry(DataKind::Svalues).or_default();
+        let om = array_map.entry_or_default(DataKind::Svalues);
         om.mk_cell(lb as u64, width as u32);
     }
 
@@ -508,7 +567,7 @@ impl ArrayDomain {
             }
 
             // Check for overlapping cells.
-            let om = array_map.entry(kind).or_default();
+            let om = array_map.entry_or_default(kind);
             let overlap_cells = om.get_overlap_cells(offset, size);
             if overlap_cells.is_empty() {
                 // Create a new cell.
@@ -635,7 +694,7 @@ impl ArrayDomain {
                     cell.get_scalar(DataKind::Types, registry),
                 ));
             }
-            let om = array_map.entry(DataKind::Types).or_default();
+            let om = array_map.entry_or_default(DataKind::Types);
             let overlap = om.get_overlap_cells(offset, size);
             if overlap.is_empty() {
                 let c = om.mk_cell(offset, size);
@@ -684,7 +743,7 @@ impl ArrayDomain {
         if let Some((offset, size)) = split_and_find_var(
             self, inv, kind, idx, elem_size, registry, big_endian, array_map,
         ) {
-            let om = array_map.entry(kind).or_default();
+            let om = array_map.entry_or_default(kind);
             let v = om.mk_cell(offset, size).get_scalar(kind, registry);
             Some(v)
         } else {
@@ -711,7 +770,7 @@ impl ArrayDomain {
             } else {
                 self.num_bytes.havoc(offset as usize, size as i32);
             }
-            let om = array_map.entry(kind).or_default();
+            let om = array_map.entry_or_default(kind);
             let v = om.mk_cell(offset, size).get_scalar(kind, registry);
             Some(v)
         } else {
@@ -722,7 +781,7 @@ impl ArrayDomain {
                 // so conservatively mark the range as non-numeric. When is_num
                 // is true, written bytes stay numeric and unwritten bytes keep
                 // their existing status, so num_bytes is left unchanged.
-                let (lb, ub) = as_numbytes_range(idx, width);
+                let (lb, ub) = as_numbytes_range(idx, width, self.total_stack_size());
                 self.num_bytes.havoc(lb as usize, ub);
             }
             None
@@ -778,7 +837,7 @@ impl ArrayDomain {
         };
         let idx_i = idx_n.to_i64().unwrap_or(0);
         let width_i = width_n.to_i64().unwrap_or(0);
-        if idx_i + width_i > EBPF_TOTAL_STACK_SIZE as i64 {
+        if idx_i + width_i > self.num_bytes.len() as i64 {
             return;
         }
         self.num_bytes.reset(idx_i as usize, width_i as i32);
@@ -820,7 +879,7 @@ impl ArrayDomain {
             big_endian,
             array_map,
         );
-        let om = array_map.entry(kind).or_default();
+        let om = array_map.entry_or_default(kind);
         let new_cell = om.mk_cell(cell_start_index as u64, len);
         let sv = new_cell.get_scalar(DataKind::Svalues, registry);
         inv.assign_or_havoc(sv, &svalue, registry);
@@ -852,7 +911,7 @@ impl ArrayDomain {
         let size = n_bytes.to_i64().unwrap_or(0) as u32;
         let offset = n.to_i64().unwrap_or(0) as u64;
 
-        let om = array_map.entry(kind).or_default();
+        let om = array_map.entry_or_default(kind);
         let cells = om.get_overlap_cells(offset, size);
         for c in &cells {
             let (cell_start, cell_end) = {
@@ -902,12 +961,6 @@ impl ArrayDomain {
     }
 }
 
-impl Default for ArrayDomain {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl fmt::Display for ArrayDomain {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.num_bytes)
@@ -935,7 +988,7 @@ mod tests {
     ///    Backward scan hits empty offset 50, breaks early, misses Cell(48,8).
     #[test]
     fn backward_scan_must_not_break_early_at_empty_tombstone() {
-        let mut om = OffsetMap::default();
+        let mut om = OffsetMap::new(4096);
 
         // Step 1: store 8 bytes at offset 48.
         om.mk_cell(48, 8);

@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::ir::syntax::{AccessType, Bin, BinOp, Deref, Reg, Value};
+use crate::spec::config::EbpfRuntimeConfig;
 use crate::spec::type_descriptors::ProgramInfo;
 use crate::spec::vm_isa::AccessSize;
 
@@ -17,7 +18,7 @@ fn test_assertions_add_reg() {
     });
 
     let info = ProgramInfo::default();
-    let assertions = get_assertions(&ins, &info, &None);
+    let assertions = get_assertions(&ins, &info, &EbpfRuntimeConfig::default(), &None);
 
     // ADD dst, src (reg) should generate:
     // 1. TypeConstraint(dst, PtrOrNum)
@@ -45,7 +46,7 @@ fn test_assertions_add_imm() {
     });
 
     let info = ProgramInfo::default();
-    let assertions = get_assertions(&ins, &info, &None);
+    let assertions = get_assertions(&ins, &info, &EbpfRuntimeConfig::default(), &None);
 
     // ADD dst, imm should generate:
     // 1. TypeConstraint(dst, PtrOrNum)
@@ -75,7 +76,7 @@ fn test_assertions_mem_load() {
     });
 
     let info = ProgramInfo::default();
-    let assertions = get_assertions(&ins, &info, &None);
+    let assertions = get_assertions(&ins, &info, &EbpfRuntimeConfig::default(), &None);
 
     // Load should generate:
     // 1. TypeConstraint(base, Pointer)

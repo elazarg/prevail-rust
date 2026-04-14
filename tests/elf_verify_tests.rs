@@ -17,7 +17,7 @@ use prevail::fwd_analyzer;
 use prevail::ir::program::Program;
 use prevail::ir::unmarshal;
 use prevail::linux::linux_platform::LinuxPlatform;
-use prevail::spec::config::EbpfVerifierOptions;
+use prevail::spec::config::{EbpfRuntimeConfig, EbpfVerifierOptions};
 
 // ============================================================================
 // Test helpers
@@ -55,6 +55,7 @@ fn verify_section(path: &str, section: &str, opts: &EbpfVerifierOptions) -> bool
 
     let ctx = DomainContext {
         program_info: info,
+        runtime: &opts.runtime,
         options: opts,
         platform: &platform,
     };
@@ -102,6 +103,7 @@ fn verify_program(
 
             let ctx = DomainContext {
                 program_info: info,
+                runtime: &opts.runtime,
                 options: opts,
                 platform: &platform,
             };
@@ -151,6 +153,7 @@ fn try_verify_section(path: &str, section: &str, opts: &EbpfVerifierOptions) -> 
 
     let ctx = DomainContext {
         program_info: info,
+        runtime: &opts.runtime,
         options: opts,
         platform: &platform,
     };
@@ -203,6 +206,7 @@ fn try_verify_program(
 
             let ctx = DomainContext {
                 program_info: info,
+                runtime: &opts.runtime,
                 options: opts,
                 platform: &platform,
             };
@@ -224,7 +228,10 @@ fn default_opts() -> EbpfVerifierOptions {
 fn strict_opts() -> EbpfVerifierOptions {
     EbpfVerifierOptions {
         mock_map_fds: true,
-        strict: true,
+        runtime: EbpfRuntimeConfig {
+            strict: true,
+            ..Default::default()
+        },
         ..Default::default()
     }
 }
@@ -2753,6 +2760,7 @@ fn fail_cilium_examples_uretprobe_bpf_x86_bpfel() {
     let program = Program::from_sequence(&inst_seq, info, &platform2, &opts).expect("build CFG");
     let ctx = DomainContext {
         program_info: info,
+        runtime: &opts.runtime,
         options: &opts,
         platform: &platform2,
     };

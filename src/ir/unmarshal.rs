@@ -307,7 +307,7 @@ impl<'a> Unmarshaller<'a> {
                     lddw: false,
                 };
 
-                if !options.allow_division_by_zero
+                if !options.runtime.allow_division_by_zero
                     && (op == BinOp::UDIV || op == BinOp::UMOD)
                     && let Value::Imm(imm) = ins.v
                     && imm.v == 0
@@ -473,8 +473,8 @@ impl<'a> Unmarshaller<'a> {
                     ));
                 }
                 if inst.src() == R10_STACK_POINTER
-                    && (inst.offset + width.bytes() as i16 > 0
-                        || inst.offset < -self.subprogram_stack_size as i16)
+                    && (i32::from(inst.offset) + width.bytes() > 0
+                        || i32::from(inst.offset) < -self.subprogram_stack_size)
                 {
                     self.note("Stack access out of bounds".to_string());
                 }
@@ -984,7 +984,7 @@ impl<'a> Unmarshaller<'a> {
         options: &EbpfVerifierOptions,
     ) -> Result<InstructionSeq, UnmarshalError> {
         options.validate().map_err(UnmarshalError::InvalidOptions)?;
-        self.subprogram_stack_size = options.subprogram_stack_size;
+        self.subprogram_stack_size = options.runtime.subprogram_stack_size;
         let mut prog = Vec::new();
         let mut exit_count = 0;
         if insts.is_empty() {
@@ -1114,7 +1114,7 @@ pub fn unmarshal(
         notes,
         info,
         platform,
-        subprogram_stack_size: options.subprogram_stack_size,
+        subprogram_stack_size: options.runtime.subprogram_stack_size,
     }
     .unmarshal(insts, options)
 }

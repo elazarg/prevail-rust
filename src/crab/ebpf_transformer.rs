@@ -25,7 +25,6 @@ use crate::crab::type_to_number::{
 use crate::crab::var_registry::VariableRegistry;
 use crate::ir::syntax::*;
 use crate::platform::EbpfPlatform;
-use crate::spec::ebpf_base::*;
 use crate::spec::type_descriptors::EbpfMapValueType;
 use crate::spec::vm_isa::*;
 
@@ -247,6 +246,7 @@ fn havoc_subprogram_stack(
     _prefix: &str,
     registry: &mut VariableRegistry,
     big_endian: bool,
+    subprogram_stack_size: i32,
     array_map: &mut ArrayMap,
 ) {
     let r10_stack_offset = reg_pack(&R10_STACK_POINTER, registry).stack_offset;
@@ -257,9 +257,9 @@ fn havoc_subprogram_stack(
     if !intv.is_singleton() {
         return;
     }
-    let stack_start = intv.singleton().unwrap().narrow_to_i64() - EBPF_SUBPROGRAM_STACK_SIZE as i64;
+    let stack_start = intv.singleton().unwrap().narrow_to_i64() - subprogram_stack_size as i64;
     let idx = Interval::from_i64(stack_start);
-    let width = Interval::from_i64(EBPF_SUBPROGRAM_STACK_SIZE as i64);
+    let width = Interval::from_i64(subprogram_stack_size as i64);
     dom.stack.havoc_type(
         &mut dom.state.types,
         &idx,
@@ -673,7 +673,7 @@ fn do_load(
             width,
             &b.access.basereg,
             registry,
-            ctx.options.big_endian,
+            ctx.runtime.big_endian,
             array_map,
         );
         return;
@@ -710,7 +710,7 @@ fn do_load(
                         width,
                         &basereg,
                         registry,
-                        ctx.options.big_endian,
+                        ctx.runtime.big_endian,
                         array_map,
                     );
                 }
@@ -1058,14 +1058,14 @@ fn do_mem_store(
                 val_uvalue,
                 opt_val_reg,
                 registry,
-                ctx.options.big_endian,
+                ctx.runtime.big_endian,
                 array_map,
             );
             return;
         }
     }
     let basereg = b.access.basereg;
-    let big_endian = ctx.options.big_endian;
+    let big_endian = ctx.runtime.big_endian;
     let stack = &mut dom.stack;
     dom.state = dom
         .state
@@ -1293,7 +1293,7 @@ fn transform_un(
         return;
     }
     let dst = reg_pack(&stmt.dst, registry);
-    let big_endian = ctx.options.big_endian;
+    let big_endian = ctx.runtime.big_endian;
 
     // Closure-like helper for swap_endianness.
     // We inline it since closures can't easily capture `dom` mutably and also read from it.
@@ -1419,14 +1419,21 @@ fn transform_exit(
     if prefix.is_empty() {
         return;
     }
-    havoc_subprogram_stack(dom, prefix, registry, ctx.options.big_endian, array_map);
+    havoc_subprogram_stack(
+        dom,
+        prefix,
+        registry,
+        ctx.runtime.big_endian,
+        ctx.runtime.subprogram_stack_size,
+        array_map,
+    );
     restore_callee_saved_registers(dom, prefix, registry);
 
     // Restore r10.
     add_to_reg(
         dom,
         &R10_STACK_POINTER,
-        EBPF_SUBPROGRAM_STACK_SIZE,
+        ctx.runtime.subprogram_stack_size,
         64,
         registry,
     );
@@ -1625,7 +1632,7 @@ fn transform_call(
                     Interval::from_i64(4)
                 };
                 let reg = param.reg;
-                let big_endian = ctx.options.big_endian;
+                let big_endian = ctx.runtime.big_endian;
                 let stack = &mut dom.stack;
                 dom.state = dom
                     .state
@@ -1678,7 +1685,7 @@ fn transform_call(
                     .eval_interval_var(size_pack.svalue, registry);
 
                 let mem_reg = param.mem;
-                let big_endian = ctx.options.big_endian;
+                let big_endian = ctx.runtime.big_endian;
                 let stack = &mut dom.stack;
                 dom.state = dom
                     .state
@@ -1796,7 +1803,7 @@ fn transform_call(
 fn transform_call_local(
     dom: &mut EbpfDomain,
     call: &CallLocal,
-    _ctx: &DomainContext,
+    ctx: &DomainContext,
     registry: &mut VariableRegistry,
 ) {
     if dom.is_bottom() {
@@ -1808,7 +1815,7 @@ fn transform_call_local(
     add_to_reg(
         dom,
         &R10_STACK_POINTER,
-        -EBPF_SUBPROGRAM_STACK_SIZE,
+        -ctx.runtime.subprogram_stack_size,
         64,
         registry,
     );

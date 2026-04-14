@@ -22,8 +22,7 @@ use crate::crab::type_to_number::{TypeToNumDomain, reg_pack};
 use crate::crab::var_registry::VariableRegistry;
 use crate::ir::syntax::Reg;
 use crate::platform::EbpfPlatform;
-use crate::spec::config::EbpfVerifierOptions;
-use crate::spec::ebpf_base::*;
+use crate::spec::config::{EbpfRuntimeConfig, EbpfVerifierOptions};
 use crate::spec::type_descriptors::{EbpfMapDescriptor, ProgramInfo};
 use crate::spec::vm_isa::*;
 
@@ -75,10 +74,32 @@ impl std::fmt::Display for VerificationError {
 ///
 /// Replaces the C++ `thread_local_program_info`, `thread_local_options`,
 /// and `thread_local_program_info->platform` globals.
+///
+/// `runtime` is the verifier-semantic subset used by the abstract
+/// domain; `options` is kept for orchestration layers (fwd_analyzer)
+/// that legitimately need CFG-build or verbosity flags. Domain code
+/// should prefer `runtime`.
 pub struct DomainContext<'a> {
     pub program_info: &'a ProgramInfo,
+    pub runtime: &'a EbpfRuntimeConfig,
     pub options: &'a EbpfVerifierOptions,
     pub platform: &'a dyn EbpfPlatform,
+}
+
+impl<'a> DomainContext<'a> {
+    /// Construct a `DomainContext` from the full options struct.
+    pub fn new(
+        program_info: &'a ProgramInfo,
+        options: &'a EbpfVerifierOptions,
+        platform: &'a dyn EbpfPlatform,
+    ) -> Self {
+        DomainContext {
+            program_info,
+            runtime: &options.runtime,
+            options,
+            platform,
+        }
+    }
 }
 
 // ============================================================================
@@ -97,10 +118,10 @@ pub struct EbpfDomain {
 }
 
 impl EbpfDomain {
-    pub fn new() -> Self {
+    pub fn new(runtime: &EbpfRuntimeConfig) -> Self {
         EbpfDomain {
             state: TypeToNumDomain::new(),
-            stack: ArrayDomain::new(),
+            stack: ArrayDomain::new(runtime.total_stack_size()),
         }
     }
 
@@ -108,14 +129,14 @@ impl EbpfDomain {
         EbpfDomain { state, stack }
     }
 
-    pub fn top() -> Self {
-        let mut dom = Self::new();
+    pub fn top(runtime: &EbpfRuntimeConfig) -> Self {
+        let mut dom = Self::new(runtime);
         dom.set_to_top();
         dom
     }
 
-    pub fn bottom() -> Self {
-        let mut dom = Self::new();
+    pub fn bottom(runtime: &EbpfRuntimeConfig) -> Self {
+        let mut dom = Self::new(runtime);
         dom.set_to_bottom();
         dom
     }
@@ -175,7 +196,12 @@ impl EbpfDomain {
     pub fn meet(&self, other: &EbpfDomain) -> EbpfDomain {
         let state = self.state.meet(&other.state);
         if state.is_bottom() {
-            return Self::bottom();
+            // Preserve the existing stack layout rather than constructing
+            // a fresh-top stack — `is_bottom()` is determined by `state`
+            // alone, so the stack contents are unobservable here.
+            let mut res = self.clone();
+            res.state = state;
+            return res;
         }
         EbpfDomain {
             state,
@@ -421,16 +447,17 @@ impl EbpfDomain {
             return write!(f, "_|_");
         }
 
+        let total = self.stack.total_stack_size();
         let type_set = self
             .state
             .types
             .to_set(registry)
-            .retain(|c| filter.is_relevant_constraint(c));
+            .retain(|c| filter.is_relevant_constraint(c, total));
         let value_set = self
             .state
             .values
             .to_set(registry)
-            .retain(|c| filter.is_relevant_constraint(c));
+            .retain(|c| filter.is_relevant_constraint(c, total));
 
         // Stack uses its own Display format (Numbers -> {...}), not StringInvariant.
         write!(f, "{type_set}{value_set}\nStack: {}", self.stack)
@@ -447,7 +474,7 @@ impl EbpfDomain {
         ctx: &DomainContext,
         registry: &mut VariableRegistry,
     ) -> EbpfDomain {
-        let mut inv = EbpfDomain::new();
+        let mut inv = EbpfDomain::new(ctx.runtime);
         for i in 0u8..=9 {
             let r = reg_pack(&Reg { v: i }, registry);
             inv.add_value_constraint(&leq(r.svalue.into(), (i32::MAX as i64).into()), registry);
@@ -455,7 +482,10 @@ impl EbpfDomain {
             inv.add_value_constraint(&leq(r.uvalue.into(), (u32::MAX as i64).into()), registry);
             inv.add_value_constraint(&geq(r.uvalue.into(), 0i64.into()), registry);
             inv.add_value_constraint(
-                &leq(r.stack_offset.into(), (EBPF_TOTAL_STACK_SIZE as i64).into()),
+                &leq(
+                    r.stack_offset.into(),
+                    (ctx.runtime.total_stack_size() as i64).into(),
+                ),
                 registry,
             );
             inv.add_value_constraint(&geq(r.stack_offset.into(), 0i64.into()), registry);
@@ -522,17 +552,18 @@ impl EbpfDomain {
         ctx: &DomainContext,
         registry: &mut VariableRegistry,
     ) -> EbpfDomain {
-        let mut inv = EbpfDomain::new();
+        let total_stack = ctx.runtime.total_stack_size();
+        let mut inv = EbpfDomain::new(ctx.runtime);
 
         let r10 = reg_pack(&R10_STACK_POINTER, registry);
         inv.add_value_constraint(
-            &leq((EBPF_TOTAL_STACK_SIZE as i64).into(), r10.svalue.into()),
+            &leq((total_stack as i64).into(), r10.svalue.into()),
             registry,
         );
         inv.add_value_constraint(&leq(r10.svalue.into(), PTR_MAX.into()), registry);
         inv.state
             .values
-            .assign_i64(r10.stack_offset, EBPF_TOTAL_STACK_SIZE as i64, registry);
+            .assign_i64(r10.stack_offset, total_stack as i64, registry);
         inv.state
             .assign_type_encoding(&R10_STACK_POINTER, T_STACK, registry);
 
@@ -562,7 +593,7 @@ impl EbpfDomain {
         let mut inv = if setup_constraints {
             EbpfDomain::setup_entry(false, ctx, registry)
         } else {
-            EbpfDomain::new()
+            EbpfDomain::new(ctx.runtime)
         };
         let mut numeric_ranges = Vec::new();
         let parsed =
@@ -588,12 +619,6 @@ impl EbpfDomain {
     }
 }
 
-impl Default for EbpfDomain {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl std::fmt::Display for EbpfDomain {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if self.is_bottom() {
@@ -607,3 +632,55 @@ impl std::fmt::Display for EbpfDomain {
 pub use super::ebpf_checker::ebpf_domain_check;
 
 pub use super::ebpf_transformer::ebpf_domain_transform;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn domain_constructors_honor_runtime_stack_size() {
+        let default = EbpfRuntimeConfig::default();
+        let dom = EbpfDomain::top(&default);
+        assert_eq!(dom.stack.total_stack_size(), default.total_stack_size());
+
+        let custom = EbpfRuntimeConfig {
+            subprogram_stack_size: 256,
+            max_call_stack_frames: 16,
+            ..EbpfRuntimeConfig::default()
+        };
+        assert_eq!(custom.total_stack_size(), 4096);
+
+        let dom = EbpfDomain::new(&custom);
+        assert_eq!(dom.stack.total_stack_size(), custom.total_stack_size());
+
+        let bigger = EbpfRuntimeConfig {
+            subprogram_stack_size: 1024,
+            max_call_stack_frames: 8,
+            ..EbpfRuntimeConfig::default()
+        };
+        let dom = EbpfDomain::bottom(&bigger);
+        assert_eq!(dom.stack.total_stack_size(), 8192);
+    }
+
+    #[test]
+    fn validate_rejects_out_of_range() {
+        let bad = EbpfRuntimeConfig {
+            subprogram_stack_size: 0,
+            ..EbpfRuntimeConfig::default()
+        };
+        assert!(bad.validate().is_err());
+
+        let bad = EbpfRuntimeConfig {
+            max_call_stack_frames: EbpfRuntimeConfig::MAX_CALL_STACK_FRAMES_LIMIT + 1,
+            ..EbpfRuntimeConfig::default()
+        };
+        assert!(bad.validate().is_err());
+
+        let good = EbpfRuntimeConfig {
+            subprogram_stack_size: 256,
+            max_call_stack_frames: 16,
+            ..EbpfRuntimeConfig::default()
+        };
+        assert!(good.validate().is_ok());
+    }
+}
