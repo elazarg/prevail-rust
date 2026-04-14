@@ -288,6 +288,15 @@ fn rewrite_extern_constant_load(
         narrowed_value = ((narrowed_value << shift) as i64 >> shift) as u64;
     }
 
+    // BPF MOV imm has a 32-bit immediate field that is sign-extended to 64 bits
+    // by the runtime. Bail out if the value cannot survive the int32 → int64
+    // sign-extension round-trip; the caller will fall back to the original
+    // LDDW+LDX instruction sequence.
+    let truncated = narrowed_value as i32;
+    if truncated as i64 as u64 != narrowed_value {
+        return false;
+    }
+
     // Use mov-imm to materialize the resolved constant in the destination register of
     // the load, and neutralize the preceding LDDW pair.
     let mov_opcode = if width == 8 || mode == INST_MODE_MEMSX {
@@ -299,7 +308,7 @@ fn rewrite_extern_constant_load(
     instructions[location + 2].opcode = mov_opcode;
     instructions[location + 2].dst_src = load_dst; // src = 0
     instructions[location + 2].offset = 0;
-    instructions[location + 2].imm = narrowed_value as i32;
+    instructions[location + 2].imm = truncated;
 
     let lo_dst = instructions[location].dst_raw();
     let hi_dst = instructions[location + 1].dst_raw();
@@ -373,7 +382,7 @@ fn add_global_variable_maps(
     map_offsets: &mut MapOffsets,
 ) {
     for (sec_idx, sec_name, sec_size) in collect_global_sections(elf) {
-        map_offsets.insert(sec_name, global.map_descriptors.len());
+        map_offsets.insert(sec_name.clone(), global.map_descriptors.len());
         global.map_descriptors.push(EbpfMapDescriptor {
             original_fd: (global.map_descriptors.len() + 1) as i32,
             map_type: 0,
@@ -381,6 +390,7 @@ fn add_global_variable_maps(
             value_size: sec_size as u32,
             max_entries: 1,
             inner_map_fd: DEFAULT_MAP_FD,
+            name: sec_name,
         });
         global.variable_section_indices.insert(sec_idx);
     }
@@ -489,12 +499,22 @@ fn parse_map_sections(
                     "Malformed legacy maps section: {sec_name}"
                 )));
             }
-            map_count = max_record_end.div_ceil(record_size);
+            // Use floor division to ensure map_count * record_size <= section size.
+            // Ceiling division can produce a count whose last record extends past the
+            // buffer, causing a heap-buffer-overflow in parse_maps_section.
+            map_count = max_record_end / record_size;
         }
 
         let base_index = global.map_descriptors.len();
         section_record_sizes.insert(sec_idx, record_size);
         section_base_index.insert(sec_idx, base_index);
+
+        // Safety invariant: all records must fit within the section data.
+        if map_count * record_size > sec_size {
+            return Err(UnmarshalError(format!(
+                "Malformed legacy maps section: {sec_name}"
+            )));
+        }
 
         platform.parse_maps_section(
             &mut global.map_descriptors,
@@ -551,6 +571,7 @@ fn parse_map_sections(
             )));
         }
 
+        global.map_descriptors[descriptor_index].name = sd.name.clone();
         map_offsets.insert(sd.name, descriptor_index);
     }
 
@@ -592,7 +613,8 @@ fn parse_btf_section(elf: &ElfFile<'_, Elf64>) -> Result<ElfGlobalData, Unmarsha
     let btf_maps = crate::btf::map::parse_btf_map_section(&btf_data)
         .map_err(|e| UnmarshalError(format!("Unsupported or invalid BTF map metadata: {e}")))?;
     for map_def in btf_maps {
-        map_offsets.insert(map_def.name.clone(), global.map_descriptors.len());
+        let name = map_def.name.clone();
+        map_offsets.insert(name.clone(), global.map_descriptors.len());
         global.map_descriptors.push(EbpfMapDescriptor {
             original_fd: map_def.type_id as i32, // temporary: stores BTF type ID
             map_type: map_def.map_type,
@@ -604,6 +626,7 @@ fn parse_btf_section(elf: &ElfFile<'_, Elf64>) -> Result<ElfGlobalData, Unmarsha
             } else {
                 map_def.inner_map_type_id as i32
             },
+            name,
         });
     }
 
@@ -2681,14 +2704,11 @@ mod tests {
                 must_have_exit: true,
             },
             mock_map_fds: true,
-            strict: false,
-            allow_division_by_zero: true,
-            setup_constraints: true,
-            big_endian: false,
             verbosity_opts: crate::spec::config::VerbosityOptions {
                 simplify: true,
                 ..crate::spec::config::VerbosityOptions::default()
             },
+            ..Default::default()
         }
     }
 

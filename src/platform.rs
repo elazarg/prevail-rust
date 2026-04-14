@@ -29,7 +29,16 @@ pub trait EbpfPlatform {
     fn get_program_type(&self, section: &str, path: &str) -> EbpfProgramType;
 
     /// Return the helper function prototype for helper number `n`.
+    ///
+    /// Panics if `n` is out of range; callers that may encounter invalid ids
+    /// should use [`try_get_helper_prototype`] instead.
     fn get_helper_prototype(&self, n: i32) -> &HelperPrototype;
+
+    /// Return the helper function prototype for helper number `n`, or `None`
+    /// if `n` is out of range for this platform.
+    fn try_get_helper_prototype(&self, _n: i32) -> Option<&HelperPrototype> {
+        None
+    }
 
     /// Whether helper number `n` is available on this platform.
     fn is_helper_usable(&self, n: i32) -> bool;

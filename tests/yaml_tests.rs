@@ -61,6 +61,7 @@ impl TestPlatform {
                 value_size: 4,
                 max_entries: 4,
                 inner_map_fd: 0,
+                name: String::new(),
             },
         }
     }
@@ -72,6 +73,9 @@ impl EbpfPlatform for TestPlatform {
     }
     fn get_helper_prototype(&self, n: i32) -> &HelperPrototype {
         self.linux.get_helper_prototype(n)
+    }
+    fn try_get_helper_prototype(&self, n: i32) -> Option<&HelperPrototype> {
+        self.linux.try_get_helper_prototype(n)
     }
     fn is_helper_usable(&self, n: i32) -> bool {
         self.linux.is_helper_usable(n)
@@ -474,6 +478,7 @@ fn run_test_case(test_case: &TestCase, platform: &TestPlatform) -> Option<Failur
             value_size: 4,
             max_entries: 4,
             inner_map_fd: 0,
+            name: String::new(),
         }],
         ..ProgramInfo::default()
     };

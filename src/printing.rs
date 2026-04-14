@@ -1880,6 +1880,7 @@ mod tests {
             value_size: 8,
             max_entries: 1024,
             inner_map_fd: -1,
+            name: String::new(),
         };
         assert_eq!(
             format!("{desc}"),

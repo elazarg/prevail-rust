@@ -127,11 +127,11 @@ impl<'a> EbpfChecker<'a> {
 
         self.require_value(
             leq(lhs, lb),
-            "Lower bound must be at least r10.stack_offset - EBPF_SUBPROGRAM_STACK_SIZE",
+            "Lower bound must be at least r10.stack_offset - subprogram_stack_size",
         )?;
         self.require_value(
             leq(ub, LinearExpression::from(EBPF_TOTAL_STACK_SIZE as i64)),
-            "Upper bound must be at most EBPF_TOTAL_STACK_SIZE",
+            "Upper bound must be at most total_stack_size",
         )
     }
 

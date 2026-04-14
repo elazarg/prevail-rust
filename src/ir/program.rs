@@ -352,6 +352,9 @@ impl Program {
         platform: &dyn EbpfPlatform,
         options: &EbpfVerifierOptions,
     ) -> Result<Program, InvalidControlFlow> {
+        options
+            .validate()
+            .map_err(|message| InvalidControlFlow { message })?;
         let mut resolved_kfunc_calls = ResolvedKfuncCalls::new();
         validate_instruction_feature_support(inst_seq, info, platform, &mut resolved_kfunc_calls)?;
 
@@ -980,6 +983,20 @@ fn add_cfg_nodes(
     caller_label: &Label,
     entry_label: &Label,
 ) -> Result<(), InvalidControlFlow> {
+    // Guard at the entry so the check applies uniformly to all invocations
+    // (including the top-level one), matching upstream PR #1070.
+    let caller_label_str = format!("{}", caller_label);
+    let stack_frame_depth = caller_label_str
+        .chars()
+        .filter(|&c| c == STACK_FRAME_DELIMITER)
+        .count() as i32
+        + 2;
+    if stack_frame_depth > MAX_CALL_STACK_FRAMES {
+        return Err(InvalidControlFlow {
+            message: "too many call stack frames".to_string(),
+        });
+    }
+
     let mut first = true;
 
     // Get the label of the node to go to on returning from the macro.
@@ -1072,25 +1089,14 @@ fn add_cfg_nodes(
     // since processing now goes through the function macro instead.
     builder.remove_child(caller_label, &exit_to_label);
 
-    // Finally, recurse to replace any nested function macros.
-    let caller_label_str = format!("{}", caller_label);
-    let stack_frame_depth = caller_label_str
-        .chars()
-        .filter(|&c| c == STACK_FRAME_DELIMITER)
-        .count() as i32
-        + 2;
-
+    // Finally, recurse to replace any nested function macros. The depth
+    // guard at the entry of this function covers all call sites.
     let seen_labels_snapshot: Vec<Label> = seen_labels.into_iter().collect();
     for macro_label in &seen_labels_snapshot {
         let label = Label::new_full(macro_label.from, macro_label.to, caller_label_str.clone());
         if builder.prog.cfg.contains(&label)
             && let Instruction::CallLocal(cl) = builder.prog.instruction_at(&label)
         {
-            if stack_frame_depth >= MAX_CALL_STACK_FRAMES {
-                return Err(InvalidControlFlow {
-                    message: "too many call stack frames".to_string(),
-                });
-            }
             let target = cl.target.clone();
             add_cfg_nodes(builder, &label, &target)?;
         }
@@ -1540,6 +1546,7 @@ mod tests {
             value_size: 8,
             max_entries: 16,
             inner_map_fd: 0,
+            name: String::new(),
         });
         let platform = LinuxPlatform::new();
         let opts = EbpfVerifierOptions::default();

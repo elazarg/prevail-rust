@@ -146,6 +146,16 @@ struct Cli {
     #[arg(long, short = 's')]
     strict: bool,
 
+    /// Per-subprogram stack frame size in bytes (default: 512)
+    #[arg(long = "stack-size", default_value_t = EbpfVerifierOptions::DEFAULT_SUBPROGRAM_STACK_SIZE,
+          value_parser = clap::value_parser!(i32).range(1..=EbpfVerifierOptions::MAX_SUBPROGRAM_STACK_SIZE as i64))]
+    stack_size: i32,
+
+    /// Maximum number of nested function calls (default: 8)
+    #[arg(long = "max-call-stack-frames", default_value_t = EbpfVerifierOptions::DEFAULT_MAX_CALL_STACK_FRAMES,
+          value_parser = clap::value_parser!(i32).range(1..=EbpfVerifierOptions::MAX_CALL_STACK_FRAMES_LIMIT as i64))]
+    max_call_stack_frames: i32,
+
     /// Include conformance groups
     #[arg(long = "include_groups", value_delimiter = ',',
           value_parser = PossibleValuesParser::new(GROUP_NAMES))]
@@ -311,6 +321,8 @@ fn main() -> ExitCode {
         allow_division_by_zero,
         setup_constraints: true,
         big_endian: false,
+        subprogram_stack_size: cli.stack_size,
+        max_call_stack_frames: cli.max_call_stack_frames,
         verbosity_opts: VerbosityOptions {
             simplify,
             print_invariants: cli.print_invariants,

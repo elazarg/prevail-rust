@@ -634,6 +634,7 @@ fn parse_maps_section_linux(
             // Temporarily fill in the index.  This will be replaced in the
             // resolve_inner_map_references pass.
             inner_map_fd: s.inner_map_idx as i32,
+            name: String::new(),
         });
     }
 }
@@ -808,6 +809,10 @@ impl EbpfPlatform for LinuxPlatform {
 
     fn get_helper_prototype(&self, n: i32) -> &HelperPrototype {
         spec_prototypes::get_helper_prototype(n)
+    }
+
+    fn try_get_helper_prototype(&self, n: i32) -> Option<&HelperPrototype> {
+        spec_prototypes::try_get_helper_prototype(n)
     }
 
     fn is_helper_usable(&self, n: i32) -> bool {

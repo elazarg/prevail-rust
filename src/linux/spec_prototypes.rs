@@ -1279,6 +1279,19 @@ pub fn get_helper_prototype(n: i32) -> &'static HelperPrototype {
     &PROTOTYPES[n as usize]
 }
 
+/// Return the prototype for BPF helper `n`, or `None` if `n` is out of range.
+///
+/// Mirrors the C++ `get_helper_prototype_linux` post-change behavior of
+/// returning a default (empty-named) prototype rather than throwing for
+/// unknown helper ids.
+pub fn try_get_helper_prototype(n: i32) -> Option<&'static HelperPrototype> {
+    if (0..PROTOTYPES.len() as i32).contains(&n) {
+        Some(&PROTOTYPES[n as usize])
+    } else {
+        None
+    }
+}
+
 /// Resolve a helper function by name, returning its index in the prototype table.
 ///
 /// Strips `bpf_` or `ebpf_` prefix before matching against prototype names.

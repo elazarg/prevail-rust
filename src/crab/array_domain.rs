@@ -715,8 +715,16 @@ impl ArrayDomain {
             let v = om.mk_cell(offset, size).get_scalar(kind, registry);
             Some(v)
         } else {
-            let (lb, ub) = as_numbytes_range(idx, width);
-            self.num_bytes.havoc(lb as usize, ub);
+            // Weak update: cannot perform a strong update because the index is
+            // not a singleton. Havoc the type cells in the range.
+            if !is_num {
+                // A non-numeric value may overwrite previously numeric bytes,
+                // so conservatively mark the range as non-numeric. When is_num
+                // is true, written bytes stay numeric and unwritten bytes keep
+                // their existing status, so num_bytes is left unchanged.
+                let (lb, ub) = as_numbytes_range(idx, width);
+                self.num_bytes.havoc(lb as usize, ub);
+            }
             None
         }
     }

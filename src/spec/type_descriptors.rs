@@ -11,8 +11,7 @@ use super::vm_isa::EbpfInst;
 
 /// Describes the key properties of an eBPF map.
 /// Mirrors C++ `EbpfMapDescriptor`.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct EbpfMapDescriptor {
     pub original_fd: i32,
     pub map_type: u32,
@@ -20,6 +19,8 @@ pub struct EbpfMapDescriptor {
     pub value_size: u32,
     pub max_entries: u32,
     pub inner_map_fd: i32,
+    /// Map name from ELF (empty if not available).
+    pub name: String,
 }
 
 /// The type of values stored in a map.

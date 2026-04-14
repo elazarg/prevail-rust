@@ -66,6 +66,7 @@ fn jmp_op_to_cond(op: JmpOp) -> ConditionOp {
 pub enum UnmarshalError {
     InvalidInstruction { pc: usize, message: String },
     ZeroLengthProgram,
+    InvalidOptions(String),
 }
 
 impl std::fmt::Display for UnmarshalError {
@@ -73,6 +74,7 @@ impl std::fmt::Display for UnmarshalError {
         match self {
             UnmarshalError::InvalidInstruction { pc, message } => write!(f, "{}: {}", pc, message),
             UnmarshalError::ZeroLengthProgram => write!(f, "Zero length programs are not allowed"),
+            UnmarshalError::InvalidOptions(msg) => write!(f, "Invalid verifier options: {msg}"),
         }
     }
 }
@@ -99,6 +101,7 @@ struct Unmarshaller<'a> {
     notes: &'a mut Vec<Vec<String>>,
     info: &'a ProgramInfo,
     platform: &'a dyn EbpfPlatform,
+    subprogram_stack_size: i32,
 }
 
 impl<'a> Unmarshaller<'a> {
@@ -471,7 +474,7 @@ impl<'a> Unmarshaller<'a> {
                 }
                 if inst.src() == R10_STACK_POINTER
                     && (inst.offset + width.bytes() as i16 > 0
-                        || inst.offset < -EBPF_TOTAL_STACK_SIZE as i16)
+                        || inst.offset < -self.subprogram_stack_size as i16)
                 {
                     self.note("Stack access out of bounds".to_string());
                 }
@@ -800,17 +803,11 @@ impl<'a> Unmarshaller<'a> {
                 }
 
                 if !self.platform.is_helper_usable(inst.imm) {
-                    let name = if inst.imm < 0 {
-                        inst.imm.to_string()
-                    } else {
-                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            self.platform
-                                .get_helper_prototype(inst.imm)
-                                .name
-                                .to_string()
-                        }))
-                        .unwrap_or_else(|_| inst.imm.to_string())
-                    };
+                    let name = self
+                        .platform
+                        .try_get_helper_prototype(inst.imm)
+                        .map(|p| p.name.to_string())
+                        .unwrap_or_else(|| inst.imm.to_string());
                     return Ok(Instruction::Call(Call {
                         func: inst.imm,
                         kind: CallKind::Helper,
@@ -986,6 +983,8 @@ impl<'a> Unmarshaller<'a> {
         insts: &[EbpfInst],
         options: &EbpfVerifierOptions,
     ) -> Result<InstructionSeq, UnmarshalError> {
+        options.validate().map_err(UnmarshalError::InvalidOptions)?;
+        self.subprogram_stack_size = options.subprogram_stack_size;
         let mut prog = Vec::new();
         let mut exit_count = 0;
         if insts.is_empty() {
@@ -1115,6 +1114,7 @@ pub fn unmarshal(
         notes,
         info,
         platform,
+        subprogram_stack_size: options.subprogram_stack_size,
     }
     .unmarshal(insts, options)
 }
@@ -1123,7 +1123,7 @@ pub fn unmarshal(
 // make_call — convert helper prototype to Call instruction
 // ============================================================================
 
-use crate::spec::ebpf_base::{EBPF_TOTAL_STACK_SIZE, EbpfArgumentType, EbpfReturnType};
+use crate::spec::ebpf_base::{EbpfArgumentType, EbpfReturnType};
 
 fn to_arg_single_kind(t: EbpfArgumentType) -> ArgSingleKind {
     use crate::ir::syntax::ArgSingleKind::*;
