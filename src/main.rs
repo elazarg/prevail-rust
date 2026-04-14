@@ -246,6 +246,12 @@ fn print_help() {
     println!(
         "  -s,     --strict            Apply additional checks that would cause runtime failures "
     );
+    println!("          --stack-size INT:INT in [1 - 1048576] ");
+    println!(
+        "                              Per-subprogram stack frame size in bytes (default: 512) "
+    );
+    println!("          --max-call-stack-frames INT:INT in [1 - 128] ");
+    println!("                              Maximum number of nested function calls (default: 8) ");
     println!(
         "          --include_groups GROUPS:{{atomic32,atomic64,base32,base64,callx,divmul32,divmul64,packet}} "
     );

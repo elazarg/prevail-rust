@@ -196,12 +196,12 @@ impl EbpfDomain {
     pub fn meet(&self, other: &EbpfDomain) -> EbpfDomain {
         let state = self.state.meet(&other.state);
         if state.is_bottom() {
-            // Preserve the existing stack layout rather than constructing
-            // a fresh-top stack — `is_bottom()` is determined by `state`
-            // alone, so the stack contents are unobservable here.
-            let mut res = self.clone();
-            res.state = state;
-            return res;
+            // Match original behavior: bottom-state domains carry a
+            // fresh top stack (preserving the configured stack size).
+            return EbpfDomain {
+                state,
+                stack: ArrayDomain::new(self.stack.total_stack_size()),
+            };
         }
         EbpfDomain {
             state,
