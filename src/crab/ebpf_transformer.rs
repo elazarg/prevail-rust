@@ -131,9 +131,9 @@ pub fn ebpf_domain_transform(
     let pre = dom.clone();
     match ins {
         Instruction::Assume(s) => transform_assume(dom, s, ctx, registry),
-        Instruction::Bin(s) => transform_bin(dom, s, ctx, registry),
+        Instruction::Bin(s) => transform_bin(dom, s, ctx, registry)?,
         Instruction::Un(s) => transform_un(dom, s, ctx, registry),
-        Instruction::Mem(s) => transform_mem(dom, s, ctx, registry, array_map),
+        Instruction::Mem(s) => transform_mem(dom, s, ctx, registry, array_map)?,
         Instruction::Call(s) => transform_call(dom, s, ctx, registry, array_map)?,
         Instruction::CallLocal(s) => transform_call_local(dom, s, ctx, registry),
         Instruction::Callx(s) => transform_callx(dom, s, ctx, registry, array_map)?,
@@ -143,7 +143,7 @@ pub fn ebpf_domain_transform(
         Instruction::Exit(s) => transform_exit(dom, s, ctx, registry, array_map),
         Instruction::Jmp(_) => { /* NOP: only holds jump preconditions */ }
         Instruction::Packet(s) => transform_packet(dom, s, ctx, registry),
-        Instruction::Atomic(s) => transform_atomic(dom, s, ctx, registry, array_map),
+        Instruction::Atomic(s) => transform_atomic(dom, s, ctx, registry, array_map)?,
         Instruction::LoadMapFd(s) => transform_load_map_fd(dom, s, ctx, registry)?,
         Instruction::LoadMapAddress(s) => transform_load_map_address(dom, s, ctx, registry)?,
         Instruction::LoadPseudo(s) => transform_load_pseudo(dom, s, registry),
@@ -153,6 +153,13 @@ pub fn ebpf_domain_transform(
         }
     }
     if dom.is_bottom() && !matches!(ins, Instruction::Assume(_)) {
+        // Deliberate divergence from upstream: a non-Assume instruction that
+        // drives the domain to bottom is an internal precision bug, not a
+        // recoverable verification failure — only Assume can legitimately
+        // introduce bottom by asserting an impossible constraint. Upstream
+        // throws std::logic_error here and lets verify()'s catch block convert
+        // it into `return false`, which masks the bug. We panic instead so the
+        // underlying domain issue surfaces.
         panic!(
             "Bug! pre-invariant:\n{}\n followed by instruction: {:?}\nleads to bottom",
             pre, ins
@@ -1479,9 +1486,9 @@ fn transform_mem(
     ctx: &DomainContext,
     registry: &mut VariableRegistry,
     array_map: &mut ArrayMap,
-) {
+) -> Result<(), VerificationError> {
     if dom.is_bottom() {
-        return;
+        return Ok(());
     }
     match &b.value {
         Value::Reg(preg) => {
@@ -1492,7 +1499,15 @@ fn transform_mem(
                         AccessSize::Byte => BinOp::MOVSX8,
                         AccessSize::Half => BinOp::MOVSX16,
                         AccessSize::Word => BinOp::MOVSX32,
-                        AccessSize::DWord => panic!("unexpected MEMSX width"),
+                        // Mirrors upstream CRAB_ERROR("unexpected MEMSX width").
+                        // Both unmarshallers reject MEMSX DWord, so this arm is
+                        // defensive; surfacing it as a verification failure
+                        // keeps parity with upstream instead of aborting.
+                        AccessSize::DWord => {
+                            return Err(VerificationError::new(
+                                "unexpected MEMSX width".to_string(),
+                            ));
+                        }
                     };
                     transform_bin(
                         dom,
@@ -1505,7 +1520,7 @@ fn transform_mem(
                         },
                         ctx,
                         registry,
-                    );
+                    )?;
                 }
             } else {
                 let data_reg = reg_pack(preg, registry);
@@ -1522,6 +1537,7 @@ fn transform_mem(
             do_mem_store(dom, b, &svalue, &uvalue, &None, ctx, registry, array_map);
         }
     }
+    Ok(())
 }
 
 fn transform_atomic(
@@ -1530,9 +1546,9 @@ fn transform_atomic(
     ctx: &DomainContext,
     registry: &mut VariableRegistry,
     array_map: &mut ArrayMap,
-) {
+) -> Result<(), VerificationError> {
     if dom.is_bottom() {
-        return;
+        return Ok(());
     }
     if !dom
         .state
@@ -1540,7 +1556,7 @@ fn transform_atomic(
         .is_in_group(&a.access.basereg, TS_POINTER, registry)
         || !dom.state.types.is_in_group(&a.valreg, TS_NUM, registry)
     {
-        return;
+        return Ok(());
     }
     if !dom
         .state
@@ -1555,7 +1571,7 @@ fn transform_atomic(
         } else if a.fetch {
             dom.state.havoc_register_except_type(&a.valreg, registry);
         }
-        return;
+        return Ok(());
     }
 
     // Fetch the current value into the R11 pseudo-register.
@@ -1566,11 +1582,11 @@ fn transform_atomic(
         is_load: true,
         is_signed: false,
     };
-    transform_mem(dom, &load_mem, ctx, registry, array_map);
+    transform_mem(dom, &load_mem, ctx, registry, array_map)?;
 
     // Compute the new value in R11.
     let bin = atomic_to_bin(a);
-    transform_bin(dom, &bin, ctx, registry);
+    transform_bin(dom, &bin, ctx, registry)?;
 
     if a.op == AtomicOp::CMPXCHG {
         // For CMPXCHG, store the original value in r0.
@@ -1580,7 +1596,7 @@ fn transform_atomic(
             is_load: true,
             is_signed: false,
         };
-        transform_mem(dom, &load_r0, ctx, registry, array_map);
+        transform_mem(dom, &load_r0, ctx, registry, array_map)?;
 
         // For now we just havoc the value of R11.
         dom.state.havoc_register_except_type(&r11, registry);
@@ -1592,7 +1608,7 @@ fn transform_atomic(
             is_load: true,
             is_signed: false,
         };
-        transform_mem(dom, &load_valreg, ctx, registry, array_map);
+        transform_mem(dom, &load_valreg, ctx, registry, array_map)?;
     }
 
     // Store the new value back in the original shared memory location.
@@ -1602,10 +1618,11 @@ fn transform_atomic(
         is_load: false,
         is_signed: false,
     };
-    transform_mem(dom, &store_mem, ctx, registry, array_map);
+    transform_mem(dom, &store_mem, ctx, registry, array_map)?;
 
     // Clear the R11 pseudo-register.
     dom.state.havoc_register(&r11, registry);
+    Ok(())
 }
 
 fn transform_call(
@@ -1916,9 +1933,9 @@ fn transform_bin(
     bin: &Bin,
     _ctx: &DomainContext,
     registry: &mut VariableRegistry,
-) {
+) -> Result<(), VerificationError> {
     if dom.is_bottom() {
-        return;
+        return Ok(());
     }
 
     let dst = reg_pack(&bin.dst, registry);
@@ -1932,7 +1949,7 @@ fn transform_bin(
         )
     {
         dom.state.havoc_register(&bin.dst, registry);
-        return;
+        return Ok(());
     }
 
     match &bin.v {
@@ -1968,17 +1985,24 @@ fn transform_bin(
                     dom.state.havoc_offsets(&bin.dst, registry);
                 }
                 BinOp::MOVSX8 | BinOp::MOVSX16 | BinOp::MOVSX32 => {
-                    panic!("Unsupported operation: MOVSX with immediate");
+                    // Mirrors upstream CRAB_ERROR("Unsupported operation") in
+                    // ebpf_transformer.cpp for MOVSX32 with an immediate operand;
+                    // neither the C++ nor the Rust unmarshaller rejects this
+                    // encoding, so the transformer signals the verification
+                    // failure directly.
+                    return Err(VerificationError::new(
+                        "Unsupported operation: MOVSX with immediate".to_string(),
+                    ));
                 }
                 BinOp::ADD => {
                     if imm == 0 {
-                        return;
+                        return Ok(());
                     }
                     add_to_reg(dom, &bin.dst, imm as i32, finite_width, registry);
                 }
                 BinOp::SUB => {
                     if imm == 0 {
-                        return;
+                        return Ok(());
                     }
                     add_to_reg(dom, &bin.dst, -(imm as i32), finite_width, registry);
                 }
@@ -2096,7 +2120,7 @@ fn transform_bin(
             let src = reg_pack(&src_reg, registry);
             if !dom.state.types.is_initialized_reg(&src_reg, registry) {
                 dom.state.havoc_register(&bin.dst, registry);
-                return;
+                return Ok(());
             }
             match bin.op {
                 BinOp::ADD => {
@@ -2545,7 +2569,7 @@ fn transform_bin(
                         let dst_interval = dom.state.values.eval_interval_var(dst.svalue, registry);
                         let signed_range = Interval::signed_int(source_width);
                         if dst_interval.is_included_in(&signed_range) {
-                            return;
+                            return Ok(());
                         }
                     }
                     if dom.state.types.is_in_group(&src_reg, TS_NUM, registry) {
@@ -2587,4 +2611,5 @@ fn transform_bin(
             registry,
         );
     }
+    Ok(())
 }
