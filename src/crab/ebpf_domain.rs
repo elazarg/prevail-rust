@@ -196,10 +196,42 @@ impl EbpfDomain {
     pub fn meet(&self, other: &EbpfDomain) -> EbpfDomain {
         let state = self.state.meet(&other.state);
         if state.is_bottom() {
-            // Match original behavior: bottom-state domains carry a
-            // fresh top stack (preserving the configured stack size).
+            // Match upstream C++: when state meet produces bottom, discard
+            // the post-meet state entirely and return a freshly-constructed
+            // bottom. The fresh `TypeToNumDomain::new(); set_to_bottom()`
+            // path leaves no registered variables or zone-domain graph
+            // edges in the `values` component.
+            //
+            // Keeping the post-meet `state` — even though it reports
+            // `is_bottom() == true` — is observationally different: it
+            // carries residual variables and graph edges that leak into
+            // subsequent `widen` calls (our splitdbm `widen` does not
+            // short-circuit on bottom inputs). Empirically (isolated by
+            // bisect on
+            // `tests/upstream/ebpf-samples/linux-selftests/loop3.o
+            //  ::raw_tracepoint/consume_skb::while_true`), the residual
+            // form preserves zone-domain correlations across widening
+            // that the fresh form drops, making Rust accept the
+            // concretely-safe program that upstream C++ rejects due to
+            // widening imprecision.
+            //
+            // Both forms are sound (bottom ⊆ anything); the residual
+            // form is strictly more precise. We match upstream here per
+            // the port's parity mandate; the underlying splitdbm
+            // bottom-short-circuit issue should be fixed upstream first.
+            //
+            // Trigger path: `EbpfDomain::widen` with `to_constants=true`
+            // calls `res.meet(&limits)` at the first widen iteration.
+            // If the widened state violates a constant limit (e.g. a
+            // register value widened outside `[i32::MIN, i32::MAX]`),
+            // the meet produces bottom. The "residual vs fresh" choice
+            // then propagates into subsequent widen iterations.
             return EbpfDomain {
-                state,
+                state: {
+                    let mut s = TypeToNumDomain::new();
+                    s.set_to_bottom();
+                    s
+                },
                 stack: ArrayDomain::new(self.stack.total_stack_size()),
             };
         }
