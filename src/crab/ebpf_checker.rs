@@ -172,15 +172,10 @@ impl<'a> EbpfChecker<'a> {
                 "Upper bound must be at most packet_size",
             )
         } else {
+            let max_packet = self.ctx.runtime.max_packet_size;
             self.require_value(
-                leq(
-                    ub,
-                    LinearExpression::from(crate::crab::ebpf_domain::MAX_PACKET_SIZE as i64),
-                ),
-                &format!(
-                    "Upper bound must be at most {}",
-                    crate::crab::ebpf_domain::MAX_PACKET_SIZE
-                ),
+                leq(ub, LinearExpression::from(max_packet as i64)),
+                &format!("Upper bound must be at most {}", max_packet),
             )
         }
     }

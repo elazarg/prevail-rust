@@ -27,16 +27,6 @@ use crate::spec::type_descriptors::{EbpfMapDescriptor, ProgramInfo};
 use crate::spec::vm_isa::*;
 
 // ============================================================================
-// Constants
-// ============================================================================
-
-/// Maximum packet size (capped for abstract domain precision).
-pub const MAX_PACKET_SIZE: i32 = 0xffff;
-
-/// Maximum pointer value (32-bit range minus packet size headroom).
-pub const PTR_MAX: i64 = i32::MAX as i64 - MAX_PACKET_SIZE as i64;
-
-// ============================================================================
 // VerificationError
 // ============================================================================
 
@@ -196,42 +186,8 @@ impl EbpfDomain {
     pub fn meet(&self, other: &EbpfDomain) -> EbpfDomain {
         let state = self.state.meet(&other.state);
         if state.is_bottom() {
-            // Match upstream C++: when state meet produces bottom, discard
-            // the post-meet state entirely and return a freshly-constructed
-            // bottom. The fresh `TypeToNumDomain::new(); set_to_bottom()`
-            // path leaves no registered variables or zone-domain graph
-            // edges in the `values` component.
-            //
-            // Keeping the post-meet `state` — even though it reports
-            // `is_bottom() == true` — is observationally different: it
-            // carries residual variables and graph edges that leak into
-            // subsequent `widen` calls (our splitdbm `widen` does not
-            // short-circuit on bottom inputs). Empirically (isolated by
-            // bisect on
-            // `tests/upstream/ebpf-samples/linux-selftests/loop3.o
-            //  ::raw_tracepoint/consume_skb::while_true`), the residual
-            // form preserves zone-domain correlations across widening
-            // that the fresh form drops, making Rust accept the
-            // concretely-safe program that upstream C++ rejects due to
-            // widening imprecision.
-            //
-            // Both forms are sound (bottom ⊆ anything); the residual
-            // form is strictly more precise. We match upstream here per
-            // the port's parity mandate; the underlying splitdbm
-            // bottom-short-circuit issue should be fixed upstream first.
-            //
-            // Trigger path: `EbpfDomain::widen` with `to_constants=true`
-            // calls `res.meet(&limits)` at the first widen iteration.
-            // If the widened state violates a constant limit (e.g. a
-            // register value widened outside `[i32::MIN, i32::MAX]`),
-            // the meet produces bottom. The "residual vs fresh" choice
-            // then propagates into subsequent widen iterations.
             return EbpfDomain {
-                state: {
-                    let mut s = TypeToNumDomain::new();
-                    s.set_to_bottom();
-                    s
-                },
+                state,
                 stack: ArrayDomain::new(self.stack.total_stack_size()),
             };
         }
@@ -248,6 +204,16 @@ impl EbpfDomain {
         ctx: &DomainContext,
         registry: &mut VariableRegistry,
     ) -> EbpfDomain {
+        // Short-circuit on bottom inputs (matches upstream). Avoids leaking
+        // bottom's residual structure into the widened result, which would
+        // wipe register-to-stack correlations and reject concretely-safe
+        // programs (e.g. loop3.o::while_true). See upstream commit 1ac2e17c.
+        if self.is_bottom() {
+            return other.clone();
+        }
+        if other.is_bottom() {
+            return self.clone();
+        }
         let res = EbpfDomain {
             state: self.state.widen(&other.state, registry),
             stack: self.stack.widen(&other.stack),
@@ -555,7 +521,7 @@ impl EbpfDomain {
         self.add_value_constraint(
             &lt(
                 registry.packet_size().into(),
-                (MAX_PACKET_SIZE as i64).into(),
+                (ctx.runtime.max_packet_size as i64).into(),
             ),
             registry,
         );
@@ -592,7 +558,10 @@ impl EbpfDomain {
             &leq((total_stack as i64).into(), r10.svalue.into()),
             registry,
         );
-        inv.add_value_constraint(&leq(r10.svalue.into(), PTR_MAX.into()), registry);
+        inv.add_value_constraint(
+            &leq(r10.svalue.into(), ctx.runtime.ptr_max().into()),
+            registry,
+        );
         inv.state
             .values
             .assign_i64(r10.stack_offset, total_stack as i64, registry);
@@ -602,7 +571,10 @@ impl EbpfDomain {
         if init_r1 {
             let r1 = reg_pack(&R1_ARG, registry);
             inv.add_value_constraint(&leq(1i64.into(), r1.svalue.into()), registry);
-            inv.add_value_constraint(&leq(r1.svalue.into(), PTR_MAX.into()), registry);
+            inv.add_value_constraint(
+                &leq(r1.svalue.into(), ctx.runtime.ptr_max().into()),
+                registry,
+            );
             inv.state.values.assign_i64(r1.ctx_offset, 0, registry);
             inv.state.assign_type_encoding(&R1_ARG, T_CTX, registry);
         }

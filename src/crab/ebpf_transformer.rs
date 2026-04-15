@@ -15,9 +15,7 @@ use crate::arith::number::Number;
 use crate::arith::variable::Variable;
 use crate::cfg::label::Label;
 use crate::crab::array_domain::{ArrayDomain, ArrayMap};
-use crate::crab::ebpf_domain::{
-    DomainContext, EbpfDomain, MAX_PACKET_SIZE, PTR_MAX, VerificationError,
-};
+use crate::crab::ebpf_domain::{DomainContext, EbpfDomain, VerificationError};
 use crate::crab::interval::Interval;
 use crate::crab::type_domain::reg_type;
 use crate::crab::type_encoding::*;
@@ -338,7 +336,7 @@ fn do_load_mapfd(
             .values
             .assign_i64(dst.map_fd, mapfd as i64, registry);
     }
-    assign_valid_ptr(dom, dst_reg, maybe_null, registry);
+    assign_valid_ptr(dom, dst_reg, maybe_null, ctx, registry);
     Ok(())
 }
 
@@ -368,7 +366,7 @@ fn do_load_map_address(
     dom.state
         .values
         .assign_i64(dst.shared_region_size, desc.value_size as i64, registry);
-    assign_valid_ptr(dom, dst_reg, false, registry);
+    assign_valid_ptr(dom, dst_reg, false, ctx, registry);
     Ok(())
 }
 
@@ -411,6 +409,7 @@ fn assign_valid_ptr(
     dom: &mut EbpfDomain,
     dst_reg: &Reg,
     maybe_null: bool,
+    ctx: &DomainContext,
     registry: &mut VariableRegistry,
 ) {
     let r = reg_pack(dst_reg, registry);
@@ -425,9 +424,10 @@ fn assign_valid_ptr(
             .values
             .add_constraint(&lt(0i64.into(), r.svalue.into()), registry);
     }
-    dom.state
-        .values
-        .add_constraint(&leq(r.svalue.into(), PTR_MAX.into()), registry);
+    dom.state.values.add_constraint(
+        &leq(r.svalue.into(), ctx.runtime.ptr_max().into()),
+        registry,
+    );
     dom.state.values.assign_var(r.uvalue, r.svalue, registry);
 }
 
@@ -605,7 +605,10 @@ fn do_load_ctx(
                 .assign_var(target.packet_offset, packet_size, registry);
             // EXPERIMENTAL: Explicit upper bound since packet_size is min_only.
             state.values.add_constraint(
-                &lt(target.packet_offset.into(), (MAX_PACKET_SIZE as i64).into()),
+                &lt(
+                    target.packet_offset.into(),
+                    (ctx.runtime.max_packet_size as i64).into(),
+                ),
                 registry,
             );
         }
@@ -629,9 +632,10 @@ fn do_load_ctx(
         state
             .values
             .add_constraint(&leq(4098i64.into(), target.svalue.into()), registry);
-        state
-            .values
-            .add_constraint(&leq(target.svalue.into(), PTR_MAX.into()), registry);
+        state.values.add_constraint(
+            &leq(target.svalue.into(), ctx.runtime.ptr_max().into()),
+            registry,
+        );
     }
 }
 
@@ -1754,7 +1758,7 @@ fn transform_call(
     // If region_size is known, constrain it; otherwise havoc to prevent stale values.
     let assign_shared_map_value =
         |dom: &mut EbpfDomain, region_size: Option<&Interval>, registry: &mut VariableRegistry| {
-            assign_valid_ptr(dom, &r0_reg, true, registry);
+            assign_valid_ptr(dom, &r0_reg, true, ctx, registry);
             dom.state
                 .values
                 .assign_i64(r0_pack.shared_offset, 0, registry);
@@ -1802,7 +1806,7 @@ fn transform_call(
             assign_shared_map_value(dom, None, registry);
         }
     } else if let Some(return_ptr_type) = call.return_ptr_type {
-        assign_valid_ptr(dom, &r0_reg, call.return_nullable, registry);
+        assign_valid_ptr(dom, &r0_reg, call.return_nullable, ctx, registry);
         dom.state
             .assign_type_encoding(&r0_reg, return_ptr_type, registry);
         if return_ptr_type == T_ALLOC_MEM

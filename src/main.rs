@@ -158,6 +158,11 @@ struct Cli {
           value_parser = clap::value_parser!(i32).range(1..=EbpfRuntimeConfig::MAX_CALL_STACK_FRAMES_LIMIT as i64))]
     max_call_stack_frames: i32,
 
+    /// Maximum packet size in bytes (default: 65535)
+    #[arg(long = "max-packet-size", default_value_t = EbpfRuntimeConfig::DEFAULT_MAX_PACKET_SIZE,
+          value_parser = clap::value_parser!(i32).range(1..=EbpfRuntimeConfig::MAX_PACKET_SIZE_LIMIT as i64))]
+    max_packet_size: i32,
+
     /// Include conformance groups
     #[arg(long = "include_groups", value_delimiter = ',',
           value_parser = PossibleValuesParser::new(GROUP_NAMES))]
@@ -252,6 +257,8 @@ fn print_help() {
     );
     println!("          --max-call-stack-frames INT:INT in [1 - 128] ");
     println!("                              Maximum number of nested function calls (default: 8) ");
+    println!("          --max-packet-size INT:INT in [1 - 1073741824] ");
+    println!("                              Maximum packet size in bytes (default: 65535) ");
     println!(
         "          --include_groups GROUPS:{{atomic32,atomic64,base32,base64,callx,divmul32,divmul64,packet}} "
     );
@@ -332,6 +339,7 @@ fn main() -> ExitCode {
             big_endian: false,
             subprogram_stack_size: cli.stack_size,
             max_call_stack_frames: cli.max_call_stack_frames,
+            max_packet_size: cli.max_packet_size,
         },
         verbosity_opts: VerbosityOptions {
             simplify,
