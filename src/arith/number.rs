@@ -22,15 +22,31 @@ use std::cmp::Ordering;
 pub struct Number(i128);
 
 impl Number {
-    pub fn is_zero(&self) -> bool {
+    pub const fn from_i64(n: i64) -> Self {
+        Number(n as i128)
+    }
+
+    pub const fn from_i32(n: i32) -> Self {
+        Number(n as i128)
+    }
+
+    pub const fn from_u64(n: u64) -> Self {
+        Number(n as i128)
+    }
+
+    pub const fn from_u32(n: u32) -> Self {
+        Number(n as i128)
+    }
+    
+    pub const fn is_zero(&self) -> bool {
         self.0 == 0
     }
 
-    pub fn is_negative(&self) -> bool {
+    pub const fn is_negative(&self) -> bool {
         self.0 < 0
     }
 
-    pub fn is_positive(&self) -> bool {
+    pub const fn is_positive(&self) -> bool {
         self.0 > 0
     }
 
@@ -42,7 +58,7 @@ impl Number {
         )
     }
 
-    pub fn sign_extend(&self, width: i32) -> Number {
+    pub const fn sign_extend(&self, width: i32) -> Number {
         if width == 0 {
             return *self;
         }
@@ -60,7 +76,7 @@ impl Number {
         }
     }
 
-    pub fn zero_extend(&self, width: i32) -> Number {
+    pub const fn zero_extend(&self, width: i32) -> Number {
         if width == 0 {
             return *self;
         }
@@ -198,7 +214,7 @@ impl Number {
 
     /// Truncate to a signed integer of the given bit width
     /// (mask to width bits, then reinterpret as signed).
-    pub fn truncate_to_signed(&self, width: u32) -> Number {
+    pub const fn truncate_to_signed(&self, width: u32) -> Number {
         debug_assert!(width <= 64, "truncate_to_signed: width > 64");
 
         let mask = (1i128 << width) - 1;
@@ -214,7 +230,7 @@ impl Number {
 
     /// Truncate to an unsigned integer of the given bit width
     /// (mask to width bits).
-    pub fn truncate_to_unsigned(&self, width: u32) -> Number {
+    pub const fn truncate_to_unsigned(&self, width: u32) -> Number {
         debug_assert!(width <= 64, "truncate_to_unsigned: width > 64");
 
         let mask = (1i128 << width) - 1;
@@ -228,25 +244,25 @@ impl Number {
 
 impl From<i64> for Number {
     fn from(v: i64) -> Self {
-        Number(v as i128)
+        Number::from_i64(v)
     }
 }
 
 impl From<i32> for Number {
     fn from(v: i32) -> Self {
-        Number(v as i128)
+        Number::from_i32(v)
     }
 }
 
 impl From<u64> for Number {
     fn from(v: u64) -> Self {
-        Number(v as i128)
+        Number::from_u64(v)
     }
 }
 
 impl From<u32> for Number {
     fn from(v: u32) -> Self {
-        Number(v as i128)
+        Number::from_u32(v)
     }
 }
 

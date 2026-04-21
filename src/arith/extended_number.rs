@@ -26,24 +26,32 @@ pub const PLUS_INFINITY: ExtendedNumber = PlusInfinity;
 pub const MINUS_INFINITY: ExtendedNumber = MinusInfinity;
 
 impl ExtendedNumber {
-    pub fn is_infinite(&self) -> bool {
+    pub const fn from_number(n: Number) -> Self {
+        Finite(n)
+    }
+    
+    pub const fn from_i64(n: i64) -> Self {
+        Self::from_number(Number::from_i64(n))
+    }
+    
+    pub const fn is_infinite(&self) -> bool {
         matches!(self, PlusInfinity | MinusInfinity)
     }
 
-    pub fn is_finite(&self) -> bool {
+    pub const fn is_finite(&self) -> bool {
         matches!(self, Finite(_))
     }
 
-    pub fn is_plus_infinity(&self) -> bool {
+    pub const fn is_plus_infinity(&self) -> bool {
         matches!(self, PlusInfinity)
     }
 
-    pub fn is_minus_infinity(&self) -> bool {
+    pub const fn is_minus_infinity(&self) -> bool {
         matches!(self, MinusInfinity)
     }
 
     /// Returns the inner `Number` if finite, `None` if infinite.
-    pub fn number(&self) -> Option<&Number> {
+    pub const fn number(&self) -> Option<&Number> {
         match self {
             Finite(n) => Some(n),
             _ => None,
@@ -134,7 +142,7 @@ fn to_unsigned(n: &Number) -> Number {
 
 impl From<Number> for ExtendedNumber {
     fn from(n: Number) -> Self {
-        Finite(n)
+        Self::from_number(n)
     }
 }
 

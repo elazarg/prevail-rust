@@ -10,7 +10,8 @@ use std::cmp::{max, min};
 use std::fmt;
 
 use crate::arith::extended_number::{ExtendedNumber, MINUS_INFINITY, PLUS_INFINITY};
-use crate::arith::number::Number;
+// Use number publicly since it's exposed in the public API.
+pub use crate::arith::number::Number;
 
 /// Bound is an alias for ExtendedNumber, matching C++.
 pub type Bound = ExtendedNumber;
@@ -35,35 +36,35 @@ impl Interval {
     }
 
     /// Create an interval from two i64 values.
-    pub fn from_i64_pair(lb: i64, ub: i64) -> Self {
+    pub const fn from_i64_pair(lb: i64, ub: i64) -> Self {
         if lb > ub {
             Self::bottom()
         } else {
             Interval {
-                lb: Bound::from(lb),
-                ub: Bound::from(ub),
+                lb: Bound::from_i64(lb),
+                ub: Bound::from_i64(ub),
             }
         }
     }
 
     /// Create a singleton interval [n, n].
-    pub fn from_number(n: Number) -> Self {
+    pub const fn from_number(n: Number) -> Self {
         let b = Bound::Finite(n);
         Interval { lb: b, ub: b }
     }
 
     /// Create a singleton interval from i64.
-    pub fn from_i64(n: i64) -> Self {
-        Self::from_number(Number::from(n))
+    pub const fn from_i64(n: i64) -> Self {
+        Self::from_number(Number::from_i64(n))
     }
 
     /// Create a singleton interval from u64.
-    pub fn from_u64(n: u64) -> Self {
-        Self::from_number(Number::from(n))
+    pub const fn from_u64(n: u64) -> Self {
+        Self::from_number(Number::from_u64(n))
     }
 
     /// Top interval: (-inf, +inf).
-    pub fn top() -> Self {
+    pub const fn top() -> Self {
         Interval {
             lb: MINUS_INFINITY,
             ub: PLUS_INFINITY,
@@ -71,27 +72,27 @@ impl Interval {
     }
 
     /// Bottom interval (empty set).
-    pub fn bottom() -> Self {
+    pub const fn bottom() -> Self {
         Interval {
-            lb: Bound::Finite(Number::from(0i64)),
-            ub: Bound::Finite(Number::from(-1i64)),
+            lb: Bound::Finite(Number::from_i64(0i64)),
+            ub: Bound::Finite(Number::from_i64(-1i64)),
         }
     }
 
-    pub fn lb(&self) -> &Bound {
+    pub const fn lb(&self) -> &Bound {
         &self.lb
     }
 
-    pub fn ub(&self) -> &Bound {
+    pub const fn ub(&self) -> &Bound {
         &self.ub
     }
 
-    pub fn pair(&self) -> (&Bound, &Bound) {
+    pub const fn pair(&self) -> (&Bound, &Bound) {
         (&self.lb, &self.ub)
     }
 
     /// Returns (lb, ub) as Number values. Panics if either bound is infinite.
-    pub fn pair_number(&self) -> (Number, Number) {
+    pub const fn pair_number(&self) -> (Number, Number) {
         (
             *self.lb.number().expect("lb is infinite"),
             *self.ub.number().expect("ub is infinite"),

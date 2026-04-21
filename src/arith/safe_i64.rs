@@ -15,7 +15,7 @@ use super::number::Number;
 pub struct SafeI64(i64);
 
 impl SafeI64 {
-    pub fn value(self) -> i64 {
+    pub const fn value(self) -> i64 {
         self.0
     }
 }
