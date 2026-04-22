@@ -475,6 +475,215 @@ impl AnalysisResult {
         .ok
     }
 
+    /// Compute a backward slice from an arbitrary label with a given seed relevance.
+    /// This is the general form used by both `compute_failure_slices` (for errors)
+    /// and external callers that want to trace from an arbitrary PC.
+    pub fn compute_slice_from_label(
+        &self,
+        prog: &dyn crate::fwd_analyzer::Program,
+        label: &Label,
+        seed_relevance: &RelevantState,
+        max_steps: usize,
+    ) -> FailureSlice {
+        let error = self
+            .invariants
+            .get(label)
+            .and_then(|p| p.error.clone())
+            .unwrap_or_else(|| VerificationError::new(String::new()));
+
+        let mut visited: BTreeMap<Label, RelevantState> = BTreeMap::new();
+        let mut conservative_visited: BTreeSet<Label> = BTreeSet::new();
+        let mut slice_labels: BTreeMap<Label, RelevantState> = BTreeMap::new();
+
+        // Worklist: (label, relevant_state_after_this_label)
+        let mut worklist: Vec<(Label, RelevantState)> = Vec::new();
+        worklist.push((label.clone(), seed_relevance.clone()));
+
+        // When the seed has no register/stack deps (e.g., BoundedLoopCount),
+        // perform a conservative backward walk so the slice still shows the
+        // loop structure and control flow leading to the failure.
+        let conservative_mode =
+            seed_relevance.registers.is_empty() && seed_relevance.stack_offsets.is_empty();
+
+        let mut steps: usize = 0;
+
+        // Hoist parent lookup for the target label; invariant across the loop.
+        let parents_of_target: Vec<Label> = prog.cfg().parents_of(label).iter().cloned().collect();
+
+        while let Some((current_label, relevant_after)) = worklist.pop() {
+            if steps >= max_steps {
+                break;
+            }
+
+            // Skip if nothing is relevant (unless conservative or target label)
+            if !conservative_mode
+                && current_label != *label
+                && relevant_after.registers.is_empty()
+                && relevant_after.stack_offsets.is_empty()
+            {
+                continue;
+            }
+
+            // Merge with existing relevance at this label (deduplication)
+            let existing = visited.entry(current_label.clone()).or_default();
+            let prev_size = existing.registers.len() + existing.stack_offsets.len();
+            existing
+                .registers
+                .extend(relevant_after.registers.iter().copied());
+            existing
+                .stack_offsets
+                .extend(relevant_after.stack_offsets.iter().copied());
+            let new_size = existing.registers.len() + existing.stack_offsets.len();
+
+            if new_size == prev_size {
+                if prev_size > 0 {
+                    continue;
+                }
+                // Empty relevance (conservative mode): skip if already visited
+                if !conservative_visited.insert(current_label.clone()) {
+                    continue;
+                }
+            }
+
+            // Compute what's relevant BEFORE this instruction using deps
+            let relevant_before;
+            if let Some(inv) = self.invariants.get(&current_label)
+                && let Some(deps) = &inv.deps
+            {
+                let mut rb = relevant_after.clone();
+
+                // Remove registers written by this instruction
+                for reg in &deps.regs_written {
+                    rb.registers.remove(reg);
+                }
+                // Remove clobbered registers
+                for reg in &deps.regs_clobbered {
+                    rb.registers.remove(reg);
+                }
+
+                // Determine if this instruction contributes
+                let mut instruction_contributes = false;
+                for reg in &deps.regs_written {
+                    if relevant_after.registers.contains(reg) {
+                        instruction_contributes = true;
+                        break;
+                    }
+                }
+                if !instruction_contributes {
+                    for offset in &deps.stack_written {
+                        if relevant_after.stack_offsets.contains(offset) {
+                            instruction_contributes = true;
+                            break;
+                        }
+                    }
+                }
+
+                // Jmp/Assume reading relevant registers
+                if !instruction_contributes {
+                    let ins = prog.instruction_at(&current_label);
+                    if matches!(ins, Instruction::Jmp(_) | Instruction::Assume(_)) {
+                        for reg in &deps.regs_read {
+                            if relevant_after.registers.contains(reg) {
+                                instruction_contributes = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                // Immediate Assume predecessor of the target label
+                if matches!(prog.instruction_at(&current_label), Instruction::Assume(_))
+                    && parents_of_target.contains(&current_label)
+                {
+                    instruction_contributes = true;
+                }
+
+                // At the target label itself
+                if current_label == *label {
+                    instruction_contributes = true;
+                }
+
+                // Conservative mode: include all
+                if conservative_mode {
+                    instruction_contributes = true;
+                }
+
+                if instruction_contributes {
+                    for reg in &deps.regs_read {
+                        rb.registers.insert(*reg);
+                    }
+                    for offset in &deps.stack_read {
+                        rb.stack_offsets.insert(*offset);
+                    }
+                }
+
+                // Remove stack locations written (unless also read)
+                for offset in &deps.stack_written {
+                    if !deps.stack_read.contains(offset) {
+                        rb.stack_offsets.remove(offset);
+                    }
+                }
+
+                if instruction_contributes {
+                    // Merge (not assign) — a label may be revisited from a
+                    // different successor with additional relevance.
+                    let entry = slice_labels.entry(current_label.clone()).or_default();
+                    entry.registers.extend(rb.registers.iter().copied());
+                    entry.stack_offsets.extend(rb.stack_offsets.iter().copied());
+                }
+
+                relevant_before = rb;
+            } else {
+                // No deps available: conservative fallback
+                relevant_before = relevant_after;
+                let entry = slice_labels.entry(current_label.clone()).or_default();
+                entry
+                    .registers
+                    .extend(relevant_before.registers.iter().copied());
+                entry
+                    .stack_offsets
+                    .extend(relevant_before.stack_offsets.iter().copied());
+            }
+
+            // Add predecessors to worklist
+            for parent in prog.cfg().parents_of(&current_label) {
+                worklist.push((parent.clone(), relevant_before.clone()));
+            }
+
+            steps += 1;
+        }
+
+        // Expand join points
+        let mut join_expansion: BTreeMap<Label, RelevantState> = BTreeMap::new();
+        for (v_label, v_relevance) in &visited {
+            let parents = prog.cfg().parents_of(v_label);
+            if parents.len() < 2 {
+                continue;
+            }
+            let has_slice_parent = parents.iter().any(|p| slice_labels.contains_key(p));
+            if !has_slice_parent {
+                continue;
+            }
+            if !slice_labels.contains_key(v_label) {
+                join_expansion.insert(v_label.clone(), v_relevance.clone());
+            }
+            for parent in parents {
+                if slice_labels.contains_key(parent) || join_expansion.contains_key(parent) {
+                    continue;
+                }
+                let rel = visited.get(parent).unwrap_or(v_relevance);
+                join_expansion.insert(parent.clone(), rel.clone());
+            }
+        }
+        slice_labels.extend(join_expansion);
+
+        FailureSlice {
+            failing_label: label.clone(),
+            error,
+            relevance: slice_labels,
+        }
+    }
+
     /// Compute failure slices for verification errors.
     /// Returns one slice per failure, each containing the set of impacted labels
     /// and per-label relevant state.
@@ -487,7 +696,6 @@ impl AnalysisResult {
     ) -> Vec<FailureSlice> {
         use crate::crab::ebpf_checker::ebpf_domain_check;
 
-        let max_steps = params.max_steps;
         let max_slices = params.max_slices;
         let mut slices = Vec::new();
 
@@ -502,13 +710,10 @@ impl AnalysisResult {
                 break;
             }
 
-            let mut slice = FailureSlice {
-                failing_label: label.clone(),
-                error: inv_pair.error.clone().unwrap(),
-                relevance: BTreeMap::new(),
-            };
-
             // Seed relevant registers from the actual failing assertion.
+            // Forward analysis stops at the first failing assertion, which may
+            // not be assertions[0]. Replay the checks against the pre-state to
+            // identify the failing assertion and seed relevance from it.
             let mut initial_relevance = RelevantState::default();
             let assertions = prog.assertions_at(label);
             let mut found_failing = false;
@@ -521,8 +726,11 @@ impl AnalysisResult {
                     break;
                 }
             }
-            // Fallback: aggregate all assertions.
-            if !found_failing || initial_relevance.registers.is_empty() {
+            // Fallback: aggregate all assertions only when the failing one was
+            // not identified. When it was found but has no register deps (e.g.,
+            // BoundedLoopCount), leave the seed empty so compute_slice_from_label
+            // enters conservative mode.
+            if !found_failing {
                 for assertion in assertions {
                     for reg in extract_assertion_registers(assertion) {
                         initial_relevance.registers.insert(reg);
@@ -530,181 +738,12 @@ impl AnalysisResult {
                 }
             }
 
-            let mut visited: BTreeMap<Label, RelevantState> = BTreeMap::new();
-            let mut conservative_visited: BTreeSet<Label> = BTreeSet::new();
-            let mut slice_labels: BTreeMap<Label, RelevantState> = BTreeMap::new();
-
-            // Worklist: (label, relevant_state_after_this_label)
-            let mut worklist: Vec<(Label, RelevantState)> = Vec::new();
-            worklist.push((label.clone(), initial_relevance.clone()));
-
-            let conservative_mode = initial_relevance.registers.is_empty()
-                && initial_relevance.stack_offsets.is_empty();
-
-            let mut steps: usize = 0;
-
-            let parents_of_fail: Vec<Label> =
-                prog.cfg().parents_of(label).iter().cloned().collect();
-
-            while let Some((current_label, relevant_after)) = worklist.pop() {
-                if steps >= max_steps {
-                    break;
-                }
-
-                // Skip if nothing is relevant (unless conservative or failing label)
-                if !conservative_mode
-                    && current_label != *label
-                    && relevant_after.registers.is_empty()
-                    && relevant_after.stack_offsets.is_empty()
-                {
-                    continue;
-                }
-
-                // Merge with existing relevance at this label (deduplication)
-                let existing = visited.entry(current_label.clone()).or_default();
-                let prev_size = existing.registers.len() + existing.stack_offsets.len();
-                existing
-                    .registers
-                    .extend(relevant_after.registers.iter().copied());
-                existing
-                    .stack_offsets
-                    .extend(relevant_after.stack_offsets.iter().copied());
-                let new_size = existing.registers.len() + existing.stack_offsets.len();
-
-                if new_size == prev_size {
-                    if prev_size > 0 {
-                        continue;
-                    }
-                    // Empty relevance (conservative mode): skip if already visited
-                    if !conservative_visited.insert(current_label.clone()) {
-                        continue;
-                    }
-                }
-
-                // Compute what's relevant BEFORE this instruction using deps
-                let relevant_before;
-                if let Some(inv) = self.invariants.get(&current_label)
-                    && let Some(deps) = &inv.deps
-                {
-                    let mut rb = relevant_after.clone();
-
-                    // Remove registers written by this instruction
-                    for reg in &deps.regs_written {
-                        rb.registers.remove(reg);
-                    }
-                    // Remove clobbered registers
-                    for reg in &deps.regs_clobbered {
-                        rb.registers.remove(reg);
-                    }
-
-                    // Determine if this instruction contributes
-                    let mut instruction_contributes = false;
-                    for reg in &deps.regs_written {
-                        if relevant_after.registers.contains(reg) {
-                            instruction_contributes = true;
-                            break;
-                        }
-                    }
-                    if !instruction_contributes {
-                        for offset in &deps.stack_written {
-                            if relevant_after.stack_offsets.contains(offset) {
-                                instruction_contributes = true;
-                                break;
-                            }
-                        }
-                    }
-
-                    // Jmp/Assume reading relevant registers
-                    if !instruction_contributes {
-                        let ins = prog.instruction_at(&current_label);
-                        if matches!(ins, Instruction::Jmp(_) | Instruction::Assume(_)) {
-                            for reg in &deps.regs_read {
-                                if relevant_after.registers.contains(reg) {
-                                    instruction_contributes = true;
-                                    break;
-                                }
-                            }
-                        }
-                    }
-
-                    // Immediate Assume predecessor of the failing label
-                    if matches!(prog.instruction_at(&current_label), Instruction::Assume(_))
-                        && parents_of_fail.contains(&current_label)
-                    {
-                        instruction_contributes = true;
-                    }
-
-                    // At the failing label itself
-                    if current_label == *label {
-                        instruction_contributes = true;
-                    }
-
-                    // Conservative mode: include all
-                    if conservative_mode {
-                        instruction_contributes = true;
-                    }
-
-                    if instruction_contributes {
-                        for reg in &deps.regs_read {
-                            rb.registers.insert(*reg);
-                        }
-                        for offset in &deps.stack_read {
-                            rb.stack_offsets.insert(*offset);
-                        }
-                    }
-
-                    // Remove stack locations written (unless also read)
-                    for offset in &deps.stack_written {
-                        if !deps.stack_read.contains(offset) {
-                            rb.stack_offsets.remove(offset);
-                        }
-                    }
-
-                    if instruction_contributes {
-                        slice_labels.insert(current_label.clone(), rb.clone());
-                    }
-
-                    relevant_before = rb;
-                } else {
-                    // No deps available: conservative fallback
-                    relevant_before = relevant_after;
-                    slice_labels.insert(current_label.clone(), relevant_before.clone());
-                }
-
-                // Add predecessors to worklist
-                for parent in prog.cfg().parents_of(&current_label) {
-                    worklist.push((parent.clone(), relevant_before.clone()));
-                }
-
-                steps += 1;
-            }
-
-            // Expand join points
-            let mut join_expansion: BTreeMap<Label, RelevantState> = BTreeMap::new();
-            for (v_label, v_relevance) in &visited {
-                let parents = prog.cfg().parents_of(v_label);
-                if parents.len() < 2 {
-                    continue;
-                }
-                let has_slice_parent = parents.iter().any(|p| slice_labels.contains_key(p));
-                if !has_slice_parent {
-                    continue;
-                }
-                if !slice_labels.contains_key(v_label) {
-                    join_expansion.insert(v_label.clone(), v_relevance.clone());
-                }
-                for parent in parents {
-                    if slice_labels.contains_key(parent) || join_expansion.contains_key(parent) {
-                        continue;
-                    }
-                    let rel = visited.get(parent).unwrap_or(v_relevance);
-                    join_expansion.insert(parent.clone(), rel.clone());
-                }
-            }
-            slice_labels.extend(join_expansion);
-
-            slice.relevance = slice_labels;
-            slices.push(slice);
+            slices.push(self.compute_slice_from_label(
+                prog,
+                label,
+                &initial_relevance,
+                params.max_steps,
+            ));
         }
 
         slices
