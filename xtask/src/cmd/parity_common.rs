@@ -97,14 +97,17 @@ fn auto_build_cpp(upstream_dir: &Path, upstream_hash: &str, cpp_bin: &Path) -> R
         return Ok(());
     }
 
-    // Binary exists but stamp is missing/stale — assume it's good, update stamp.
-    if cpp_bin.exists() {
-        eprintln!("info: C++ binary exists; updating build stamp to {upstream_hash}");
+    // Binary exists but has no stamp — assume a fresh manual build, adopt it.
+    // This covers first-time runs after an out-of-band build.
+    if cpp_bin.exists() && previous.is_none() {
+        eprintln!("info: C++ binary exists without stamp; adopting as {upstream_hash}");
         write_build_stamp(&build_dir, &stamp_path, upstream_hash)?;
         return Ok(());
     }
 
-    // Binary missing and stamp is stale — clean before rebuilding.
+    // Stamp exists but doesn't match: the binary is stale (or missing).
+    // Clean before rebuilding so we don't trust a binary built from a
+    // different upstream revision.
     if !stamp_matches {
         for dir in [&upstream_dir.join("bin"), &build_dir] {
             if dir.exists() {
