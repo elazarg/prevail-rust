@@ -1881,6 +1881,7 @@ mod tests {
             max_entries: 1024,
             inner_map_fd: -1,
             name: String::new(),
+            is_inner_map_template: false,
         };
         assert_eq!(
             format!("{desc}"),

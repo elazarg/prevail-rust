@@ -21,6 +21,8 @@ pub struct EbpfMapDescriptor {
     pub inner_map_fd: i32,
     /// Map name from ELF (empty if not available).
     pub name: String,
+    /// True if this descriptor is referenced as an inner map template.
+    pub is_inner_map_template: bool,
 }
 
 /// The type of values stored in a map.

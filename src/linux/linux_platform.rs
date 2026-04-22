@@ -635,6 +635,7 @@ fn parse_maps_section_linux(
             // resolve_inner_map_references pass.
             inner_map_fd: s.inner_map_idx as i32,
             name: String::new(),
+            is_inner_map_template: false,
         });
     }
 }

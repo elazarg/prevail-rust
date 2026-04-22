@@ -391,6 +391,7 @@ fn add_global_variable_maps(
             max_entries: 1,
             inner_map_fd: DEFAULT_MAP_FD,
             name: sec_name,
+            is_inner_map_template: false,
         });
         global.variable_section_indices.insert(sec_idx);
     }
@@ -627,6 +628,7 @@ fn parse_btf_section(elf: &ElfFile<'_, Elf64>) -> Result<ElfGlobalData, Unmarsha
                 map_def.inner_map_type_id as i32
             },
             name,
+            is_inner_map_template: false,
         });
     }
 
@@ -677,30 +679,42 @@ fn extract_global_data(
     // BTF-defined maps take priority when both .BTF and .maps sections exist.
     let has_btf = elf.section_by_name(".BTF").is_some();
     let has_btf_maps = has_btf && elf.section_by_name(".maps").is_some();
-    if has_btf_maps {
+    let mut global = if has_btf_maps {
         // Try BTF parsing first; fall back to section-based maps if BTF can't be decoded.
         match parse_btf_section(elf) {
-            Ok(global) => return Ok(global),
+            Ok(global) => global,
             Err(e) => {
                 eprintln!("BTF map parsing failed, falling back to section-based maps: {e}");
+                parse_map_sections(elf, symbols, sym_count, platform, options)?
             }
         }
-        return parse_map_sections(elf, symbols, sym_count, platform, options);
+    } else if elf.sections().any(|s| s.name().is_ok_and(is_map_section)) {
+        // Fall back to legacy "maps" / "maps/*" / ".maps" / ".maps/*" sections.
+        parse_map_sections(elf, symbols, sym_count, platform, options)?
+    } else if has_btf {
+        // BTF without .maps section (e.g. only global variables).
+        parse_btf_section(elf)?
+    } else {
+        // No maps or BTF, but might still have global variables
+        create_global_variable_maps(elf)
+    };
+
+    // Mark descriptors that serve only as inner map templates. At runtime the
+    // actual inner map can be any map with matching structure, not necessarily
+    // the template defined in the ELF.
+    let template_fds: Vec<i32> = global
+        .map_descriptors
+        .iter()
+        .filter(|d| d.inner_map_fd != DEFAULT_MAP_FD)
+        .map(|d| d.inner_map_fd)
+        .collect();
+    for desc in &mut global.map_descriptors {
+        if template_fds.contains(&desc.original_fd) {
+            desc.is_inner_map_template = true;
+        }
     }
 
-    // Fall back to legacy "maps" / "maps/*" / ".maps" / ".maps/*" sections.
-    let has_legacy_maps = elf.sections().any(|s| s.name().is_ok_and(is_map_section));
-    if has_legacy_maps {
-        return parse_map_sections(elf, symbols, sym_count, platform, options);
-    }
-
-    // BTF without .maps section (e.g. only global variables).
-    if has_btf {
-        return parse_btf_section(elf);
-    }
-
-    // No maps or BTF, but might still have global variables
-    Ok(create_global_variable_maps(elf))
+    Ok(global)
 }
 
 // ── Symbol helpers ──────────────────────────────────────────────────

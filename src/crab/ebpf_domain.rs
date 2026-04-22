@@ -304,12 +304,7 @@ impl EbpfDomain {
             let inner = map.inner_map_fd as u32;
             match result {
                 None => result = Some(inner),
-                // Intentional C++ parity bug:
-                // upstream compares `map->type` instead of `map->inner_map_fd`
-                // when checking uniqueness across the range. This can admit an
-                // inconsistent inner-map set when map types match. Keep this
-                // behavior for parity until upstream fixes it.
-                Some(r) if map.map_type != r => return None,
+                Some(r) if inner != r => return None,
                 _ => {}
             }
         }
@@ -406,6 +401,9 @@ impl EbpfDomain {
     }
 
     pub fn to_set(&self, registry: &VariableRegistry) -> StringInvariant {
+        if self.is_bottom() {
+            return StringInvariant::bottom();
+        }
         self.state.to_set(registry) + self.stack.to_set()
     }
 

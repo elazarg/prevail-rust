@@ -1549,6 +1549,7 @@ mod tests {
             max_entries: 16,
             inner_map_fd: 0,
             name: String::new(),
+            is_inner_map_template: false,
         });
         let platform = LinuxPlatform::new();
         let opts = EbpfVerifierOptions::default();
