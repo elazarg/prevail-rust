@@ -3,7 +3,6 @@
 
 //! Shared type descriptors, mirroring `src/spec/type_descriptors.hpp`.
 
-use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::ebpf_base::EbpfContextDescriptor;
@@ -93,9 +92,15 @@ pub struct ProgramInfo {
     pub line_info: BTreeMap<usize, BtfLineInfo>,
     pub supported_conformance_groups: u32,
     /// Valid top-level instruction labels usable as callback entries via PTR_TO_FUNC.
-    pub callback_target_labels: RefCell<BTreeSet<i32>>,
+    ///
+    /// Populated by `Program::from_sequence` (CFG build). Upstream C++ mutates
+    /// this through a const reference; in Rust we pass `ProgramInfo` by `&mut`
+    /// at the construction site so the mutation is visible to the borrow checker.
+    pub callback_target_labels: BTreeSet<i32>,
     /// Subset of callback labels that can reach a top-level Exit.
-    pub callback_targets_with_exit: RefCell<BTreeSet<i32>>,
+    ///
+    /// Populated alongside `callback_target_labels`; see that field.
+    pub callback_targets_with_exit: BTreeSet<i32>,
     /// Per-program instruction indices rewritten from builtin relocations.
     pub builtin_call_offsets: BTreeSet<usize>,
 }
@@ -109,8 +114,8 @@ impl Default for ProgramInfo {
             line_info: BTreeMap::new(),
             // Unknown context defaults to permissive mask.
             supported_conformance_groups: u32::MAX,
-            callback_target_labels: RefCell::new(BTreeSet::new()),
-            callback_targets_with_exit: RefCell::new(BTreeSet::new()),
+            callback_target_labels: BTreeSet::new(),
+            callback_targets_with_exit: BTreeSet::new(),
             builtin_call_offsets: BTreeSet::new(),
         }
     }

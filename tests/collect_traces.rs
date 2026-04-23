@@ -35,33 +35,32 @@ fn analyze_section(path: &str, section: &str, opts: &EbpfVerifierOptions) -> Vec
         path.to_string()
     };
     let mut platform = LinuxPlatform::new();
-    let raw_progs =
+    let mut raw_progs =
         match elf_loader::read_elf_file(&resolved_path, section, "", opts, &mut platform) {
             Ok(progs) => progs,
             Err(_) => return Vec::new(),
         };
 
     let mut all_traces = Vec::new();
-    for raw_prog in &raw_progs {
+    for raw_prog in &mut raw_progs {
         platform.map_descriptors = raw_prog.info.map_descriptors.clone();
         platform.set_program_type(&raw_prog.info.program_type);
 
-        let info = &raw_prog.info;
-        let insts = &raw_prog.prog;
-
         let mut notes = Vec::new();
-        let inst_seq = match unmarshal::unmarshal(insts, &mut notes, info, &platform, opts) {
-            Ok(seq) => seq,
-            Err(_) => continue,
-        };
+        let inst_seq =
+            match unmarshal::unmarshal(&raw_prog.prog, &mut notes, &raw_prog.info, &platform, opts)
+            {
+                Ok(seq) => seq,
+                Err(_) => continue,
+            };
 
-        let program = match Program::from_sequence(&inst_seq, info, &platform, opts) {
+        let program = match Program::from_sequence(&inst_seq, &mut raw_prog.info, &platform, opts) {
             Ok(p) => p,
             Err(_) => continue,
         };
 
         let ctx = DomainContext {
-            program_info: info,
+            program_info: &raw_prog.info,
             runtime: &opts.runtime,
             options: opts,
             platform: &platform,

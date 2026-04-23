@@ -20,7 +20,7 @@ fn analyze_bpf_lb_dlb_l4_from_netdev() -> (prevail::result::AnalysisResult, Vari
     };
 
     let mut platform = LinuxPlatform::new();
-    let raw_progs = elf_loader::read_elf_file(
+    let mut raw_progs = elf_loader::read_elf_file(
         &path_config::upstream_ebpf_sample_path("bpf_cilium_test/bpf_lb-DLB_L4.o"),
         "from-netdev",
         "",
@@ -29,7 +29,7 @@ fn analyze_bpf_lb_dlb_l4_from_netdev() -> (prevail::result::AnalysisResult, Vari
     )
     .expect("failed to load bpf_lb-DLB_L4.o/from-netdev");
     assert_eq!(raw_progs.len(), 1);
-    let raw_prog = &raw_progs[0];
+    let raw_prog = &mut raw_progs[0];
 
     platform.map_descriptors = raw_prog.info.map_descriptors.clone();
     platform.set_program_type(&raw_prog.info.program_type);
@@ -38,7 +38,7 @@ fn analyze_bpf_lb_dlb_l4_from_netdev() -> (prevail::result::AnalysisResult, Vari
     let inst_seq =
         unmarshal::unmarshal(&raw_prog.prog, &mut notes, &raw_prog.info, &platform, &opts)
             .expect("failed to unmarshal");
-    let program = Program::from_sequence(&inst_seq, &raw_prog.info, &platform, &opts)
+    let program = Program::from_sequence(&inst_seq, &mut raw_prog.info, &platform, &opts)
         .expect("failed CFG build");
 
     let ctx = DomainContext {

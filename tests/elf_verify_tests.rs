@@ -31,30 +31,28 @@ fn verify_section(path: &str, section: &str, opts: &EbpfVerifierOptions) -> bool
         path.to_string()
     };
     let mut platform = LinuxPlatform::new();
-    let raw_progs = elf_loader::read_elf_file(&resolved_path, section, "", opts, &mut platform)
+    let mut raw_progs = elf_loader::read_elf_file(&resolved_path, section, "", opts, &mut platform)
         .expect("Failed to load ELF");
     assert_eq!(
         raw_progs.len(),
         1,
         "Expected 1 program in section '{section}'"
     );
-    let raw_prog = &raw_progs[0];
+    let raw_prog = &mut raw_progs[0];
 
     platform.map_descriptors = raw_prog.info.map_descriptors.clone();
     platform.set_program_type(&raw_prog.info.program_type);
 
-    let info = &raw_prog.info;
-    let insts = &raw_prog.prog;
-
     let mut notes = Vec::new();
-    let inst_seq = unmarshal::unmarshal(insts, &mut notes, info, &platform, opts)
-        .expect("Failed to unmarshal");
+    let inst_seq =
+        unmarshal::unmarshal(&raw_prog.prog, &mut notes, &raw_prog.info, &platform, opts)
+            .expect("Failed to unmarshal");
 
-    let program =
-        Program::from_sequence(&inst_seq, info, &platform, opts).expect("Failed to build CFG");
+    let program = Program::from_sequence(&inst_seq, &mut raw_prog.info, &platform, opts)
+        .expect("Failed to build CFG");
 
     let ctx = DomainContext {
-        program_info: info,
+        program_info: &raw_prog.info,
         runtime: &opts.runtime,
         options: opts,
         platform: &platform,
@@ -78,7 +76,7 @@ fn verify_program(
         path.to_string()
     };
     let mut platform = LinuxPlatform::new();
-    let raw_progs = elf_loader::read_elf_file(&resolved_path, section, "", opts, &mut platform)
+    let mut raw_progs = elf_loader::read_elf_file(&resolved_path, section, "", opts, &mut platform)
         .expect("Failed to load ELF");
     assert_eq!(
         raw_progs.len(),
@@ -86,23 +84,21 @@ fn verify_program(
         "Expected {expected_count} programs in section '{section}'"
     );
 
-    for raw_prog in &raw_progs {
+    for raw_prog in &mut raw_progs {
         if expected_count == 1 || raw_prog.function_name == program_name {
             platform.map_descriptors = raw_prog.info.map_descriptors.clone();
             platform.set_program_type(&raw_prog.info.program_type);
 
-            let info = &raw_prog.info;
-            let insts = &raw_prog.prog;
-
             let mut notes = Vec::new();
-            let inst_seq = unmarshal::unmarshal(insts, &mut notes, info, &platform, opts)
-                .expect("Failed to unmarshal");
+            let inst_seq =
+                unmarshal::unmarshal(&raw_prog.prog, &mut notes, &raw_prog.info, &platform, opts)
+                    .expect("Failed to unmarshal");
 
-            let program = Program::from_sequence(&inst_seq, info, &platform, opts)
+            let program = Program::from_sequence(&inst_seq, &mut raw_prog.info, &platform, opts)
                 .expect("Failed to build CFG");
 
             let ctx = DomainContext {
-                program_info: info,
+                program_info: &raw_prog.info,
                 runtime: &opts.runtime,
                 options: opts,
                 platform: &platform,
@@ -124,7 +120,7 @@ fn try_verify_section(path: &str, section: &str, opts: &EbpfVerifierOptions) -> 
         path.to_string()
     };
     let mut platform = LinuxPlatform::new();
-    let raw_progs =
+    let mut raw_progs =
         match elf_loader::read_elf_file(&resolved_path, section, "", opts, &mut platform) {
             Ok(p) => p,
             Err(_) => return false,
@@ -132,27 +128,25 @@ fn try_verify_section(path: &str, section: &str, opts: &EbpfVerifierOptions) -> 
     if raw_progs.len() != 1 {
         return false;
     }
-    let raw_prog = &raw_progs[0];
+    let raw_prog = &mut raw_progs[0];
 
     platform.map_descriptors = raw_prog.info.map_descriptors.clone();
     platform.set_program_type(&raw_prog.info.program_type);
 
-    let info = &raw_prog.info;
-    let insts = &raw_prog.prog;
-
     let mut notes = Vec::new();
-    let inst_seq = match unmarshal::unmarshal(insts, &mut notes, info, &platform, opts) {
-        Ok(s) => s,
-        Err(_) => return false,
-    };
+    let inst_seq =
+        match unmarshal::unmarshal(&raw_prog.prog, &mut notes, &raw_prog.info, &platform, opts) {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
 
-    let program = match Program::from_sequence(&inst_seq, info, &platform, opts) {
+    let program = match Program::from_sequence(&inst_seq, &mut raw_prog.info, &platform, opts) {
         Ok(p) => p,
         Err(_) => return false,
     };
 
     let ctx = DomainContext {
-        program_info: info,
+        program_info: &raw_prog.info,
         runtime: &opts.runtime,
         options: opts,
         platform: &platform,
@@ -176,7 +170,7 @@ fn try_verify_program(
         path.to_string()
     };
     let mut platform = LinuxPlatform::new();
-    let raw_progs =
+    let mut raw_progs =
         match elf_loader::read_elf_file(&resolved_path, section, "", opts, &mut platform) {
             Ok(p) => p,
             Err(_) => return false,
@@ -185,27 +179,31 @@ fn try_verify_program(
         return false;
     }
 
-    for raw_prog in &raw_progs {
+    for raw_prog in &mut raw_progs {
         if expected_count == 1 || raw_prog.function_name == program_name {
             platform.map_descriptors = raw_prog.info.map_descriptors.clone();
             platform.set_program_type(&raw_prog.info.program_type);
 
-            let info = &raw_prog.info;
-            let insts = &raw_prog.prog;
-
             let mut notes = Vec::new();
-            let inst_seq = match unmarshal::unmarshal(insts, &mut notes, info, &platform, opts) {
+            let inst_seq = match unmarshal::unmarshal(
+                &raw_prog.prog,
+                &mut notes,
+                &raw_prog.info,
+                &platform,
+                opts,
+            ) {
                 Ok(s) => s,
                 Err(_) => return false,
             };
 
-            let program = match Program::from_sequence(&inst_seq, info, &platform, opts) {
-                Ok(p) => p,
-                Err(_) => return false,
-            };
+            let program =
+                match Program::from_sequence(&inst_seq, &mut raw_prog.info, &platform, opts) {
+                    Ok(p) => p,
+                    Err(_) => return false,
+                };
 
             let ctx = DomainContext {
-                program_info: info,
+                program_info: &raw_prog.info,
                 runtime: &opts.runtime,
                 options: opts,
                 platform: &platform,
@@ -311,7 +309,7 @@ fn fail_load_elf_badsymsize() {
 fn fail_unmarshal_wronghelper() {
     let mut platform = LinuxPlatform::new();
     let opts = default_opts();
-    let raw_progs = elf_loader::read_elf_file(
+    let mut raw_progs = elf_loader::read_elf_file(
         &path_config::upstream_ebpf_sample_path("build/wronghelper.o"),
         "xdp",
         "",
@@ -320,12 +318,12 @@ fn fail_unmarshal_wronghelper() {
     )
     .expect("Failed to load ELF");
     assert_eq!(raw_progs.len(), 1);
-    let raw_prog = &raw_progs[0];
+    let raw_prog = &mut raw_progs[0];
     let mut notes = Vec::new();
     let inst_seq =
         unmarshal::unmarshal(&raw_prog.prog, &mut notes, &raw_prog.info, &platform, &opts)
             .expect("Expected unmarshal success for wronghelper.o");
-    match Program::from_sequence(&inst_seq, &raw_prog.info, &platform, &opts) {
+    match Program::from_sequence(&inst_seq, &mut raw_prog.info, &platform, &opts) {
         Ok(_) => panic!("Expected CFG validation rejection for wronghelper.o"),
         Err(err) => {
             assert!(
@@ -2739,7 +2737,7 @@ fn fail_cilium_examples_uretprobe_bpf_x86_bpfel() {
     // C++ marks this as [!shouldfail] — known imprecision
     let mut platform = LinuxPlatform::new();
     let opts = default_opts();
-    let raw_progs = elf_loader::read_elf_file(
+    let mut raw_progs = elf_loader::read_elf_file(
         &path_config::upstream_ebpf_sample_path("cilium-examples/uretprobe_bpf_x86_bpfel.o"),
         "uretprobe/bash_readline",
         "",
@@ -2748,18 +2746,23 @@ fn fail_cilium_examples_uretprobe_bpf_x86_bpfel() {
     )
     .expect("Failed to load ELF");
     assert_eq!(raw_progs.len(), 1);
-    let raw_prog = &raw_progs[0];
+    let raw_prog = &mut raw_progs[0];
     let mut platform2 = LinuxPlatform::new();
     platform2.map_descriptors = raw_prog.info.map_descriptors.clone();
     platform2.set_program_type(&raw_prog.info.program_type);
-    let info = &raw_prog.info;
-    let insts = &raw_prog.prog;
     let mut notes = Vec::new();
-    let inst_seq =
-        unmarshal::unmarshal(insts, &mut notes, info, &platform2, &opts).expect("unmarshal");
-    let program = Program::from_sequence(&inst_seq, info, &platform2, &opts).expect("build CFG");
+    let inst_seq = unmarshal::unmarshal(
+        &raw_prog.prog,
+        &mut notes,
+        &raw_prog.info,
+        &platform2,
+        &opts,
+    )
+    .expect("unmarshal");
+    let program = Program::from_sequence(&inst_seq, &mut raw_prog.info, &platform2, &opts)
+        .expect("build CFG");
     let ctx = DomainContext {
-        program_info: info,
+        program_info: &raw_prog.info,
         runtime: &opts.runtime,
         options: &opts,
         platform: &platform2,

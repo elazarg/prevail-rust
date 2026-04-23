@@ -38,7 +38,7 @@ fn verify(asm: &str, options: &EbpfVerifierOptions) -> Result<(), String> {
         section_prefixes: vec![],
         is_privileged: false,
     };
-    let info = ProgramInfo {
+    let mut info = ProgramInfo {
         program_type,
         ..ProgramInfo::default()
     };
@@ -48,7 +48,7 @@ fn verify(asm: &str, options: &EbpfVerifierOptions) -> Result<(), String> {
     let inst_seq = unmarshal::unmarshal(&instructions, &mut notes, &info, &platform, options)
         .map_err(|e| format!("unmarshal error: {e}"))?;
 
-    let program = Program::from_sequence(&inst_seq, &info, &platform, options)
+    let program = Program::from_sequence(&inst_seq, &mut info, &platform, options)
         .map_err(|e| format!("cfg build error: {e}"))?;
 
     let ctx = DomainContext {

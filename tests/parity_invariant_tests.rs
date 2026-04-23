@@ -33,28 +33,26 @@ fn verbose_output(elf_relative: &str, section: &str) -> String {
         ..Default::default()
     };
     let mut platform = LinuxPlatform::new();
-    let raw_progs = elf_loader::read_elf_file(&path, section, "", &opts, &mut platform)
+    let mut raw_progs = elf_loader::read_elf_file(&path, section, "", &opts, &mut platform)
         .unwrap_or_else(|e| panic!("Failed to load {path} section={section}: {e}"));
     assert!(
         !raw_progs.is_empty(),
         "No programs in {elf_relative} section={section}"
     );
-    let raw_prog = &raw_progs[0];
+    let raw_prog = &mut raw_progs[0];
 
     platform.map_descriptors = raw_prog.info.map_descriptors.clone();
     platform.set_program_type(&raw_prog.info.program_type);
 
-    let info = &raw_prog.info;
-    let insts = &raw_prog.prog;
-
     let mut notes = Vec::new();
-    let inst_seq = unmarshal::unmarshal(insts, &mut notes, info, &platform, &opts)
-        .expect("Failed to unmarshal");
-    let program =
-        Program::from_sequence(&inst_seq, info, &platform, &opts).expect("Failed to build CFG");
+    let inst_seq =
+        unmarshal::unmarshal(&raw_prog.prog, &mut notes, &raw_prog.info, &platform, &opts)
+            .expect("Failed to unmarshal");
+    let program = Program::from_sequence(&inst_seq, &mut raw_prog.info, &platform, &opts)
+        .expect("Failed to build CFG");
 
     let ctx = DomainContext {
-        program_info: info,
+        program_info: &raw_prog.info,
         runtime: &opts.runtime,
         options: &opts,
         platform: &platform,
@@ -63,7 +61,7 @@ fn verbose_output(elf_relative: &str, section: &str) -> String {
     let result = fwd_analyzer::analyze(&program, &ctx, &mut registry);
 
     let mut buf = Vec::new();
-    printing::print_invariants(&mut buf, &program, info, true, &result, &registry)
+    printing::print_invariants(&mut buf, &program, &raw_prog.info, true, &result, &registry)
         .expect("print_invariants failed");
     String::from_utf8(buf).expect("non-UTF-8 invariant output")
 }

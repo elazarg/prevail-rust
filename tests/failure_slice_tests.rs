@@ -72,15 +72,15 @@ fn analyze_with_deps(filename: &str, section: &str) -> AnalysisState {
     platform.map_descriptors = raw_prog.info.map_descriptors.clone();
     platform.set_program_type(&raw_prog.info.program_type);
 
-    let info = raw_prog.info.clone();
+    let mut info = raw_prog.info.clone();
     let insts = &raw_prog.prog;
 
     let mut notes = Vec::new();
     let inst_seq = unmarshal::unmarshal(insts, &mut notes, &info, &platform, &opts)
         .expect("Failed to unmarshal");
 
-    let program =
-        Program::from_sequence(&inst_seq, &info, &platform, &opts).expect("Failed to build CFG");
+    let program = Program::from_sequence(&inst_seq, &mut info, &platform, &opts)
+        .expect("Failed to build CFG");
 
     let ctx = DomainContext {
         program_info: &info,

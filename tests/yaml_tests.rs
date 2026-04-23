@@ -466,7 +466,7 @@ fn run_test_case(test_case: &TestCase, platform: &TestPlatform) -> Option<Failur
         section_prefixes: vec![],
         is_privileged: false,
     };
-    let info = ProgramInfo {
+    let mut info = ProgramInfo {
         program_type,
         map_descriptors: vec![EbpfMapDescriptor {
             key_size: 4,
@@ -481,33 +481,34 @@ fn run_test_case(test_case: &TestCase, platform: &TestPlatform) -> Option<Failur
     let options = test_case.options;
 
     // Build program from instruction sequence
-    let prog = match Program::from_sequence(&test_case.instruction_seq, &info, platform, &options) {
-        Ok(p) => p,
-        Err(e) => {
-            // InvalidControlFlow — check if expected
-            let actual_messages: BTreeSet<String> = [e.to_string()].into_iter().collect();
-            if test_case.expected_post == StringInvariant::top()
-                && actual_messages == test_case.expected_messages
-            {
-                return None;
+    let prog =
+        match Program::from_sequence(&test_case.instruction_seq, &mut info, platform, &options) {
+            Ok(p) => p,
+            Err(e) => {
+                // InvalidControlFlow — check if expected
+                let actual_messages: BTreeSet<String> = [e.to_string()].into_iter().collect();
+                if test_case.expected_post == StringInvariant::top()
+                    && actual_messages == test_case.expected_messages
+                {
+                    return None;
+                }
+                return Some(Failure {
+                    unexpected_props: BTreeSet::new(),
+                    unseen_props: BTreeSet::new(),
+                    unexpected_msgs: actual_messages
+                        .difference(&test_case.expected_messages)
+                        .cloned()
+                        .collect(),
+                    unseen_msgs: test_case
+                        .expected_messages
+                        .difference(&actual_messages)
+                        .cloned()
+                        .collect(),
+                    actual_props: BTreeSet::new(),
+                    expected_props: BTreeSet::new(),
+                });
             }
-            return Some(Failure {
-                unexpected_props: BTreeSet::new(),
-                unseen_props: BTreeSet::new(),
-                unexpected_msgs: actual_messages
-                    .difference(&test_case.expected_messages)
-                    .cloned()
-                    .collect(),
-                unseen_msgs: test_case
-                    .expected_messages
-                    .difference(&actual_messages)
-                    .cloned()
-                    .collect(),
-                actual_props: BTreeSet::new(),
-                expected_props: BTreeSet::new(),
-            });
-        }
-    };
+        };
 
     let ctx = DomainContext {
         program_info: &info,

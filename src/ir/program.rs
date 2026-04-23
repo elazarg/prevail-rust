@@ -347,7 +347,7 @@ impl Program {
     /// each label with its assertions.
     pub fn from_sequence(
         inst_seq: &InstructionSeq,
-        info: &ProgramInfo,
+        info: &mut ProgramInfo,
         platform: &dyn EbpfPlatform,
         options: &EbpfVerifierOptions,
     ) -> Result<Program, InvalidControlFlow> {
@@ -418,8 +418,8 @@ impl Program {
                 callback_targets_with_exit.insert(*label_num);
             }
         }
-        *info.callback_target_labels.borrow_mut() = callback_target_labels;
-        *info.callback_targets_with_exit.borrow_mut() = callback_targets_with_exit;
+        info.callback_target_labels = callback_target_labels;
+        info.callback_targets_with_exit = callback_targets_with_exit;
 
         // Detect loops using Weak Topological Ordering (WTO) and insert counters
         // at loop entry points. WTO provides a hierarchical decomposition of the
@@ -1259,12 +1259,12 @@ mod tests {
     #[test]
     fn test_program_from_sequence_simple() {
         let seq = create_simple_seq();
-        let info = ProgramInfo::default();
+        let mut info = ProgramInfo::default();
         let platform = LinuxPlatform::new();
         let opts = EbpfVerifierOptions::default();
 
         let prog =
-            Program::from_sequence(&seq, &info, &platform, &opts).expect("Result should be Ok");
+            Program::from_sequence(&seq, &mut info, &platform, &opts).expect("Result should be Ok");
 
         // Check CFG structure
         // Entry -> 0 -> 1 -> Exit
@@ -1295,11 +1295,11 @@ mod tests {
     #[test]
     fn test_program_empty_error() {
         let seq: InstructionSeq = Vec::new();
-        let info = ProgramInfo::default();
+        let mut info = ProgramInfo::default();
         let platform = LinuxPlatform::new();
         let opts = EbpfVerifierOptions::default();
 
-        let res = Program::from_sequence(&seq, &info, &platform, &opts);
+        let res = Program::from_sequence(&seq, &mut info, &platform, &opts);
         assert!(res.is_err());
     }
 
@@ -1327,11 +1327,11 @@ mod tests {
             ),
         ];
 
-        let info = ProgramInfo::default();
+        let mut info = ProgramInfo::default();
         let platform = LinuxPlatform::new();
         let opts = EbpfVerifierOptions::default();
         let program =
-            Program::from_sequence(&seq, &info, &platform, &opts).expect("expected valid CFG");
+            Program::from_sequence(&seq, &mut info, &platform, &opts).expect("expected valid CFG");
 
         let lowered = program.instruction_at(&Label::new(0));
         match lowered {
@@ -1375,11 +1375,11 @@ mod tests {
             ),
         ];
 
-        let info = ProgramInfo::default();
+        let mut info = ProgramInfo::default();
         let platform = LinuxPlatform::new();
         let opts = EbpfVerifierOptions::default();
         let program =
-            Program::from_sequence(&seq, &info, &platform, &opts).expect("expected valid CFG");
+            Program::from_sequence(&seq, &mut info, &platform, &opts).expect("expected valid CFG");
 
         match program.instruction_at(&Label::new(0)) {
             Instruction::LoadPseudo(pseudo) => {
@@ -1422,18 +1422,16 @@ mod tests {
             ),
         ];
 
-        let info = ProgramInfo::default();
+        let mut info = ProgramInfo::default();
         let platform = LinuxPlatform::new();
         let opts = EbpfVerifierOptions::default();
-        Program::from_sequence(&seq, &info, &platform, &opts).expect("expected valid CFG");
+        Program::from_sequence(&seq, &mut info, &platform, &opts).expect("expected valid CFG");
 
-        let callback_targets = info.callback_target_labels.borrow();
-        assert!(callback_targets.contains(&0));
-        assert!(callback_targets.contains(&2));
+        assert!(info.callback_target_labels.contains(&0));
+        assert!(info.callback_target_labels.contains(&2));
 
-        let callback_targets_with_exit = info.callback_targets_with_exit.borrow();
-        assert!(callback_targets_with_exit.contains(&0));
-        assert!(!callback_targets_with_exit.contains(&2));
+        assert!(info.callback_targets_with_exit.contains(&0));
+        assert!(!info.callback_targets_with_exit.contains(&2));
     }
 
     #[test]
@@ -1468,10 +1466,10 @@ mod tests {
             None,
         ));
 
-        let info = ProgramInfo::default();
+        let mut info = ProgramInfo::default();
         let platform = LinuxPlatform::new();
         let opts = EbpfVerifierOptions::default();
-        let err = match Program::from_sequence(&seq, &info, &platform, &opts) {
+        let err = match Program::from_sequence(&seq, &mut info, &platform, &opts) {
             Ok(_) => panic!("must reject >33 tail calls"),
             Err(err) => err,
         };
@@ -1510,10 +1508,11 @@ mod tests {
             None,
         ));
 
-        let info = ProgramInfo::default();
+        let mut info = ProgramInfo::default();
         let platform = LinuxPlatform::new();
         let opts = EbpfVerifierOptions::default();
-        Program::from_sequence(&seq, &info, &platform, &opts).expect("depth 33 should be accepted");
+        Program::from_sequence(&seq, &mut info, &platform, &opts)
+            .expect("depth 33 should be accepted");
     }
 
     #[test]
@@ -1553,7 +1552,7 @@ mod tests {
         });
         let platform = LinuxPlatform::new();
         let opts = EbpfVerifierOptions::default();
-        let program = Program::from_sequence(&seq, &info, &platform, &opts)
+        let program = Program::from_sequence(&seq, &mut info, &platform, &opts)
             .expect("map-by-index must resolve");
         assert_eq!(
             program.instruction_at(&Label::new(0)),
@@ -1584,10 +1583,10 @@ mod tests {
             ),
         ];
 
-        let info = ProgramInfo::default();
+        let mut info = ProgramInfo::default();
         let platform = LinuxPlatform::new();
         let opts = EbpfVerifierOptions::default();
-        let err = match Program::from_sequence(&seq, &info, &platform, &opts) {
+        let err = match Program::from_sequence(&seq, &mut info, &platform, &opts) {
             Ok(_) => panic!("unknown kfunc id must be rejected"),
             Err(err) => err,
         };
@@ -1618,11 +1617,11 @@ mod tests {
             ),
         ];
 
-        let info = ProgramInfo::default();
+        let mut info = ProgramInfo::default();
         let platform = LinuxPlatform::new();
         let opts = EbpfVerifierOptions::default();
-        let program =
-            Program::from_sequence(&seq, &info, &platform, &opts).expect("known kfunc must pass");
+        let program = Program::from_sequence(&seq, &mut info, &platform, &opts)
+            .expect("known kfunc must pass");
         match program.instruction_at(&Label::new(0)) {
             Instruction::Call(call) => {
                 assert_eq!(call.kind, CallKind::Kfunc);
@@ -1653,10 +1652,10 @@ mod tests {
             None,
         ));
 
-        let info = ProgramInfo::default();
+        let mut info = ProgramInfo::default();
         let platform = LinuxPlatform::new();
         let opts = EbpfVerifierOptions::default();
-        Program::from_sequence(&seq, &info, &platform, &opts)
+        Program::from_sequence(&seq, &mut info, &platform, &opts)
             .expect("kfunc id overlap must not trigger tail-call-depth rejection");
     }
 }

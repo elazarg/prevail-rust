@@ -260,7 +260,7 @@ fn run_conformance_test_case(data_file: &Path) -> ConformanceTestResult {
         is_privileged: false,
     };
 
-    let info = ProgramInfo {
+    let mut info = ProgramInfo {
         program_type,
         ..ProgramInfo::default()
     };
@@ -297,7 +297,7 @@ fn run_conformance_test_case(data_file: &Path) -> ConformanceTestResult {
     };
 
     // Build program
-    let prog = match Program::from_sequence(&inst_seq, &info, &platform, &options) {
+    let prog = match Program::from_sequence(&inst_seq, &mut info, &platform, &options) {
         Ok(p) => p,
         Err(_) => {
             return ConformanceTestResult {

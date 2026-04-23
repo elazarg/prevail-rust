@@ -410,7 +410,7 @@ fn main() -> ExitCode {
     };
 
     let mut load_error: Option<String> = None;
-    let raw_progs = if !cli.list {
+    let mut raw_progs = if !cli.list {
         match elf.get_programs(
             section.as_deref().unwrap_or(""),
             function.as_deref().unwrap_or(""),
@@ -463,21 +463,19 @@ fn main() -> ExitCode {
         };
     }
 
-    // Use the single program.
-    let raw_prog = &raw_progs[0];
+    // Use the single program. Mutable borrow so Program::from_sequence (which
+    // writes callback-target sets back into ProgramInfo) can take `&mut info`.
+    let raw_prog = &mut raw_progs[0];
 
     // Copy map descriptors and context descriptor to the platform for analysis.
     rust_platform.map_descriptors = raw_prog.info.map_descriptors.clone();
     rust_platform.set_program_type(&raw_prog.info.program_type);
 
-    let info = &raw_prog.info;
-    let insts = &raw_prog.prog;
-
     // ── Linux domain: run kernel verifier ────────────────────────────────
 
     if cli.domain == "linux" {
-        let raw_bytes = serialize_inst_bytes(insts);
-        let prog_type = info.program_type.platform_specific_data as u32;
+        let raw_bytes = serialize_inst_bytes(&raw_prog.prog);
+        let prog_type = raw_prog.info.program_type.platform_specific_data as u32;
         let (res, seconds) = linux_verifier::bpf_verify_program(
             prog_type,
             &raw_bytes,
@@ -496,7 +494,13 @@ fn main() -> ExitCode {
 
     // Unmarshal instructions using the Rust unmarshaller.
     let mut notes = Vec::new();
-    let inst_seq = match unmarshal::unmarshal(insts, &mut notes, info, &rust_platform, &opts) {
+    let inst_seq = match unmarshal::unmarshal(
+        &raw_prog.prog,
+        &mut notes,
+        &raw_prog.info,
+        &rust_platform,
+        &opts,
+    ) {
         Ok(seq) => seq,
         Err(e) => {
             let msg = e.to_string();
@@ -532,14 +536,18 @@ fn main() -> ExitCode {
         }
     }
 
-    // Build CFG in Rust.
-    let program = match Program::from_sequence(&inst_seq, info, &rust_platform, &opts) {
+    // Build CFG in Rust. `from_sequence` mutates `raw_prog.info` to stash
+    // callback-target sets; rebind `info` read-only once that returns.
+    let program = match Program::from_sequence(&inst_seq, &mut raw_prog.info, &rust_platform, &opts)
+    {
         Ok(p) => p,
         Err(e) => {
             eprintln!("error: {}", e);
             return ExitCode::from(1);
         }
     };
+    let info = &raw_prog.info;
+    let insts = &raw_prog.prog;
 
     // Optional DOT output (before --cfg early exit, matching C++ order).
     if let Some(ref dot_file) = cli.dot_file
