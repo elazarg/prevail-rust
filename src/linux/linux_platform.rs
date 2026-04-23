@@ -568,15 +568,20 @@ fn get_map_type_linux(platform_specific_type: u32) -> EbpfMapType {
 
 // ── Stubs for functions defined elsewhere ──────────────────────────
 
-/// Stub for `create_map_crab` (defined in `elf_loader.cpp` / future Rust
-/// verifier module).  Allocates a mock map fd based on map equivalence keys.
+/// Assign a synthetic mock FD for a map, deduplicating against already-parsed
+/// descriptors. Pure function of the accumulated descriptor table — no external
+/// state needed.
 ///
-fn create_map_crab(
+/// Mirrors upstream `allocate_mock_map_fd` in `linux_platform.cpp` (introduced
+/// in 4465b3f0). Note that numbering is `map_descriptors.len() + 1`, which can
+/// be sparse when earlier descriptors shared an equivalence key and reused an
+/// existing FD.
+fn allocate_mock_map_fd(
+    map_descriptors: &[EbpfMapDescriptor],
     map_type: &EbpfMapType,
     key_size: u32,
     value_size: u32,
     max_entries: u32,
-    cache: &mut std::collections::BTreeMap<EquivalenceKey, i32>,
 ) -> i32 {
     let equiv = EquivalenceKey {
         value_type: map_type.value_type,
@@ -584,8 +589,24 @@ fn create_map_crab(
         value_size,
         max_entries: if map_type.is_array { max_entries } else { 0 },
     };
-    let next_fd = cache.len() as i32 + 1; // +1 so 0 is the null FD
-    *cache.entry(equiv).or_insert(next_fd)
+    for desc in map_descriptors {
+        let existing_type = get_map_type_linux(desc.map_type);
+        let existing = EquivalenceKey {
+            value_type: existing_type.value_type,
+            key_size: desc.key_size,
+            value_size: desc.value_size,
+            max_entries: if existing_type.is_array {
+                desc.max_entries
+            } else {
+                0
+            },
+        };
+        if existing == equiv {
+            return desc.original_fd;
+        }
+    }
+    // +1 so 0 is the null FD
+    map_descriptors.len() as i32 + 1
 }
 
 /// Stub for `find_map_descriptor` (defined in `elf_loader.cpp`).
@@ -603,9 +624,7 @@ fn parse_maps_section_linux(
     record_size: usize,
     count: usize,
     options: &EbpfVerifierOptions,
-    cache: &mut std::collections::BTreeMap<EquivalenceKey, i32>,
 ) {
-    // Copy map definitions from the ELF section into a local list.
     let mut mapdefs = Vec::with_capacity(count);
     for i in 0..count {
         let src_offset = i * record_size;
@@ -613,18 +632,18 @@ fn parse_maps_section_linux(
         mapdefs.push(def);
     }
 
-    // Add map definitions into the map_descriptors list.
     for s in &mapdefs {
-        let map_type = get_map_type_linux(s.map_type);
-        let original_fd = create_map_linux(
-            s.map_type,
-            s.key_size,
-            s.value_size,
-            s.max_entries,
-            options,
-            &map_type,
-            cache,
-        );
+        let original_fd = if options.mock_map_fds {
+            allocate_mock_map_fd(
+                map_descriptors,
+                &get_map_type_linux(s.map_type),
+                s.key_size,
+                s.value_size,
+                s.max_entries,
+            )
+        } else {
+            create_map_linux(s.map_type, s.key_size, s.value_size, s.max_entries)
+        };
         map_descriptors.push(EbpfMapDescriptor {
             original_fd,
             map_type: s.map_type,
@@ -683,24 +702,11 @@ fn resolve_inner_map_references_linux(
 
 // ── create_map_linux ───────────────────────────────────────────────
 
-/// Try to allocate a Linux map.
+/// Try to allocate a Linux map via the real `bpf()` syscall.
 ///
-/// When `options.mock_map_fds` is set, uses `create_map_crab` to assign a mock
-/// fd.  On actual Linux with real fds, this would issue a `bpf()` syscall, but
-/// we only support the mock path in the Rust port for now.
-fn create_map_linux(
-    map_type_id: u32,
-    key_size: u32,
-    value_size: u32,
-    max_entries: u32,
-    options: &EbpfVerifierOptions,
-    map_type: &EbpfMapType,
-    cache: &mut std::collections::BTreeMap<EquivalenceKey, i32>,
-) -> i32 {
-    if options.mock_map_fds {
-        return create_map_crab(map_type, key_size, value_size, max_entries, cache);
-    }
-
+/// Only invoked when `options.mock_map_fds` is false. The caller handles the
+/// mock path via `allocate_mock_map_fd`.
+fn create_map_linux(map_type_id: u32, key_size: u32, value_size: u32, _max_entries: u32) -> i32 {
     #[cfg(target_os = "linux")]
     {
         const BPF_MAP_TYPE_HASH: u32 = 1;
@@ -726,14 +732,7 @@ fn create_map_linux(
 
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (
-            map_type_id,
-            key_size,
-            value_size,
-            max_entries,
-            map_type,
-            cache,
-        );
+        let _ = (map_type_id, key_size, value_size);
         panic!("cannot create a Linux map on a non-Linux platform");
     }
 }
@@ -769,8 +768,6 @@ fn get_map_descriptor_linux(
 pub struct LinuxPlatform {
     /// Map descriptors accumulated during ELF loading.
     pub map_descriptors: Vec<EbpfMapDescriptor>,
-    /// Cache for mock map fd allocation (equivalence key -> fd).
-    pub cache: std::collections::BTreeMap<EquivalenceKey, i32>,
     /// Conformance groups bitmask.
     pub conformance_groups: u32,
     /// Context descriptor for the current program type.
@@ -784,7 +781,6 @@ impl LinuxPlatform {
     pub fn new() -> Self {
         Self {
             map_descriptors: Vec::new(),
-            cache: std::collections::BTreeMap::new(),
             conformance_groups: conformance_groups::DEFAULT_GROUPS | conformance_groups::PACKET,
             context_descriptor: None,
             program_type_name: None,
@@ -1029,14 +1025,7 @@ impl EbpfPlatform for LinuxPlatform {
         count: usize,
         options: &EbpfVerifierOptions,
     ) {
-        parse_maps_section_linux(
-            descriptors,
-            data,
-            record_size,
-            count,
-            options,
-            &mut self.cache,
-        );
+        parse_maps_section_linux(descriptors, data, record_size, count, options);
     }
 
     fn resolve_inner_map_references(

@@ -86,11 +86,27 @@ pub struct InstructionDeps {
 
 /// State that is relevant at a specific program point.
 /// Used to filter what parts of the invariant to display.
+///
+/// Mirrors upstream C++ `RelevantState`. The `total_stack_size` field carries
+/// the configured stack size so `is_relevant_constraint` can translate
+/// R10-relative offsets (e.g. -184) into the absolute `s[...]` names that
+/// appear in invariant strings (e.g. `s[3912...3919]` when total=4096).
+///
+/// Upstream quirk preserved: `compute_slice_from_label` only sets
+/// `total_stack_size` on `initial_relevance`; every per-label entry stored
+/// in `slice_labels` / `visited` is default-constructed (total=0) and the
+/// merges only touch `registers` / `stack_offsets`. This effectively
+/// disables stack-range filtering for constraints that don't mention a
+/// relevant register. We match the same behavior so filtered slice output
+/// lines up with upstream.
 #[derive(Clone, Debug, Default)]
 pub struct RelevantState {
     pub registers: BTreeSet<Reg>,
     /// Relative stack offsets from R10 (e.g. -8).
     pub stack_offsets: BTreeSet<i64>,
+    /// Configured total stack size, used to convert relative stack offsets
+    /// to absolute `s[...]` names when filtering constraint strings.
+    pub total_stack_size: i32,
 }
 
 impl RelevantState {
@@ -102,7 +118,11 @@ impl RelevantState {
     /// - `s[(\d+)...(\d+)]` — stack range references
     /// - `s[(\d+)].` — single stack slot references
     /// - `packet_size`, `meta_offset` — always relevant
-    pub fn is_relevant_constraint(&self, constraint: &str, total_stack_size: i32) -> bool {
+    ///
+    /// Stack offset conversion uses `self.total_stack_size`; see the struct
+    /// doc for the upstream quirk where that field is 0 on most entries.
+    pub fn is_relevant_constraint(&self, constraint: &str) -> bool {
+        let total_stack_size = self.total_stack_size;
         let mut parsed_any_pattern = false;
         let bytes = constraint.as_bytes();
 
@@ -714,7 +734,15 @@ impl AnalysisResult {
             // Forward analysis stops at the first failing assertion, which may
             // not be assertions[0]. Replay the checks against the pre-state to
             // identify the failing assertion and seed relevance from it.
-            let mut initial_relevance = RelevantState::default();
+            //
+            // Matches upstream: the initial seed is the only RelevantState with
+            // a non-zero total_stack_size. Per-label entries produced inside
+            // compute_slice_from_label intentionally keep total_stack_size=0
+            // (see RelevantState doc for the upstream quirk).
+            let mut initial_relevance = RelevantState {
+                total_stack_size: ctx.runtime.total_stack_size(),
+                ..Default::default()
+            };
             let assertions = prog.assertions_at(label);
             let mut found_failing = false;
             for assertion in assertions {
@@ -1121,9 +1149,10 @@ mod tests {
         let state = RelevantState {
             registers: BTreeSet::from([Reg { v: 1 }]),
             stack_offsets: BTreeSet::new(),
+            total_stack_size: 4096,
         };
-        assert!(state.is_relevant_constraint("r1.type=number", 4096));
-        assert!(!state.is_relevant_constraint("r2.type=number", 4096));
+        assert!(state.is_relevant_constraint("r1.type=number"));
+        assert!(!state.is_relevant_constraint("r2.type=number"));
     }
 
     #[test]
@@ -1131,21 +1160,28 @@ mod tests {
         let state = RelevantState {
             registers: BTreeSet::from([Reg { v: 8 }]),
             stack_offsets: BTreeSet::new(),
+            total_stack_size: 4096,
         };
-        assert!(state.is_relevant_constraint("r1.svalue-r8.svalue<=-100", 4096));
+        assert!(state.is_relevant_constraint("r1.svalue-r8.svalue<=-100"));
     }
 
     #[test]
     fn relevant_constraint_packet() {
-        let state = RelevantState::default();
-        assert!(state.is_relevant_constraint("packet_size=54", 4096));
-        assert!(state.is_relevant_constraint("meta_offset=[-4098, 0]", 4096));
+        let state = RelevantState {
+            total_stack_size: 4096,
+            ..Default::default()
+        };
+        assert!(state.is_relevant_constraint("packet_size=54"));
+        assert!(state.is_relevant_constraint("meta_offset=[-4098, 0]"));
     }
 
     #[test]
     fn relevant_constraint_unparseable() {
-        let state = RelevantState::default();
+        let state = RelevantState {
+            total_stack_size: 4096,
+            ..Default::default()
+        };
         // Unparseable → conservative → true
-        assert!(state.is_relevant_constraint("something_unknown", 4096));
+        assert!(state.is_relevant_constraint("something_unknown"));
     }
 }

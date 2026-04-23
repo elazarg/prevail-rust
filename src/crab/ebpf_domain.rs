@@ -430,6 +430,11 @@ impl EbpfDomain {
     /// Write this domain filtered to only show constraints involving relevant
     /// registers/stack. When `filter` is `None`, delegates to `write_to`.
     /// Uses the same multi-line bracket format as `write_to`.
+    ///
+    /// The filter's own `total_stack_size` is used to translate relative stack
+    /// offsets to absolute `s[...]` names. See `RelevantState` doc for the
+    /// upstream quirk where most per-label filter entries have that field
+    /// set to 0, effectively disabling stack-only filtering.
     pub fn write_to_filtered(
         &self,
         f: &mut dyn std::fmt::Write,
@@ -443,17 +448,16 @@ impl EbpfDomain {
             return write!(f, "_|_");
         }
 
-        let total = self.stack.total_stack_size();
         let type_set = self
             .state
             .types
             .to_set(registry)
-            .retain(|c| filter.is_relevant_constraint(c, total));
+            .retain(|c| filter.is_relevant_constraint(c));
         let value_set = self
             .state
             .values
             .to_set(registry)
-            .retain(|c| filter.is_relevant_constraint(c, total));
+            .retain(|c| filter.is_relevant_constraint(c));
 
         // Stack uses its own Display format (Numbers -> {...}), not StringInvariant.
         write!(f, "{type_set}{value_set}\nStack: {}", self.stack)
