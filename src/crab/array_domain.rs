@@ -304,6 +304,42 @@ fn as_numbytes_range(index: &Interval, width: &Interval, total: i32) -> (i32, i3
     clamped_bounds(&index.join(&(index + width)), total)
 }
 
+// ============================================================================
+// StackAccess — shared machinery bundle
+// ============================================================================
+
+/// Parameters that recur in every `ArrayDomain` load/store/havoc/split
+/// method: the variable registry, the endianness flag, and the per-program
+/// offset-map cache.
+///
+/// Bundling them into one context argument turns ~8-positional signatures
+/// into ~5-positional ones and removes a class of argument-ordering hazards
+/// (the original code suppressed `clippy::too_many_arguments` on seven
+/// methods). The struct holds `&mut` borrows, so callers reborrow fields as
+/// usual when the same `StackAccess` is reused across calls.
+pub struct StackAccess<'a> {
+    pub registry: &'a mut VariableRegistry,
+    pub big_endian: bool,
+    pub array_map: &'a mut ArrayMap,
+}
+
+impl<'a> StackAccess<'a> {
+    /// Construct a `StackAccess`. Calling this at the call site lets Rust
+    /// automatically reborrow `registry` and `array_map` for the duration of
+    /// the call, so the original `&mut` bindings remain usable afterwards.
+    pub fn new(
+        registry: &'a mut VariableRegistry,
+        big_endian: bool,
+        array_map: &'a mut ArrayMap,
+    ) -> Self {
+        StackAccess {
+            registry,
+            big_endian,
+            array_map,
+        }
+    }
+}
+
 /// Find overlapping cells and remove them from the offset map.
 /// Returns (offset, size) if both index and width are constant singletons.
 fn find_and_remove_overlap(
@@ -373,21 +409,18 @@ fn kill_and_find_type_var(
     res
 }
 
-#[expect(clippy::too_many_arguments)]
 fn split_and_find_var(
     array_domain: &ArrayDomain,
     inv: &mut NumAbsDomain,
     kind: DataKind,
     idx: &Interval,
     elem_size: &Interval,
-    registry: &mut VariableRegistry,
-    big_endian: bool,
-    array_map: &mut ArrayMap,
+    access: &mut StackAccess<'_>,
 ) -> Option<(u64, u32)> {
     if kind == DataKind::Svalues || kind == DataKind::Uvalues {
-        array_domain.split_number_var(inv, kind, idx, elem_size, registry, big_endian, array_map);
+        array_domain.split_number_var(inv, kind, idx, elem_size, access);
     }
-    kill_and_find_var(inv, kind, idx, elem_size, registry, array_map)
+    kill_and_find_var(inv, kind, idx, elem_size, access.registry, access.array_map)
 }
 
 // ============================================================================
@@ -532,16 +565,13 @@ impl ArrayDomain {
     // ========================================================================
 
     /// Load a value from the stack at a given index with a given width.
-    #[expect(clippy::too_many_arguments)]
     pub fn load(
         &self,
         inv: &NumAbsDomain,
         kind: DataKind,
         i: &Interval,
         width: i32,
-        registry: &mut VariableRegistry,
-        big_endian: bool,
-        array_map: &mut ArrayMap,
+        access: &mut StackAccess<'_>,
     ) -> Option<LinearExpression> {
         if let Some(n) = i.singleton() {
             let k = n.to_i64()?;
@@ -549,17 +579,25 @@ impl ArrayDomain {
             let size = width as u32;
 
             // Try to find an exact cell match.
-            let existing = array_map
+            let existing = access
+                .array_map
                 .get(&kind)
                 .and_then(|om| om.get_cell(offset, size));
             if let Some(cell) = existing {
-                return Some(LinearExpression::from(cell.get_scalar(kind, registry)));
+                return Some(LinearExpression::from(
+                    cell.get_scalar(kind, access.registry),
+                ));
             }
 
             // For svalues/uvalues, try to reconstruct from overlapping cells.
             if (kind == DataKind::Svalues || kind == DataKind::Uvalues)
-                && let Some(value) =
-                    self.reconstruct_value_from_bytes(inv, offset, size, registry, big_endian)
+                && let Some(value) = self.reconstruct_value_from_bytes(
+                    inv,
+                    offset,
+                    size,
+                    access.registry,
+                    access.big_endian,
+                )
             {
                 // Byte reconstruction produces an unsigned value.
                 // Don't sign-extend: C++ Number stores it as a positive BigInt.
@@ -567,12 +605,12 @@ impl ArrayDomain {
             }
 
             // Check for overlapping cells.
-            let om = array_map.entry_or_default(kind);
+            let om = access.array_map.entry_or_default(kind);
             let overlap_cells = om.get_overlap_cells(offset, size);
             if overlap_cells.is_empty() {
                 // Create a new cell.
                 let c = om.mk_cell(offset, size);
-                return Some(LinearExpression::from(c.get_scalar(kind, registry)));
+                return Some(LinearExpression::from(c.get_scalar(kind, access.registry)));
             }
             // Overlapping cells exist — imprecise, return None.
             None
@@ -729,22 +767,17 @@ impl ArrayDomain {
     // ========================================================================
 
     /// Store a value to the stack.
-    #[expect(clippy::too_many_arguments)]
     pub fn store(
         &mut self,
         inv: &mut NumAbsDomain,
         kind: DataKind,
         idx: &Interval,
         elem_size: &Interval,
-        registry: &mut VariableRegistry,
-        big_endian: bool,
-        array_map: &mut ArrayMap,
+        access: &mut StackAccess<'_>,
     ) -> Option<Variable> {
-        if let Some((offset, size)) = split_and_find_var(
-            self, inv, kind, idx, elem_size, registry, big_endian, array_map,
-        ) {
-            let om = array_map.entry_or_default(kind);
-            let v = om.mk_cell(offset, size).get_scalar(kind, registry);
+        if let Some((offset, size)) = split_and_find_var(self, inv, kind, idx, elem_size, access) {
+            let om = access.array_map.entry_or_default(kind);
+            let v = om.mk_cell(offset, size).get_scalar(kind, access.registry);
             Some(v)
         } else {
             None
@@ -752,26 +785,25 @@ impl ArrayDomain {
     }
 
     /// Store a type to the stack.
-    #[expect(clippy::too_many_arguments)]
     pub fn store_type(
         &mut self,
         inv: &mut TypeDomain,
         idx: &Interval,
         width: &Interval,
         is_num: bool,
-        registry: &mut VariableRegistry,
-        _big_endian: bool,
-        array_map: &mut ArrayMap,
+        access: &mut StackAccess<'_>,
     ) -> Option<Variable> {
         let kind = DataKind::Types;
-        if let Some((offset, size)) = kill_and_find_type_var(inv, idx, width, registry, array_map) {
+        if let Some((offset, size)) =
+            kill_and_find_type_var(inv, idx, width, access.registry, access.array_map)
+        {
             if is_num {
                 self.num_bytes.reset(offset as usize, size as i32);
             } else {
                 self.num_bytes.havoc(offset as usize, size as i32);
             }
-            let om = array_map.entry_or_default(kind);
-            let v = om.mk_cell(offset, size).get_scalar(kind, registry);
+            let om = access.array_map.entry_or_default(kind);
+            let v = om.mk_cell(offset, size).get_scalar(kind, access.registry);
             Some(v)
         } else {
             // Weak update: cannot perform a strong update because the index is
@@ -789,20 +821,15 @@ impl ArrayDomain {
     }
 
     /// Havoc a range on the stack.
-    #[expect(clippy::too_many_arguments)]
     pub fn havoc(
         &mut self,
         inv: &mut NumAbsDomain,
         kind: DataKind,
         idx: &Interval,
         elem_size: &Interval,
-        registry: &mut VariableRegistry,
-        big_endian: bool,
-        array_map: &mut ArrayMap,
+        access: &mut StackAccess<'_>,
     ) {
-        split_and_find_var(
-            self, inv, kind, idx, elem_size, registry, big_endian, array_map,
-        );
+        split_and_find_var(self, inv, kind, idx, elem_size, access);
     }
 
     /// Havoc types in a range on the stack.
@@ -811,12 +838,10 @@ impl ArrayDomain {
         inv: &mut TypeDomain,
         idx: &Interval,
         elem_size: &Interval,
-        registry: &mut VariableRegistry,
-        _big_endian: bool,
-        array_map: &mut ArrayMap,
+        access: &mut StackAccess<'_>,
     ) {
         if let Some((offset, size)) =
-            kill_and_find_type_var(inv, idx, elem_size, registry, array_map)
+            kill_and_find_type_var(inv, idx, elem_size, access.registry, access.array_map)
         {
             self.num_bytes.havoc(offset as usize, size as i32);
         }
@@ -848,56 +873,34 @@ impl ArrayDomain {
     // ========================================================================
 
     /// Split a cell that overlaps with the given range.
-    #[expect(clippy::too_many_arguments)]
     fn split_cell(
         &self,
         inv: &mut NumAbsDomain,
         kind: DataKind,
         cell_start_index: i32,
         len: u32,
-        registry: &mut VariableRegistry,
-        big_endian: bool,
-        array_map: &mut ArrayMap,
+        access: &mut StackAccess<'_>,
     ) {
         assert!(kind == DataKind::Svalues || kind == DataKind::Uvalues);
         let idx = Interval::from_i64(cell_start_index as i64);
-        let svalue = self.load(
-            inv,
-            DataKind::Svalues,
-            &idx,
-            len as i32,
-            registry,
-            big_endian,
-            array_map,
-        );
-        let uvalue = self.load(
-            inv,
-            DataKind::Uvalues,
-            &idx,
-            len as i32,
-            registry,
-            big_endian,
-            array_map,
-        );
-        let om = array_map.entry_or_default(kind);
+        let svalue = self.load(inv, DataKind::Svalues, &idx, len as i32, access);
+        let uvalue = self.load(inv, DataKind::Uvalues, &idx, len as i32, access);
+        let om = access.array_map.entry_or_default(kind);
         let new_cell = om.mk_cell(cell_start_index as u64, len);
-        let sv = new_cell.get_scalar(DataKind::Svalues, registry);
-        inv.assign_or_havoc(sv, &svalue, registry);
-        let uv = new_cell.get_scalar(DataKind::Uvalues, registry);
-        inv.assign_or_havoc(uv, &uvalue, registry);
+        let sv = new_cell.get_scalar(DataKind::Svalues, access.registry);
+        inv.assign_or_havoc(sv, &svalue, access.registry);
+        let uv = new_cell.get_scalar(DataKind::Uvalues, access.registry);
+        inv.assign_or_havoc(uv, &uvalue, access.registry);
     }
 
     /// Prepare to havoc bytes by splitting numeric cells around the havoced region.
-    #[expect(clippy::too_many_arguments)]
     pub fn split_number_var(
         &self,
         inv: &mut NumAbsDomain,
         kind: DataKind,
         ii: &Interval,
         elem_size: &Interval,
-        registry: &mut VariableRegistry,
-        big_endian: bool,
-        array_map: &mut ArrayMap,
+        access: &mut StackAccess<'_>,
     ) {
         assert!(kind == DataKind::Svalues || kind == DataKind::Uvalues);
         let n = match ii.singleton() {
@@ -911,8 +914,10 @@ impl ArrayDomain {
         let size = n_bytes.to_i64().unwrap_or(0) as u32;
         let offset = n.to_i64().unwrap_or(0) as u64;
 
-        let om = array_map.entry_or_default(kind);
-        let cells = om.get_overlap_cells(offset, size);
+        let cells = {
+            let om = access.array_map.entry_or_default(kind);
+            om.get_overlap_cells(offset, size)
+        };
         for c in &cells {
             let (cell_start, cell_end) = {
                 let intv = c.to_interval();
@@ -925,8 +930,11 @@ impl ArrayDomain {
             {
                 continue;
             }
-            let scalar = c.get_scalar(kind, registry);
-            if !inv.eval_interval_var(scalar, registry).is_singleton() {
+            let scalar = c.get_scalar(kind, access.registry);
+            if !inv
+                .eval_interval_var(scalar, access.registry)
+                .is_singleton()
+            {
                 continue;
             }
             if (cell_start as u64) < offset {
@@ -935,9 +943,7 @@ impl ArrayDomain {
                     kind,
                     cell_start,
                     (offset - cell_start as u64) as u32,
-                    registry,
-                    big_endian,
-                    array_map,
+                    access,
                 );
             }
             if offset + size as u64 > cell_end as u64 + 1 {
@@ -946,15 +952,7 @@ impl ArrayDomain {
                 let right_start = (offset + size as u64) as i32;
                 let right_len = (cell_end as u64 + 1 - (offset + size as u64)) as u32;
                 if right_len > 0 {
-                    self.split_cell(
-                        inv,
-                        kind,
-                        right_start,
-                        right_len,
-                        registry,
-                        big_endian,
-                        array_map,
-                    );
+                    self.split_cell(inv, kind, right_start, right_len, access);
                 }
             }
         }

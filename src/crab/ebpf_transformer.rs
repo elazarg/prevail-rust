@@ -14,7 +14,7 @@ use crate::arith::linear_expression::LinearExpression;
 use crate::arith::number::Number;
 use crate::arith::variable::Variable;
 use crate::cfg::label::Label;
-use crate::crab::array_domain::{ArrayDomain, ArrayMap};
+use crate::crab::array_domain::{ArrayDomain, ArrayMap, StackAccess};
 use crate::crab::ebpf_domain::{DomainContext, EbpfDomain, VerificationError};
 use crate::crab::interval::Interval;
 use crate::crab::type_domain::reg_type;
@@ -279,9 +279,7 @@ fn havoc_subprogram_stack(
         &mut dom.state.types,
         &idx,
         &width,
-        registry,
-        big_endian,
-        array_map,
+        &mut StackAccess::new(registry, big_endian, array_map),
     );
     for kind in iterate_kinds() {
         dom.stack.havoc(
@@ -289,9 +287,7 @@ fn havoc_subprogram_stack(
             kind,
             &idx,
             &width,
-            registry,
-            big_endian,
-            array_map,
+            &mut StackAccess::new(registry, big_endian, array_map),
         );
     }
 }
@@ -466,7 +462,6 @@ fn recompute_stack_numeric_size_reg(
 // Stack load
 // ============================================================================
 
-#[expect(clippy::too_many_arguments)]
 fn do_load_stack(
     state: &mut TypeToNumDomain,
     stack: &ArrayDomain,
@@ -474,70 +469,46 @@ fn do_load_stack(
     symb_addr: &LinearExpression,
     width: i32,
     src_reg: &Reg,
-    registry: &mut VariableRegistry,
-    big_endian: bool,
-    array_map: &mut ArrayMap,
+    access: &mut StackAccess<'_>,
 ) {
-    let addr = state.values.eval_interval(symb_addr, registry);
-    let src_pack = reg_pack(src_reg, registry);
+    let addr = state.values.eval_interval(symb_addr, access.registry);
+    let src_pack = reg_pack(src_reg, access.registry);
     let width_cst = leq((width as i64).into(), src_pack.stack_numeric_size.into());
-    if state.values.entail(&width_cst, registry) {
-        state.assign_type_encoding(target_reg, T_NUM, registry);
+    if state.values.entail(&width_cst, access.registry) {
+        state.assign_type_encoding(target_reg, T_NUM, access.registry);
     } else {
-        let loaded_type = stack.load_type(&addr, width, registry, array_map);
-        state.assign_type_opt_expr(target_reg, &loaded_type, registry);
-        if !state.types.is_initialized_reg(target_reg, registry) {
-            state.havoc_register(target_reg, registry);
+        let loaded_type = stack.load_type(&addr, width, access.registry, access.array_map);
+        state.assign_type_opt_expr(target_reg, &loaded_type, access.registry);
+        if !state.types.is_initialized_reg(target_reg, access.registry) {
+            state.havoc_register(target_reg, access.registry);
             return;
         }
     }
 
-    let target = reg_pack(target_reg, registry);
+    let target = reg_pack(target_reg, access.registry);
     if width == 1 || width == 2 || width == 4 || width == 8 {
         // Use the addr before we havoc the destination register since we might be getting the
         // addr from that same register.
-        let sresult = stack.load(
-            &state.values,
-            DataKind::Svalues,
-            &addr,
-            width,
-            registry,
-            big_endian,
-            array_map,
-        );
-        let uresult = stack.load(
-            &state.values,
-            DataKind::Uvalues,
-            &addr,
-            width,
-            registry,
-            big_endian,
-            array_map,
-        );
-        state.havoc_register_except_type(target_reg, registry);
+        let sresult = stack.load(&state.values, DataKind::Svalues, &addr, width, access);
+        let uresult = stack.load(&state.values, DataKind::Uvalues, &addr, width, access);
+        state.havoc_register_except_type(target_reg, access.registry);
         state
             .values
-            .assign_or_havoc(target.svalue, &sresult, registry);
+            .assign_or_havoc(target.svalue, &sresult, access.registry);
         state
             .values
-            .assign_or_havoc(target.uvalue, &uresult, registry);
-        for te in state.types.iterate_types(target_reg, registry) {
+            .assign_or_havoc(target.uvalue, &uresult, access.registry);
+        for te in state.types.iterate_types(target_reg, access.registry) {
             for &kind in type_to_kinds(te) {
-                let dst_var = registry.reg(kind, target_reg.v as i32);
-                let loaded = stack.load(
-                    &state.values,
-                    kind,
-                    &addr,
-                    width,
-                    registry,
-                    big_endian,
-                    array_map,
-                );
-                state.values.assign_or_havoc(dst_var, &loaded, registry);
+                let dst_var = access.registry.reg(kind, target_reg.v as i32);
+                let loaded = stack.load(&state.values, kind, &addr, width, access);
+                state
+                    .values
+                    .assign_or_havoc(dst_var, &loaded, access.registry);
             }
         }
     } else {
-        state.havoc_register_except_type(target_reg, registry);
+        state.havoc_register_except_type(target_reg, access.registry);
     }
 }
 
@@ -699,9 +670,7 @@ fn do_load(
             &addr,
             width,
             &b.access.basereg,
-            registry,
-            ctx.runtime.big_endian,
-            array_map,
+            &mut StackAccess::new(registry, ctx.runtime.big_endian, array_map),
         );
         return;
     }
@@ -736,9 +705,7 @@ fn do_load(
                         &addr,
                         width,
                         &basereg,
-                        registry,
-                        ctx.runtime.big_endian,
-                        array_map,
+                        &mut StackAccess::new(registry, ctx.runtime.big_endian, array_map),
                     );
                 }
                 TypeEncoding::TPacket => {
@@ -759,7 +726,10 @@ fn do_load(
 // do_store_stack
 // ============================================================================
 
-#[expect(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "remaining args are all semantically distinct (state, stack, address, width, two value expressions, optional source reg, access context); further bundling would obscure the call"
+)]
 fn do_store_stack(
     state: &mut TypeToNumDomain,
     stack: &mut ArrayDomain,
@@ -768,58 +738,25 @@ fn do_store_stack(
     val_svalue: &LinearExpression,
     val_uvalue: &LinearExpression,
     opt_val_reg: &Option<Reg>,
-    registry: &mut VariableRegistry,
-    big_endian: bool,
-    array_map: &mut ArrayMap,
+    access: &mut StackAccess<'_>,
 ) {
-    let addr = state.values.eval_interval(symb_addr, registry);
+    let addr = state.values.eval_interval(symb_addr, access.registry);
     let width = Interval::from_i64(exact_width as i64);
 
     // no aliasing of val - we don't move from stack to stack, so we can just havoc first
-    stack.havoc_type(
-        &mut state.types,
-        &addr,
-        &width,
-        registry,
-        big_endian,
-        array_map,
-    );
+    stack.havoc_type(&mut state.types, &addr, &width, access);
     for kind in iterate_kinds() {
         if kind == DataKind::Svalues || kind == DataKind::Uvalues {
             continue;
         }
-        stack.havoc(
-            &mut state.values,
-            kind,
-            &addr,
-            &width,
-            registry,
-            big_endian,
-            array_map,
-        );
+        stack.havoc(&mut state.values, kind, &addr, &width, access);
     }
 
     let must_be_num;
     if let Some(val_reg) = opt_val_reg {
-        if !state.types.is_initialized_reg(val_reg, registry) {
-            stack.havoc(
-                &mut state.values,
-                DataKind::Svalues,
-                &addr,
-                &width,
-                registry,
-                big_endian,
-                array_map,
-            );
-            stack.havoc(
-                &mut state.values,
-                DataKind::Uvalues,
-                &addr,
-                &width,
-                registry,
-                big_endian,
-                array_map,
-            );
+        if !state.types.is_initialized_reg(val_reg, access.registry) {
+            stack.havoc(&mut state.values, DataKind::Svalues, &addr, &width, access);
+            stack.havoc(&mut state.values, DataKind::Uvalues, &addr, &width, access);
             // Skip the rest when source is uninitialized.
             // Still need to update stack_numeric_size below.
             must_be_num = false;
@@ -829,11 +766,11 @@ fn do_store_stack(
                 symb_addr,
                 exact_width,
                 must_be_num,
-                registry,
+                access.registry,
             );
             return;
         }
-        must_be_num = state.types.is_in_group(val_reg, TS_NUM, registry);
+        must_be_num = state.types.is_in_group(val_reg, TS_NUM, access.registry);
     } else {
         // opt_val_reg is unset when storing an immediate value.
         must_be_num = true;
@@ -843,156 +780,72 @@ fn do_store_stack(
         LinearExpression::from(T_NUM as i64)
     } else {
         let val_reg = opt_val_reg.as_ref().unwrap();
-        let type_var = registry.type_reg(val_reg.v as i32);
+        let type_var = access.registry.type_reg(val_reg.v as i32);
         LinearExpression::from(type_var)
     };
 
-    let store_type_var = stack.store_type(
-        &mut state.types,
-        &addr,
-        &width,
-        must_be_num,
-        registry,
-        big_endian,
-        array_map,
-    );
-    state.assign_type_var_expr(store_type_var, &val_type, registry);
+    let store_type_var = stack.store_type(&mut state.types, &addr, &width, must_be_num, access);
+    state.assign_type_var_expr(store_type_var, &val_type, access.registry);
 
     if exact_width == 8 {
-        stack.havoc(
-            &mut state.values,
-            DataKind::Svalues,
-            &addr,
-            &width,
-            registry,
-            big_endian,
-            array_map,
-        );
-        stack.havoc(
-            &mut state.values,
-            DataKind::Uvalues,
-            &addr,
-            &width,
-            registry,
-            big_endian,
-            array_map,
-        );
+        stack.havoc(&mut state.values, DataKind::Svalues, &addr, &width, access);
+        stack.havoc(&mut state.values, DataKind::Uvalues, &addr, &width, access);
 
-        if let Some(sv) = stack.store(
-            &mut state.values,
-            DataKind::Svalues,
-            &addr,
-            &width,
-            registry,
-            big_endian,
-            array_map,
-        ) {
-            state.values.assign_expr(sv, val_svalue, registry);
+        if let Some(sv) = stack.store(&mut state.values, DataKind::Svalues, &addr, &width, access) {
+            state.values.assign_expr(sv, val_svalue, access.registry);
         }
-        if let Some(uv) = stack.store(
-            &mut state.values,
-            DataKind::Uvalues,
-            &addr,
-            &width,
-            registry,
-            big_endian,
-            array_map,
-        ) {
-            state.values.assign_expr(uv, val_uvalue, registry);
+        if let Some(uv) = stack.store(&mut state.values, DataKind::Uvalues, &addr, &width, access) {
+            state.values.assign_expr(uv, val_uvalue, access.registry);
         }
 
         if !must_be_num {
             let val_reg = opt_val_reg.as_ref().unwrap();
-            for te in state.types.iterate_types(val_reg, registry) {
+            for te in state.types.iterate_types(val_reg, access.registry) {
                 for &kind in type_to_kinds(te) {
-                    let src_var = registry.reg(kind, val_reg.v as i32);
-                    if let Some(dst_var) = stack.store(
-                        &mut state.values,
-                        kind,
-                        &addr,
-                        &width,
-                        registry,
-                        big_endian,
-                        array_map,
-                    ) {
-                        state.values.assign_var(dst_var, src_var, registry);
+                    let src_var = access.registry.reg(kind, val_reg.v as i32);
+                    if let Some(dst_var) =
+                        stack.store(&mut state.values, kind, &addr, &width, access)
+                    {
+                        state.values.assign_var(dst_var, src_var, access.registry);
                     }
                 }
             }
         }
     } else if (exact_width == 1 || exact_width == 2 || exact_width == 4) && must_be_num {
         // Keep track of numbers on the stack that might be used as array indices.
-        if let Some(stack_svalue) = stack.store(
-            &mut state.values,
-            DataKind::Svalues,
-            &addr,
-            &width,
-            registry,
-            big_endian,
-            array_map,
-        ) {
-            state.values.assign_expr(stack_svalue, val_svalue, registry);
+        if let Some(stack_svalue) =
+            stack.store(&mut state.values, DataKind::Svalues, &addr, &width, access)
+        {
             state
                 .values
-                .inner_mut()
-                .overflow_bounds(stack_svalue, exact_width * 8, true, registry);
-        } else {
-            stack.havoc(
-                &mut state.values,
-                DataKind::Svalues,
-                &addr,
-                &width,
-                registry,
-                big_endian,
-                array_map,
+                .assign_expr(stack_svalue, val_svalue, access.registry);
+            state.values.inner_mut().overflow_bounds(
+                stack_svalue,
+                exact_width * 8,
+                true,
+                access.registry,
             );
+        } else {
+            stack.havoc(&mut state.values, DataKind::Svalues, &addr, &width, access);
         }
-        if let Some(stack_uvalue) = stack.store(
-            &mut state.values,
-            DataKind::Uvalues,
-            &addr,
-            &width,
-            registry,
-            big_endian,
-            array_map,
-        ) {
-            state.values.assign_expr(stack_uvalue, val_uvalue, registry);
+        if let Some(stack_uvalue) =
+            stack.store(&mut state.values, DataKind::Uvalues, &addr, &width, access)
+        {
+            state
+                .values
+                .assign_expr(stack_uvalue, val_uvalue, access.registry);
             state.values.inner_mut().overflow_bounds(
                 stack_uvalue,
                 exact_width * 8,
                 false,
-                registry,
+                access.registry,
             );
         } else {
-            stack.havoc(
-                &mut state.values,
-                DataKind::Uvalues,
-                &addr,
-                &width,
-                registry,
-                big_endian,
-                array_map,
-            );
+            stack.havoc(&mut state.values, DataKind::Uvalues, &addr, &width, access);
         }
     } else {
-        stack.havoc(
-            &mut state.values,
-            DataKind::Svalues,
-            &addr,
-            &width,
-            registry,
-            big_endian,
-            array_map,
-        );
-        stack.havoc(
-            &mut state.values,
-            DataKind::Uvalues,
-            &addr,
-            &width,
-            registry,
-            big_endian,
-            array_map,
-        );
+        stack.havoc(&mut state.values, DataKind::Svalues, &addr, &width, access);
+        stack.havoc(&mut state.values, DataKind::Uvalues, &addr, &width, access);
     }
 
     update_stack_numeric_size_after_store(
@@ -1001,7 +854,7 @@ fn do_store_stack(
         symb_addr,
         exact_width,
         must_be_num,
-        registry,
+        access.registry,
     );
 }
 
@@ -1084,9 +937,7 @@ fn do_mem_store(
                 val_svalue,
                 val_uvalue,
                 opt_val_reg,
-                registry,
-                ctx.runtime.big_endian,
-                array_map,
+                &mut StackAccess::new(registry, ctx.runtime.big_endian, array_map),
             );
             return;
         }
@@ -1109,9 +960,7 @@ fn do_mem_store(
                     val_svalue,
                     val_uvalue,
                     opt_val_reg,
-                    registry,
-                    big_endian,
-                    array_map,
+                    &mut StackAccess::new(registry, big_endian, array_map),
                 );
             }
             // do nothing for any other type
@@ -1687,9 +1536,7 @@ fn transform_call(
                                 kind,
                                 &addr,
                                 &width,
-                                registry,
-                                big_endian,
-                                array_map,
+                                &mut StackAccess::new(registry, big_endian, array_map),
                             );
                         }
                         // Keep numeric stack initialization scoped to stack-typed pointers only.
@@ -1734,9 +1581,7 @@ fn transform_call(
                                     kind,
                                     &addr,
                                     &width,
-                                    registry,
-                                    big_endian,
-                                    array_map,
+                                    &mut StackAccess::new(registry, big_endian, array_map),
                                 );
                             }
                         } else {
