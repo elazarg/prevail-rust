@@ -67,6 +67,8 @@ impl DisjointSetUnion {
     }
 
     /// Whether `x` and `y` are in the same set.
+    ///
+    /// Upstream parity: mirrors `DisjointSetUnion::same` in `dsu.hpp`.
     #[allow(dead_code)]
     pub fn same_set(&self, x: usize, y: usize) -> bool {
         self.find_const(x) == self.find_const(y)

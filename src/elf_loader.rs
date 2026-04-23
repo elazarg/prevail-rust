@@ -93,6 +93,7 @@ type MapOffsets = BTreeMap<String, usize>;
 
 enum MapResolution {
     /// Legacy mode — retained for future legacy-record-size path.
+    /// Upstream parity: matches the legacy branch in the C++ parser.
     #[allow(dead_code)]
     Legacy(usize),
     /// Name-based lookup from map/section name to descriptor index.
@@ -156,6 +157,7 @@ fn get_symbol_details(
 
 // ── Function relocation record ──────────────────────────────────────
 
+/// Upstream parity: fields are populated for diagnostics; not all are read today.
 #[allow(dead_code)]
 struct FunctionRelocation {
     prog_index: usize,
@@ -1855,7 +1857,6 @@ impl<'a> ProgramReader<'a> {
 // ── CO-RE relocation application ─────────────────────────────────────
 
 /// CO-RE relocation kinds (from linux/bpf.h).
-#[allow(dead_code)]
 mod core_relo_kind {
     pub const FIELD_BYTE_OFFSET: u32 = 0;
     pub const FIELD_BYTE_SIZE: u32 = 1;

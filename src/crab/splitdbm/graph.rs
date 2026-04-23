@@ -236,6 +236,7 @@ impl AdaptGraph {
 
     // ----- clearing -----
 
+    /// Upstream parity: mirrors `AdaptGraph::clear_edges` in `adapt_sgraph.hpp`.
     #[allow(dead_code)]
     pub fn clear_edges(&mut self) {
         self.ws.clear();
@@ -248,6 +249,7 @@ impl AdaptGraph {
         self.edge_count = 0;
     }
 
+    /// Upstream parity: mirrors `AdaptGraph::clear` in `adapt_sgraph.hpp`.
     #[allow(dead_code)]
     pub fn clear(&mut self) {
         self.ws.clear();

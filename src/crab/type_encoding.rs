@@ -28,6 +28,7 @@ pub enum DataKind {
     AllocMemSizes,
 }
 
+/// Upstream parity: mirrors `KIND_MIN` in `type_encoding.hpp`.
 #[allow(dead_code)]
 pub const KIND_MIN: DataKind = DataKind::Types;
 pub const KIND_VALUE_MIN: DataKind = DataKind::Svalues;
@@ -138,13 +139,9 @@ pub const T_CTX: TypeEncoding = TypeEncoding::TCtx;
 pub const T_PACKET: TypeEncoding = TypeEncoding::TPacket;
 pub const T_STACK: TypeEncoding = TypeEncoding::TStack;
 pub const T_SHARED: TypeEncoding = TypeEncoding::TShared;
-#[allow(dead_code)]
 pub const T_SOCKET: TypeEncoding = TypeEncoding::TSocket;
-#[allow(dead_code)]
 pub const T_BTF_ID: TypeEncoding = TypeEncoding::TBtfId;
-#[allow(dead_code)]
 pub const T_ALLOC_MEM: TypeEncoding = TypeEncoding::TAllocMem;
-#[allow(dead_code)]
 pub const T_FUNC: TypeEncoding = TypeEncoding::TFunc;
 
 /// Number of `TypeEncoding` variants.
@@ -384,12 +381,14 @@ pub const TS_POINTER: TypeSet = TypeSet::of(&[TCtx, TPacket, TStack, TShared]);
 /// `{ctx, packet, stack}` — pointer types with a unique region
 pub const TS_SINGLETON_PTR: TypeSet = TypeSet::of(&[TCtx, TPacket, TStack]);
 /// `{packet, stack, shared}` — memory-accessible pointer types
-#[allow(dead_code)]
 pub const TS_MEM: TypeSet = TypeSet::of(&[TPacket, TStack, TShared]);
+/// Upstream parity: mirrors `TS_SOCKET` in `type_encoding.hpp`.
 #[allow(dead_code)]
 pub const TS_SOCKET: TypeSet = TypeSet::singleton(TSocket);
+/// Upstream parity: mirrors `TS_BTF_ID` in `type_encoding.hpp`.
 #[allow(dead_code)]
 pub const TS_BTF_ID: TypeSet = TypeSet::singleton(TBtfId);
+/// Upstream parity: mirrors `TS_ALLOC_MEM` in `type_encoding.hpp`.
 #[allow(dead_code)]
 pub const TS_ALLOC_MEM: TypeSet = TypeSet::singleton(TAllocMem);
 
