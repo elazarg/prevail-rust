@@ -282,294 +282,79 @@ impl PartialOrd<i64> for Number {
 // ---------------------------------------------------------------------------
 // Arithmetic operators
 // ---------------------------------------------------------------------------
+//
+// Each binop is defined for four reference shapes (T op T, &T op &T,
+// &T op T, T op &T). `impl_checked_binop!` generates all four from one
+// body that panics on overflow; `impl_infallible_binop!` does the same
+// for bitwise ops whose inner `i128` primitives never fail.
 
-impl std::ops::Add for Number {
-    type Output = Number;
-    fn add(self, rhs: Self) -> Number {
-        Number(
-            self.0
-                .checked_add(rhs.0)
-                .expect("Number overflow in addition"),
-        )
-    }
+macro_rules! impl_checked_binop {
+    ($trait:ident, $method:ident, $checked:ident, $msg:literal) => {
+        impl std::ops::$trait for Number {
+            type Output = Number;
+            fn $method(self, rhs: Self) -> Number {
+                Number(self.0.$checked(rhs.0).expect($msg))
+            }
+        }
+        impl<'b> std::ops::$trait<&'b Number> for &Number {
+            type Output = Number;
+            fn $method(self, rhs: &'b Number) -> Number {
+                Number(self.0.$checked(rhs.0).expect($msg))
+            }
+        }
+        impl std::ops::$trait<Number> for &Number {
+            type Output = Number;
+            fn $method(self, rhs: Number) -> Number {
+                Number(self.0.$checked(rhs.0).expect($msg))
+            }
+        }
+        impl std::ops::$trait<&Number> for Number {
+            type Output = Number;
+            fn $method(self, rhs: &Number) -> Number {
+                Number(self.0.$checked(rhs.0).expect($msg))
+            }
+        }
+    };
 }
 
-impl<'b> std::ops::Add<&'b Number> for &Number {
-    type Output = Number;
-    fn add(self, rhs: &'b Number) -> Number {
-        Number(
-            self.0
-                .checked_add(rhs.0)
-                .expect("Number overflow in addition"),
-        )
-    }
+macro_rules! impl_infallible_binop {
+    ($trait:ident, $method:ident, $op:tt) => {
+        impl std::ops::$trait for Number {
+            type Output = Number;
+            fn $method(self, rhs: Self) -> Number {
+                Number(self.0 $op rhs.0)
+            }
+        }
+        impl<'b> std::ops::$trait<&'b Number> for &Number {
+            type Output = Number;
+            fn $method(self, rhs: &'b Number) -> Number {
+                Number(self.0 $op rhs.0)
+            }
+        }
+        impl std::ops::$trait<Number> for &Number {
+            type Output = Number;
+            fn $method(self, rhs: Number) -> Number {
+                Number(self.0 $op rhs.0)
+            }
+        }
+        impl std::ops::$trait<&Number> for Number {
+            type Output = Number;
+            fn $method(self, rhs: &Number) -> Number {
+                Number(self.0 $op rhs.0)
+            }
+        }
+    };
 }
 
-impl std::ops::Add<Number> for &Number {
-    type Output = Number;
-    fn add(self, rhs: Number) -> Number {
-        Number(
-            self.0
-                .checked_add(rhs.0)
-                .expect("Number overflow in addition"),
-        )
-    }
-}
+impl_checked_binop!(Add, add, checked_add, "Number overflow in addition");
+impl_checked_binop!(Sub, sub, checked_sub, "Number overflow in subtraction");
+impl_checked_binop!(Mul, mul, checked_mul, "Number overflow in multiplication");
+impl_checked_binop!(Div, div, checked_div, "Number division by zero or overflow");
+impl_checked_binop!(Rem, rem, checked_rem, "Number remainder by zero");
 
-impl std::ops::Add<&Number> for Number {
-    type Output = Number;
-    fn add(self, rhs: &Number) -> Number {
-        Number(
-            self.0
-                .checked_add(rhs.0)
-                .expect("Number overflow in addition"),
-        )
-    }
-}
-
-impl std::ops::Sub for Number {
-    type Output = Number;
-    fn sub(self, rhs: Self) -> Number {
-        Number(
-            self.0
-                .checked_sub(rhs.0)
-                .expect("Number overflow in subtraction"),
-        )
-    }
-}
-
-impl<'b> std::ops::Sub<&'b Number> for &Number {
-    type Output = Number;
-    fn sub(self, rhs: &'b Number) -> Number {
-        Number(
-            self.0
-                .checked_sub(rhs.0)
-                .expect("Number overflow in subtraction"),
-        )
-    }
-}
-
-impl std::ops::Sub<Number> for &Number {
-    type Output = Number;
-    fn sub(self, rhs: Number) -> Number {
-        Number(
-            self.0
-                .checked_sub(rhs.0)
-                .expect("Number overflow in subtraction"),
-        )
-    }
-}
-
-impl std::ops::Sub<&Number> for Number {
-    type Output = Number;
-    fn sub(self, rhs: &Number) -> Number {
-        Number(
-            self.0
-                .checked_sub(rhs.0)
-                .expect("Number overflow in subtraction"),
-        )
-    }
-}
-
-impl std::ops::Mul for Number {
-    type Output = Number;
-    fn mul(self, rhs: Self) -> Number {
-        Number(
-            self.0
-                .checked_mul(rhs.0)
-                .expect("Number overflow in multiplication"),
-        )
-    }
-}
-
-impl<'b> std::ops::Mul<&'b Number> for &Number {
-    type Output = Number;
-    fn mul(self, rhs: &'b Number) -> Number {
-        Number(
-            self.0
-                .checked_mul(rhs.0)
-                .expect("Number overflow in multiplication"),
-        )
-    }
-}
-
-impl std::ops::Mul<Number> for &Number {
-    type Output = Number;
-    fn mul(self, rhs: Number) -> Number {
-        Number(
-            self.0
-                .checked_mul(rhs.0)
-                .expect("Number overflow in multiplication"),
-        )
-    }
-}
-
-impl std::ops::Mul<&Number> for Number {
-    type Output = Number;
-    fn mul(self, rhs: &Number) -> Number {
-        Number(
-            self.0
-                .checked_mul(rhs.0)
-                .expect("Number overflow in multiplication"),
-        )
-    }
-}
-
-impl std::ops::Div for Number {
-    type Output = Number;
-    fn div(self, rhs: Self) -> Number {
-        Number(
-            self.0
-                .checked_div(rhs.0)
-                .expect("Number division by zero or overflow"),
-        )
-    }
-}
-
-impl<'b> std::ops::Div<&'b Number> for &Number {
-    type Output = Number;
-    fn div(self, rhs: &'b Number) -> Number {
-        Number(
-            self.0
-                .checked_div(rhs.0)
-                .expect("Number division by zero or overflow"),
-        )
-    }
-}
-
-impl std::ops::Div<Number> for &Number {
-    type Output = Number;
-    fn div(self, rhs: Number) -> Number {
-        Number(
-            self.0
-                .checked_div(rhs.0)
-                .expect("Number division by zero or overflow"),
-        )
-    }
-}
-
-impl std::ops::Div<&Number> for Number {
-    type Output = Number;
-    fn div(self, rhs: &Number) -> Number {
-        Number(
-            self.0
-                .checked_div(rhs.0)
-                .expect("Number division by zero or overflow"),
-        )
-    }
-}
-
-impl std::ops::Rem for Number {
-    type Output = Number;
-    fn rem(self, rhs: Self) -> Number {
-        Number(self.0.checked_rem(rhs.0).expect("Number remainder by zero"))
-    }
-}
-
-impl<'b> std::ops::Rem<&'b Number> for &Number {
-    type Output = Number;
-    fn rem(self, rhs: &'b Number) -> Number {
-        Number(self.0.checked_rem(rhs.0).expect("Number remainder by zero"))
-    }
-}
-
-impl std::ops::Rem<Number> for &Number {
-    type Output = Number;
-    fn rem(self, rhs: Number) -> Number {
-        Number(self.0.checked_rem(rhs.0).expect("Number remainder by zero"))
-    }
-}
-
-impl std::ops::Rem<&Number> for Number {
-    type Output = Number;
-    fn rem(self, rhs: &Number) -> Number {
-        Number(self.0.checked_rem(rhs.0).expect("Number remainder by zero"))
-    }
-}
-
-impl std::ops::BitAnd for Number {
-    type Output = Number;
-    fn bitand(self, rhs: Self) -> Number {
-        Number(self.0 & rhs.0)
-    }
-}
-
-impl<'b> std::ops::BitAnd<&'b Number> for &Number {
-    type Output = Number;
-    fn bitand(self, rhs: &'b Number) -> Number {
-        Number(self.0 & rhs.0)
-    }
-}
-
-impl std::ops::BitAnd<Number> for &Number {
-    type Output = Number;
-    fn bitand(self, rhs: Number) -> Number {
-        Number(self.0 & rhs.0)
-    }
-}
-
-impl std::ops::BitAnd<&Number> for Number {
-    type Output = Number;
-    fn bitand(self, rhs: &Number) -> Number {
-        Number(self.0 & rhs.0)
-    }
-}
-
-impl std::ops::BitOr for Number {
-    type Output = Number;
-    fn bitor(self, rhs: Self) -> Number {
-        Number(self.0 | rhs.0)
-    }
-}
-
-impl<'b> std::ops::BitOr<&'b Number> for &Number {
-    type Output = Number;
-    fn bitor(self, rhs: &'b Number) -> Number {
-        Number(self.0 | rhs.0)
-    }
-}
-
-impl std::ops::BitOr<Number> for &Number {
-    type Output = Number;
-    fn bitor(self, rhs: Number) -> Number {
-        Number(self.0 | rhs.0)
-    }
-}
-
-impl std::ops::BitOr<&Number> for Number {
-    type Output = Number;
-    fn bitor(self, rhs: &Number) -> Number {
-        Number(self.0 | rhs.0)
-    }
-}
-
-impl std::ops::BitXor for Number {
-    type Output = Number;
-    fn bitxor(self, rhs: Self) -> Number {
-        Number(self.0 ^ rhs.0)
-    }
-}
-
-impl<'b> std::ops::BitXor<&'b Number> for &Number {
-    type Output = Number;
-    fn bitxor(self, rhs: &'b Number) -> Number {
-        Number(self.0 ^ rhs.0)
-    }
-}
-
-impl std::ops::BitXor<Number> for &Number {
-    type Output = Number;
-    fn bitxor(self, rhs: Number) -> Number {
-        Number(self.0 ^ rhs.0)
-    }
-}
-
-impl std::ops::BitXor<&Number> for Number {
-    type Output = Number;
-    fn bitxor(self, rhs: &Number) -> Number {
-        Number(self.0 ^ rhs.0)
-    }
-}
+impl_infallible_binop!(BitAnd, bitand, &);
+impl_infallible_binop!(BitOr, bitor, |);
+impl_infallible_binop!(BitXor, bitxor, ^);
 
 impl std::ops::Neg for Number {
     type Output = Number;
