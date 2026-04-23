@@ -525,7 +525,11 @@ impl ZoneDomain {
         if self.is_top() {
             return o.clone();
         }
-        // FIXME: narrowing as no-op should be sound
+        // Upstream parity: matches `ZoneDomain::narrow` in
+        // `src/crab/zone_domain.cpp`, which carries the same FIXME
+        // ("Implement properly. Narrowing as a no-op should be sound.").
+        // Keep the no-op until upstream implements a tighter narrow; do not
+        // diverge unilaterally.
         self.clone()
     }
 
