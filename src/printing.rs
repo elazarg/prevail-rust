@@ -1056,29 +1056,36 @@ pub fn print_invariants_filtered(
             let in_slice_parents: Vec<&Label> =
                 parents.iter().filter(|p| filter.contains(p)).collect();
             if in_slice_parents.len() >= 2 {
-                // Build union of relevant state
-                let mut join_relevance = RelevantState::default();
-                if let Some(fl) = relevance.get(first_filtered_label) {
-                    join_relevance.registers.extend(&fl.registers);
-                    join_relevance.stack_offsets.extend(&fl.stack_offsets);
-                }
-                for parent in &in_slice_parents {
-                    if let Some(pr) = relevance.get(*parent) {
-                        join_relevance.registers.extend(&pr.registers);
-                        join_relevance.stack_offsets.extend(&pr.stack_offsets);
+                // Union of relevance from first_filtered_label and all in-slice parents.
+                // Seed the optional from the first relevance entry we find — that's
+                // how `RelevantState`'s filter context (total_stack_size) gets in,
+                // since there's no Default impl.
+                let mut join_relevance: Option<RelevantState> = None;
+                let mut try_merge = |lbl: &Label| {
+                    if let Some(rs) = relevance.get(lbl) {
+                        match &mut join_relevance {
+                            Some(jr) => jr.merge(rs),
+                            None => join_relevance = Some(rs.clone()),
+                        }
                     }
+                };
+                try_merge(first_filtered_label);
+                for parent in &in_slice_parents {
+                    try_merge(parent);
                 }
 
-                writeln!(out, "  --- join point: per-predecessor state ---")?;
-                for parent in &in_slice_parents {
-                    if let Some(post) = get_parent_post_invariant(parent) {
-                        let mut buf = String::new();
-                        post.write_to_filtered(&mut buf, registry, Some(&join_relevance))
-                            .unwrap();
-                        writeln!(out, "  from {parent}: {buf}")?;
+                if let Some(jr) = &join_relevance {
+                    writeln!(out, "  --- join point: per-predecessor state ---")?;
+                    for parent in &in_slice_parents {
+                        if let Some(post) = get_parent_post_invariant(parent) {
+                            let mut buf = String::new();
+                            post.write_to_filtered(&mut buf, registry, Some(jr))
+                                .unwrap();
+                            writeln!(out, "  from {parent}: {buf}")?;
+                        }
                     }
+                    writeln!(out, "  --- end join point ---")?;
                 }
-                writeln!(out, "  --- end join point ---")?;
             }
         }
 

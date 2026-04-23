@@ -84,32 +84,47 @@ pub struct InstructionDeps {
     pub stack_written: BTreeSet<i64>,
 }
 
-/// State that is relevant at a specific program point.
-/// Used to filter what parts of the invariant to display.
+/// State that is relevant at a specific program point, used to filter what
+/// parts of the invariant to display.
 ///
-/// Mirrors upstream C++ `RelevantState`. The `total_stack_size` field carries
-/// the configured stack size so `is_relevant_constraint` can translate
-/// R10-relative offsets (e.g. -184) into the absolute `s[...]` names that
-/// appear in invariant strings (e.g. `s[3912...3919]` when total=4096).
-///
-/// Upstream quirk preserved: `compute_slice_from_label` only sets
-/// `total_stack_size` on `initial_relevance`; every per-label entry stored
-/// in `slice_labels` / `visited` is default-constructed (total=0) and the
-/// merges only touch `registers` / `stack_offsets`. This effectively
-/// disables stack-range filtering for constraints that don't mention a
-/// relevant register. We match the same behavior so filtered slice output
-/// lines up with upstream.
-#[derive(Clone, Debug, Default)]
+/// Each `RelevantState` owns a copy of the analysis-wide data its filter
+/// needs (today: `total_stack_size`, used to translate R10-relative offsets
+/// into the absolute `s[...]` names that appear in invariant strings).
+/// Constructed via `RelevantState::new(runtime)`; no `Default` impl, so map
+/// entries and merges can't silently zero-fill the field. Mirrors the
+/// upstream design from PR #1094.
+#[derive(Clone, Debug)]
 pub struct RelevantState {
+    pub total_stack_size: i32,
     pub registers: BTreeSet<Reg>,
     /// Relative stack offsets from R10 (e.g. -8).
     pub stack_offsets: BTreeSet<i64>,
-    /// Configured total stack size, used to convert relative stack offsets
-    /// to absolute `s[...]` names when filtering constraint strings.
-    pub total_stack_size: i32,
 }
 
 impl RelevantState {
+    /// Construct an empty relevance set bound to the configured stack size.
+    pub fn new(runtime: &EbpfRuntimeConfig) -> Self {
+        Self {
+            total_stack_size: runtime.total_stack_size(),
+            registers: BTreeSet::new(),
+            stack_offsets: BTreeSet::new(),
+        }
+    }
+
+    /// Union another relevance set into this one (registers + stack offsets).
+    /// `total_stack_size` is invariant within an analysis and not touched.
+    pub fn merge(&mut self, other: &RelevantState) {
+        self.registers.extend(other.registers.iter().copied());
+        self.stack_offsets
+            .extend(other.stack_offsets.iter().copied());
+    }
+
+    /// Number of tracked registers + stack offsets; used to detect "no new
+    /// relevance added" against a prior snapshot.
+    pub fn size(&self) -> usize {
+        self.registers.len() + self.stack_offsets.len()
+    }
+
     /// Check if a constraint string (e.g., "r1.type=number") involves a relevant
     /// register or stack location.
     ///
@@ -118,9 +133,6 @@ impl RelevantState {
     /// - `s[(\d+)...(\d+)]` — stack range references
     /// - `s[(\d+)].` — single stack slot references
     /// - `packet_size`, `meta_offset` — always relevant
-    ///
-    /// Stack offset conversion uses `self.total_stack_size`; see the struct
-    /// doc for the upstream quirk where that field is 0 on most entries.
     pub fn is_relevant_constraint(&self, constraint: &str) -> bool {
         let total_stack_size = self.total_stack_size;
         let mut parsed_any_pattern = false;
@@ -515,6 +527,16 @@ impl AnalysisResult {
         let mut conservative_visited: BTreeSet<Label> = BTreeSet::new();
         let mut slice_labels: BTreeMap<Label, RelevantState> = BTreeMap::new();
 
+        // Template for fresh map entries: copy-construct from the seed (carries
+        // its filter context), then clear. With no Default impl on RelevantState,
+        // this is the only way to seed a map slot.
+        let empty_template = {
+            let mut t = seed_relevance.clone();
+            t.registers.clear();
+            t.stack_offsets.clear();
+            t
+        };
+
         // Worklist: (label, relevant_state_after_this_label)
         let mut worklist: Vec<(Label, RelevantState)> = Vec::new();
         worklist.push((label.clone(), seed_relevance.clone()));
@@ -544,16 +566,14 @@ impl AnalysisResult {
                 continue;
             }
 
-            // Merge with existing relevance at this label (deduplication)
-            let existing = visited.entry(current_label.clone()).or_default();
-            let prev_size = existing.registers.len() + existing.stack_offsets.len();
-            existing
-                .registers
-                .extend(relevant_after.registers.iter().copied());
-            existing
-                .stack_offsets
-                .extend(relevant_after.stack_offsets.iter().copied());
-            let new_size = existing.registers.len() + existing.stack_offsets.len();
+            // Merge with existing relevance at this label (deduplication).
+            // First visit copy-constructs from empty_template; later visits merge.
+            let existing = visited
+                .entry(current_label.clone())
+                .or_insert_with(|| empty_template.clone());
+            let prev_size = existing.size();
+            existing.merge(&relevant_after);
+            let new_size = existing.size();
 
             if new_size == prev_size {
                 if prev_size > 0 {
@@ -647,22 +667,20 @@ impl AnalysisResult {
                 if instruction_contributes {
                     // Merge (not assign) — a label may be revisited from a
                     // different successor with additional relevance.
-                    let entry = slice_labels.entry(current_label.clone()).or_default();
-                    entry.registers.extend(rb.registers.iter().copied());
-                    entry.stack_offsets.extend(rb.stack_offsets.iter().copied());
+                    slice_labels
+                        .entry(current_label.clone())
+                        .or_insert_with(|| empty_template.clone())
+                        .merge(&rb);
                 }
 
                 relevant_before = rb;
             } else {
                 // No deps available: conservative fallback
                 relevant_before = relevant_after;
-                let entry = slice_labels.entry(current_label.clone()).or_default();
-                entry
-                    .registers
-                    .extend(relevant_before.registers.iter().copied());
-                entry
-                    .stack_offsets
-                    .extend(relevant_before.stack_offsets.iter().copied());
+                slice_labels
+                    .entry(current_label.clone())
+                    .or_insert_with(|| empty_template.clone())
+                    .merge(&relevant_before);
             }
 
             // Add predecessors to worklist
@@ -734,15 +752,7 @@ impl AnalysisResult {
             // Forward analysis stops at the first failing assertion, which may
             // not be assertions[0]. Replay the checks against the pre-state to
             // identify the failing assertion and seed relevance from it.
-            //
-            // Matches upstream: the initial seed is the only RelevantState with
-            // a non-zero total_stack_size. Per-label entries produced inside
-            // compute_slice_from_label intentionally keep total_stack_size=0
-            // (see RelevantState doc for the upstream quirk).
-            let mut initial_relevance = RelevantState {
-                total_stack_size: ctx.runtime.total_stack_size(),
-                ..Default::default()
-            };
+            let mut initial_relevance = RelevantState::new(ctx.runtime);
             let assertions = prog.assertions_at(label);
             let mut found_failing = false;
             for assertion in assertions {
@@ -1144,43 +1154,35 @@ mod tests {
     // is_relevant_constraint tests
     // ======================================================================
 
+    fn test_state(regs: impl IntoIterator<Item = Reg>) -> RelevantState {
+        let mut state = RelevantState::new(&EbpfRuntimeConfig::default());
+        state.registers.extend(regs);
+        state
+    }
+
     #[test]
     fn relevant_constraint_register() {
-        let state = RelevantState {
-            registers: BTreeSet::from([Reg { v: 1 }]),
-            stack_offsets: BTreeSet::new(),
-            total_stack_size: 4096,
-        };
+        let state = test_state([Reg { v: 1 }]);
         assert!(state.is_relevant_constraint("r1.type=number"));
         assert!(!state.is_relevant_constraint("r2.type=number"));
     }
 
     #[test]
     fn relevant_constraint_relational() {
-        let state = RelevantState {
-            registers: BTreeSet::from([Reg { v: 8 }]),
-            stack_offsets: BTreeSet::new(),
-            total_stack_size: 4096,
-        };
+        let state = test_state([Reg { v: 8 }]);
         assert!(state.is_relevant_constraint("r1.svalue-r8.svalue<=-100"));
     }
 
     #[test]
     fn relevant_constraint_packet() {
-        let state = RelevantState {
-            total_stack_size: 4096,
-            ..Default::default()
-        };
+        let state = test_state([]);
         assert!(state.is_relevant_constraint("packet_size=54"));
         assert!(state.is_relevant_constraint("meta_offset=[-4098, 0]"));
     }
 
     #[test]
     fn relevant_constraint_unparseable() {
-        let state = RelevantState {
-            total_stack_size: 4096,
-            ..Default::default()
-        };
+        let state = test_state([]);
         // Unparseable → conservative → true
         assert!(state.is_relevant_constraint("something_unknown"));
     }
