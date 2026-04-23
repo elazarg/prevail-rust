@@ -8,6 +8,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::rc::Rc;
+use std::sync::LazyLock;
 
 use regex::Regex;
 
@@ -59,6 +60,141 @@ const MAP_VAL: &str = r"\s*map_val\((\d+)\)\s*\+\s*(\d+)\s*";
 fn wrapped_label() -> String {
     format!(r"\s*{}\s*", LABEL_PAT)
 }
+
+// ---------------------------------------------------------------------------
+// Compiled regexes
+//
+// Patterns are built from the fragment `const`s above and compiled exactly
+// once at first use. A compilation failure here indicates a bug in the
+// fragments, not a runtime input error, so panicking on `unwrap` is
+// appropriate; the `LazyLock` ensures we only panic at startup-like timing
+// rather than on every call site.
+// ---------------------------------------------------------------------------
+
+fn compile(pat: &str) -> Regex {
+    Regex::new(pat).unwrap_or_else(|e| panic!("invalid regex `{pat}`: {e}"))
+}
+
+// parse_instruction_with_platform
+static RE_EXIT: LazyLock<Regex> = LazyLock::new(|| compile(r"^exit$"));
+static RE_CALL_IMM: LazyLock<Regex> = LazyLock::new(|| compile(&format!("^call {}$", IMM)));
+static RE_CALL_LABEL: LazyLock<Regex> =
+    LazyLock::new(|| compile(&format!("^call {}$", wrapped_label())));
+static RE_CALLX: LazyLock<Regex> = LazyLock::new(|| compile(&format!("^callx {}$", REG)));
+static RE_CALL_BTF_MODULE: LazyLock<Regex> =
+    LazyLock::new(|| compile(&format!(r"^call_btf {}\s+module\s+{}$", IMM, IMM)));
+static RE_CALL_BTF: LazyLock<Regex> = LazyLock::new(|| compile(&format!("^call_btf {}$", IMM)));
+static RE_BIN_REG: LazyLock<Regex> =
+    LazyLock::new(|| compile(&format!("^{}{}{}$", WREG, OPASSIGN, WREG)));
+static RE_UN: LazyLock<Regex> =
+    LazyLock::new(|| compile(&format!("^{}{}{}{}$", WREG, ASSIGN, UNOP, WREG)));
+static RE_LOAD_MAP_ADDRESS: LazyLock<Regex> =
+    LazyLock::new(|| compile(&format!("^{}{}{}$", WREG, ASSIGN, MAP_VAL)));
+static RE_LOAD_MAP_FD: LazyLock<Regex> = LazyLock::new(|| {
+    compile(&format!(
+        r"^{}{}map_fd(?:_programs)?\s+(\d+)\s*$",
+        WREG, ASSIGN
+    ))
+});
+static RE_PSEUDO_VARIABLE_ADDR: LazyLock<Regex> =
+    LazyLock::new(|| compile(&format!("^{}{}variable_addr\\s+{}$", WREG, ASSIGN, IMM)));
+static RE_PSEUDO_CODE_ADDR: LazyLock<Regex> =
+    LazyLock::new(|| compile(&format!("^{}{}code_addr\\s+{}$", WREG, ASSIGN, IMM)));
+static RE_PSEUDO_MAP_BY_IDX: LazyLock<Regex> =
+    LazyLock::new(|| compile(&format!(r"^{}{}map_by_idx\({}\)$", WREG, ASSIGN, IMM)));
+static RE_PSEUDO_MVA: LazyLock<Regex> = LazyLock::new(|| {
+    compile(&format!(
+        r"^{}{}mva\(map_by_idx\({}\)\)\s*\+\s*{}$",
+        WREG, ASSIGN, IMM, IMM
+    ))
+});
+static RE_BIN_IMM: LazyLock<Regex> =
+    LazyLock::new(|| compile(&format!("^{}{}{}{}$", WREG, OPASSIGN, IMM, LONGLONG)));
+static RE_MEM_LOAD: LazyLock<Regex> = LazyLock::new(|| {
+    let deref_pat = format!("{}{}([su])(\\d+){}{}", STAR, LPAREN, STAR, RPAREN);
+    let inner = format!("{}{}{}", REG, PLUSMINUS, IMM);
+    compile(&format!(
+        "^{}{}{}{}{}{}$",
+        REG, ASSIGN, deref_pat, LPAREN, inner, RPAREN
+    ))
+});
+static RE_MEM_STORE: LazyLock<Regex> = LazyLock::new(|| {
+    let deref_pat = format!("{}{}([su])(\\d+){}{}", STAR, LPAREN, STAR, RPAREN);
+    let inner = format!("{}{}{}", REG, PLUSMINUS, IMM);
+    compile(&format!(
+        "^{}{}{}{}{}{}$",
+        deref_pat, LPAREN, inner, RPAREN, ASSIGN, REG_OR_IMM
+    ))
+});
+static RE_ATOMIC: LazyLock<Regex> = LazyLock::new(|| {
+    let deref_pat = format!("{}{}([su])(\\d+){}{}", STAR, LPAREN, STAR, RPAREN);
+    let inner = format!("{}{}{}", REG, PLUSMINUS, IMM);
+    compile(&format!(
+        r"^lock {}{}{}{}{}{}( fetch)?$",
+        deref_pat, LPAREN, inner, RPAREN, ATOMICOP, REG
+    ))
+});
+static RE_PACKET: LazyLock<Regex> = LazyLock::new(|| {
+    let deref_pat = format!("{}{}u(\\d+){}{}", STAR, LPAREN, STAR, RPAREN);
+    compile(&format!(r"^r0 = {}skb\[(.*)\]$", deref_pat))
+});
+static RE_PACKET_REG: LazyLock<Regex> = LazyLock::new(|| compile(&format!("^{}$", REG)));
+static RE_PACKET_IMM: LazyLock<Regex> = LazyLock::new(|| compile(&format!("^{}$", IMM)));
+static RE_PACKET_REG_PM_REG: LazyLock<Regex> =
+    LazyLock::new(|| compile(&format!("^{}{}{}$", REG, PLUSMINUS, REG)));
+static RE_PACKET_REG_PM_IMM: LazyLock<Regex> =
+    LazyLock::new(|| compile(&format!("^{}{}{}$", REG, PLUSMINUS, IMM)));
+static RE_ASSUME: LazyLock<Regex> =
+    LazyLock::new(|| compile(&format!("^assume {}{}{}$", WREG, CMPOP, REG_OR_IMM)));
+static RE_GOTO: LazyLock<Regex> = LazyLock::new(|| {
+    compile(&format!(
+        "^(?:if {}{}{})?goto\\s+(?:{})?{}$",
+        WREG,
+        CMPOP,
+        REG_OR_IMM,
+        IMM,
+        wrapped_label()
+    ))
+});
+
+// parse_program
+static RE_LABEL: LazyLock<Regex> = LazyLock::new(|| compile(&format!("{}:", LABEL_PAT)));
+static RE_PREFIX: LazyLock<Regex> = LazyLock::new(|| compile(r"^\s*(\d+:)?\s*"));
+
+// parse_linear_constraints
+static RE_SPECIAL_EQ_IMM: LazyLock<Regex> =
+    LazyLock::new(|| compile(&format!("^{}={}$", SPECIAL_VAR, IMM)));
+static RE_SPECIAL_EQ_INTERVAL: LazyLock<Regex> =
+    LazyLock::new(|| compile(&format!("^{}={}$", SPECIAL_VAR, INTERVAL)));
+static RE_SPECIAL_EQ_REG_KIND: LazyLock<Regex> =
+    LazyLock::new(|| compile(&format!("^{}={}{}{}$", SPECIAL_VAR, REG, DOT, KIND)));
+static RE_REG_KIND_EQ_SPECIAL: LazyLock<Regex> =
+    LazyLock::new(|| compile(&format!("^{}{}{}={}$", REG, DOT, KIND, SPECIAL_VAR)));
+static RE_REG_KIND_EQ_REG_KIND: LazyLock<Regex> =
+    LazyLock::new(|| compile(&format!("^{}{}{}={}{}{}$", REG, DOT, KIND, REG, DOT, KIND)));
+static RE_REG_TYPE_EQ_REG_TYPE: LazyLock<Regex> =
+    LazyLock::new(|| compile(&format!("^{}{}type={}{}type$", REG, DOT, REG, DOT)));
+static RE_REG_TYPE_EQ_TYPE: LazyLock<Regex> =
+    LazyLock::new(|| compile(&format!("^{}{}type={}$", REG, DOT, TYPE_PAT)));
+static RE_REG_TYPE_IN_TYPESET: LazyLock<Regex> =
+    LazyLock::new(|| compile(&format!("^{}{}type{}{}$", REG, DOT, IN, TYPE_SET)));
+static RE_REG_KIND_EQ_IMM: LazyLock<Regex> =
+    LazyLock::new(|| compile(&format!("^{}{}{}={}$", REG, DOT, KIND, IMM)));
+static RE_REG_KIND_EQ_INTERVAL: LazyLock<Regex> =
+    LazyLock::new(|| compile(&format!("^{}{}{}={}$", REG, DOT, KIND, INTERVAL)));
+static RE_REG_KIND_DIFF_LEQ: LazyLock<Regex> = LazyLock::new(|| {
+    compile(&format!(
+        "^{}{}{}-{}{}{}<={}$",
+        REG, DOT, KIND, REG, DOT, KIND, IMM
+    ))
+});
+static RE_STACK_RANGE_TYPE: LazyLock<Regex> =
+    LazyLock::new(|| compile(&format!("^s{}{}type={}$", ARRAY_RANGE, DOT, TYPE_PAT)));
+static RE_STACK_RANGE_SVALUE: LazyLock<Regex> =
+    LazyLock::new(|| compile(&format!("^s{}{}svalue={}$", ARRAY_RANGE, DOT, IMM)));
+static RE_STACK_RANGE_UVALUE: LazyLock<Regex> =
+    LazyLock::new(|| compile(&format!("^s{}{}uvalue={}$", ARRAY_RANGE, DOT, IMM)));
+static RE_TYPE_TOK: LazyLock<Regex> = LazyLock::new(|| compile(TYPE_PAT));
 
 // ---------------------------------------------------------------------------
 // Lookup tables
@@ -299,161 +435,119 @@ pub fn parse_instruction_with_platform(
     let widths = str_to_width();
 
     // exit
-    if let Some(_m) = Regex::new(r"^exit$").unwrap().captures(text) {
+    if RE_EXIT.is_match(text) {
         return Instruction::Exit(Exit {
             stack_frame_prefix: Rc::from(""),
         });
     }
 
     // call <imm>
-    {
-        let pat = format!("^call {}$", IMM);
-        if let Some(m) = Regex::new(&pat).unwrap().captures(text) {
-            let func = to_int(m.get(1).unwrap().as_str());
-            if let Some(plat) = platform {
-                return Instruction::Call(crate::ir::unmarshal::make_call(func, plat));
-            }
-            return Instruction::Undefined(Undefined { opcode: 0 });
+    if let Some(m) = RE_CALL_IMM.captures(text) {
+        let func = to_int(m.get(1).unwrap().as_str());
+        if let Some(plat) = platform {
+            return Instruction::Call(crate::ir::unmarshal::make_call(func, plat));
         }
+        return Instruction::Undefined(Undefined { opcode: 0 });
     }
 
     // call <label>
-    {
-        let pat = format!("^call {}$", wrapped_label());
-        if let Some(m) = Regex::new(&pat).unwrap().captures(text) {
-            let label_str = m.get(1).unwrap().as_str().to_string();
-            return Instruction::CallLocal(CallLocal {
-                target: label_name_to_label[&label_str].clone(),
-                stack_frame_prefix: Rc::from(""),
-            });
-        }
+    if let Some(m) = RE_CALL_LABEL.captures(text) {
+        let label_str = m.get(1).unwrap().as_str().to_string();
+        return Instruction::CallLocal(CallLocal {
+            target: label_name_to_label[&label_str].clone(),
+            stack_frame_prefix: Rc::from(""),
+        });
     }
 
     // callx <reg>
-    {
-        let pat = format!("^callx {}$", REG);
-        if let Some(m) = Regex::new(&pat).unwrap().captures(text) {
-            return Instruction::Callx(Callx {
-                func: reg(m.get(1).unwrap().as_str()),
-            });
-        }
+    if let Some(m) = RE_CALLX.captures(text) {
+        return Instruction::Callx(Callx {
+            func: reg(m.get(1).unwrap().as_str()),
+        });
     }
 
     // call_btf <imm> module <imm>
-    {
-        let pat = format!(r"^call_btf {}\s+module\s+{}$", IMM, IMM);
-        if let Some(m) = Regex::new(&pat).unwrap().captures(text) {
-            let module_val = to_int(m.get(2).unwrap().as_str());
-            if module_val < 0 || module_val > i16::MAX as i32 {
-                panic!("module value out of range in call_btf");
-            }
-            return Instruction::CallBtf(CallBtf {
-                btf_id: to_int(m.get(1).unwrap().as_str()),
-                module: module_val as i16,
-            });
+    if let Some(m) = RE_CALL_BTF_MODULE.captures(text) {
+        let module_val = to_int(m.get(2).unwrap().as_str());
+        if module_val < 0 || module_val > i16::MAX as i32 {
+            panic!("module value out of range in call_btf");
         }
+        return Instruction::CallBtf(CallBtf {
+            btf_id: to_int(m.get(1).unwrap().as_str()),
+            module: module_val as i16,
+        });
     }
 
     // call_btf <imm>
-    {
-        let pat = format!("^call_btf {}$", IMM);
-        if let Some(m) = Regex::new(&pat).unwrap().captures(text) {
-            return Instruction::CallBtf(CallBtf {
-                btf_id: to_int(m.get(1).unwrap().as_str()),
-                module: 0,
-            });
-        }
+    if let Some(m) = RE_CALL_BTF.captures(text) {
+        return Instruction::CallBtf(CallBtf {
+            btf_id: to_int(m.get(1).unwrap().as_str()),
+            module: 0,
+        });
     }
 
     // <wreg> <op>= <wreg>  (binary reg-reg)
-    {
-        let pat = format!("^{}{}{}$", WREG, OPASSIGN, WREG);
-        if let Some(m) = Regex::new(&pat).unwrap().captures(text) {
-            let r = m.get(1).unwrap().as_str();
-            let op_str = m.get(2).unwrap().as_str();
-            let src = m.get(3).unwrap().as_str();
-            if let Some(&op) = binops.get(op_str) {
-                return Instruction::Bin(Bin {
-                    op,
-                    dst: reg(r),
-                    v: Value::Reg(reg(src)),
-                    is64: is64_reg(r),
-                    lddw: false,
-                });
-            }
+    if let Some(m) = RE_BIN_REG.captures(text) {
+        let r = m.get(1).unwrap().as_str();
+        let op_str = m.get(2).unwrap().as_str();
+        let src = m.get(3).unwrap().as_str();
+        if let Some(&op) = binops.get(op_str) {
+            return Instruction::Bin(Bin {
+                op,
+                dst: reg(r),
+                v: Value::Reg(reg(src)),
+                is64: is64_reg(r),
+                lddw: false,
+            });
         }
     }
 
     // <wreg> = <unop> <wreg>  (unary operation)
-    {
-        let pat = format!("^{}{}{}{}$", WREG, ASSIGN, UNOP, WREG);
-        if let Some(m) = Regex::new(&pat).unwrap().captures(text) {
-            let dst_str = m.get(1).unwrap().as_str();
-            let op_str = m.get(2).unwrap().as_str();
-            let src_str = m.get(3).unwrap().as_str();
-            if dst_str != src_str {
-                panic!("Invalid unary operation: {}", text);
-            }
-            return Instruction::Un(Un {
-                op: unops[op_str],
-                dst: reg(dst_str),
-                is64: is64_reg(dst_str),
-            });
+    if let Some(m) = RE_UN.captures(text) {
+        let dst_str = m.get(1).unwrap().as_str();
+        let op_str = m.get(2).unwrap().as_str();
+        let src_str = m.get(3).unwrap().as_str();
+        if dst_str != src_str {
+            panic!("Invalid unary operation: {}", text);
         }
+        return Instruction::Un(Un {
+            op: unops[op_str],
+            dst: reg(dst_str),
+            is64: is64_reg(dst_str),
+        });
     }
 
     // <wreg> = map_val(<fd>) + <offset>
-    {
-        let pat = format!("^{}{}{}$", WREG, ASSIGN, MAP_VAL);
-        if let Some(m) = Regex::new(&pat).unwrap().captures(text) {
-            return Instruction::LoadMapAddress(LoadMapAddress {
-                dst: reg(m.get(1).unwrap().as_str()),
-                mapfd: to_int(m.get(2).unwrap().as_str()),
-                offset: to_int(m.get(3).unwrap().as_str()),
-            });
-        }
+    if let Some(m) = RE_LOAD_MAP_ADDRESS.captures(text) {
+        return Instruction::LoadMapAddress(LoadMapAddress {
+            dst: reg(m.get(1).unwrap().as_str()),
+            mapfd: to_int(m.get(2).unwrap().as_str()),
+            offset: to_int(m.get(3).unwrap().as_str()),
+        });
     }
 
     // <wreg> = map_fd_programs <fd>  or  <wreg> = map_fd <fd>
-    {
-        let pat = format!(r"^{}{}map_fd(?:_programs)?\s+(\d+)\s*$", WREG, ASSIGN);
-        if let Some(m) = Regex::new(&pat).unwrap().captures(text) {
-            return Instruction::LoadMapFd(LoadMapFd {
-                dst: reg(m.get(1).unwrap().as_str()),
-                mapfd: to_int(m.get(2).unwrap().as_str()),
-            });
-        }
+    if let Some(m) = RE_LOAD_MAP_FD.captures(text) {
+        return Instruction::LoadMapFd(LoadMapFd {
+            dst: reg(m.get(1).unwrap().as_str()),
+            mapfd: to_int(m.get(2).unwrap().as_str()),
+        });
     }
 
     // Pseudo-load instructions: variable_addr, code_addr, map_by_idx, mva(map_by_idx)
     {
-        let pseudo_patterns: &[(&str, PseudoAddressKind, bool)] = &[
+        let pseudo_patterns: &[(&LazyLock<Regex>, PseudoAddressKind, bool)] = &[
             (
-                &format!("^{}{}variable_addr\\s+{}$", WREG, ASSIGN, IMM),
+                &RE_PSEUDO_VARIABLE_ADDR,
                 PseudoAddressKind::VariableAddr,
                 false,
             ),
-            (
-                &format!("^{}{}code_addr\\s+{}$", WREG, ASSIGN, IMM),
-                PseudoAddressKind::CodeAddr,
-                false,
-            ),
-            (
-                &format!(r"^{}{}map_by_idx\({}\)$", WREG, ASSIGN, IMM),
-                PseudoAddressKind::MapByIdx,
-                false,
-            ),
-            (
-                &format!(
-                    r"^{}{}mva\(map_by_idx\({}\)\)\s*\+\s*{}$",
-                    WREG, ASSIGN, IMM, IMM
-                ),
-                PseudoAddressKind::MapValueByIdx,
-                true,
-            ),
+            (&RE_PSEUDO_CODE_ADDR, PseudoAddressKind::CodeAddr, false),
+            (&RE_PSEUDO_MAP_BY_IDX, PseudoAddressKind::MapByIdx, false),
+            (&RE_PSEUDO_MVA, PseudoAddressKind::MapValueByIdx, true),
         ];
-        for &(pat, kind, has_next_imm) in pseudo_patterns {
-            if let Some(m) = Regex::new(pat).unwrap().captures(text) {
+        for &(re, kind, has_next_imm) in pseudo_patterns {
+            if let Some(m) = re.captures(text) {
                 return Instruction::LoadPseudo(LoadPseudo {
                     dst: reg(m.get(1).unwrap().as_str()),
                     addr: PseudoAddress {
@@ -471,176 +565,128 @@ pub fn parse_instruction_with_platform(
     }
 
     // <wreg> <op>= <imm> [ll]  (binary reg-imm)
-    {
-        let pat = format!("^{}{}{}{}$", WREG, OPASSIGN, IMM, LONGLONG);
-        if let Some(m) = Regex::new(&pat).unwrap().captures(text) {
-            let r = m.get(1).unwrap().as_str();
-            let op_str = m.get(2).unwrap().as_str();
-            let imm_str = m.get(3).unwrap().as_str();
-            let ll_str = m.get(4).unwrap().as_str();
-            let lddw = !ll_str.is_empty();
-            if let Some(&op) = binops.get(op_str) {
-                return Instruction::Bin(Bin {
-                    op,
-                    dst: reg(r),
-                    v: Value::Imm(imm(imm_str, lddw)),
-                    is64: is64_reg(r),
-                    lddw,
-                });
-            }
+    if let Some(m) = RE_BIN_IMM.captures(text) {
+        let r = m.get(1).unwrap().as_str();
+        let op_str = m.get(2).unwrap().as_str();
+        let imm_str = m.get(3).unwrap().as_str();
+        let ll_str = m.get(4).unwrap().as_str();
+        let lddw = !ll_str.is_empty();
+        if let Some(&op) = binops.get(op_str) {
+            return Instruction::Bin(Bin {
+                op,
+                dst: reg(r),
+                v: Value::Imm(imm(imm_str, lddw)),
+                is64: is64_reg(r),
+                lddw,
+            });
         }
     }
 
     // <reg> = *(u<width> *)(<reg> +/- <imm>)  (memory load)
-    {
-        let deref_pat = format!("{}{}([su])(\\d+){}{}", STAR, LPAREN, STAR, RPAREN);
-        let inner = format!("{}{}{}", REG, PLUSMINUS, IMM);
-        let pat = format!(
-            "^{}{}{}{}{}{}$",
-            REG, ASSIGN, deref_pat, LPAREN, inner, RPAREN
-        );
-        if let Some(m) = Regex::new(&pat).unwrap().captures(text) {
-            return Instruction::Mem(Mem {
-                access: make_deref(
-                    m.get(2).unwrap().as_str(),
-                    m.get(3).unwrap().as_str(),
-                    m.get(4).unwrap().as_str(),
-                    m.get(5).unwrap().as_str(),
-                    m.get(6).unwrap().as_str(),
-                ),
-                value: Value::Reg(reg(m.get(1).unwrap().as_str())),
-                is_load: true,
-                is_signed: m.get(2).unwrap().as_str() == "s",
-            });
-        }
+    if let Some(m) = RE_MEM_LOAD.captures(text) {
+        return Instruction::Mem(Mem {
+            access: make_deref(
+                m.get(2).unwrap().as_str(),
+                m.get(3).unwrap().as_str(),
+                m.get(4).unwrap().as_str(),
+                m.get(5).unwrap().as_str(),
+                m.get(6).unwrap().as_str(),
+            ),
+            value: Value::Reg(reg(m.get(1).unwrap().as_str())),
+            is_load: true,
+            is_signed: m.get(2).unwrap().as_str() == "s",
+        });
     }
 
     // *(u<width> *)(<reg> +/- <imm>) = <reg_or_imm>  (memory store)
-    {
-        let deref_pat = format!("{}{}([su])(\\d+){}{}", STAR, LPAREN, STAR, RPAREN);
-        let inner = format!("{}{}{}", REG, PLUSMINUS, IMM);
-        let pat = format!(
-            "^{}{}{}{}{}{}$",
-            deref_pat, LPAREN, inner, RPAREN, ASSIGN, REG_OR_IMM
-        );
-        if let Some(m) = Regex::new(&pat).unwrap().captures(text) {
-            return Instruction::Mem(Mem {
-                access: make_deref(
-                    m.get(1).unwrap().as_str(),
-                    m.get(2).unwrap().as_str(),
-                    m.get(3).unwrap().as_str(),
-                    m.get(4).unwrap().as_str(),
-                    m.get(5).unwrap().as_str(),
-                ),
-                value: reg_or_imm(m.get(6).unwrap().as_str()),
-                is_load: false,
-                is_signed: false,
-            });
-        }
+    if let Some(m) = RE_MEM_STORE.captures(text) {
+        return Instruction::Mem(Mem {
+            access: make_deref(
+                m.get(1).unwrap().as_str(),
+                m.get(2).unwrap().as_str(),
+                m.get(3).unwrap().as_str(),
+                m.get(4).unwrap().as_str(),
+                m.get(5).unwrap().as_str(),
+            ),
+            value: reg_or_imm(m.get(6).unwrap().as_str()),
+            is_load: false,
+            is_signed: false,
+        });
     }
 
     // lock *(u<width> *)(<reg> +/- <imm>) <atomicop> <reg> [fetch]
-    {
-        let deref_pat = format!("{}{}([su])(\\d+){}{}", STAR, LPAREN, STAR, RPAREN);
-        let inner = format!("{}{}{}", REG, PLUSMINUS, IMM);
-        let pat = format!(
-            r"^lock {}{}{}{}{}{}( fetch)?$",
-            deref_pat, LPAREN, inner, RPAREN, ATOMICOP, REG
-        );
-        if let Some(m) = Regex::new(&pat).unwrap().captures(text) {
-            let op = atomicops[m.get(6).unwrap().as_str()];
-            let fetch_matched = m.get(8).is_some();
-            return Instruction::Atomic(Atomic {
-                op,
-                fetch: fetch_matched || op == AtomicOp::XCHG || op == AtomicOp::CMPXCHG,
-                access: make_deref(
-                    m.get(1).unwrap().as_str(),
-                    m.get(2).unwrap().as_str(),
-                    m.get(3).unwrap().as_str(),
-                    m.get(4).unwrap().as_str(),
-                    m.get(5).unwrap().as_str(),
-                ),
-                valreg: reg(m.get(7).unwrap().as_str()),
-            });
-        }
+    if let Some(m) = RE_ATOMIC.captures(text) {
+        let op = atomicops[m.get(6).unwrap().as_str()];
+        let fetch_matched = m.get(8).is_some();
+        return Instruction::Atomic(Atomic {
+            op,
+            fetch: fetch_matched || op == AtomicOp::XCHG || op == AtomicOp::CMPXCHG,
+            access: make_deref(
+                m.get(1).unwrap().as_str(),
+                m.get(2).unwrap().as_str(),
+                m.get(3).unwrap().as_str(),
+                m.get(4).unwrap().as_str(),
+                m.get(5).unwrap().as_str(),
+            ),
+            valreg: reg(m.get(7).unwrap().as_str()),
+        });
     }
 
     // r0 = *(u<width> *)skb[...]  (packet access)
-    {
-        let deref_pat = format!("{}{}u(\\d+){}{}", STAR, LPAREN, STAR, RPAREN);
-        let pat = format!(r"^r0 = {}skb\[(.*)\]$", deref_pat);
-        if let Some(m) = Regex::new(&pat).unwrap().captures(text) {
-            let width = widths[m.get(1).unwrap().as_str()];
-            let access = m.get(2).unwrap().as_str();
+    if let Some(m) = RE_PACKET.captures(text) {
+        let width = widths[m.get(1).unwrap().as_str()];
+        let access = m.get(2).unwrap().as_str();
 
-            // Try matching the access expression
-            let reg_pat = format!("^{}$", REG);
-            let imm_pat = format!("^{}$", IMM);
-            let reg_plusminus_reg_pat = format!("^{}{}{}$", REG, PLUSMINUS, REG);
-            let reg_plusminus_imm_pat = format!("^{}{}{}$", REG, PLUSMINUS, IMM);
-
-            if let Some(m2) = Regex::new(&reg_pat).unwrap().captures(access) {
-                return Instruction::Packet(Packet {
-                    width,
-                    offset: 0,
-                    regoffset: Some(reg(m2.get(1).unwrap().as_str())),
-                });
-            }
-            if let Some(m2) = Regex::new(&imm_pat).unwrap().captures(access) {
-                return Instruction::Packet(Packet {
-                    width,
-                    offset: imm(m2.get(1).unwrap().as_str(), false).v as i32,
-                    regoffset: None,
-                });
-            }
-            if let Some(m2) = Regex::new(&reg_plusminus_reg_pat).unwrap().captures(access) {
-                return Instruction::Packet(Packet {
-                    width,
-                    offset: 0, // ? (same as C++)
-                    regoffset: Some(reg(m2.get(2).unwrap().as_str())),
-                });
-            }
-            if let Some(m2) = Regex::new(&reg_plusminus_imm_pat).unwrap().captures(access) {
-                return Instruction::Packet(Packet {
-                    width,
-                    offset: imm(m2.get(2).unwrap().as_str(), false).v as i32,
-                    regoffset: Some(reg(m2.get(1).unwrap().as_str())),
-                });
-            }
-            return Instruction::Undefined(Undefined { opcode: 0 });
+        if let Some(m2) = RE_PACKET_REG.captures(access) {
+            return Instruction::Packet(Packet {
+                width,
+                offset: 0,
+                regoffset: Some(reg(m2.get(1).unwrap().as_str())),
+            });
         }
+        if let Some(m2) = RE_PACKET_IMM.captures(access) {
+            return Instruction::Packet(Packet {
+                width,
+                offset: imm(m2.get(1).unwrap().as_str(), false).v as i32,
+                regoffset: None,
+            });
+        }
+        if let Some(m2) = RE_PACKET_REG_PM_REG.captures(access) {
+            return Instruction::Packet(Packet {
+                width,
+                offset: 0, // ? (same as C++)
+                regoffset: Some(reg(m2.get(2).unwrap().as_str())),
+            });
+        }
+        if let Some(m2) = RE_PACKET_REG_PM_IMM.captures(access) {
+            return Instruction::Packet(Packet {
+                width,
+                offset: imm(m2.get(2).unwrap().as_str(), false).v as i32,
+                regoffset: Some(reg(m2.get(1).unwrap().as_str())),
+            });
+        }
+        return Instruction::Undefined(Undefined { opcode: 0 });
     }
 
     // assume <wreg> <cmpop> <reg_or_imm>
-    {
-        let pat = format!("^assume {}{}{}$", WREG, CMPOP, REG_OR_IMM);
-        if let Some(m) = Regex::new(&pat).unwrap().captures(text) {
-            let left_str = m.get(1).unwrap().as_str();
-            let op_str = m.get(2).unwrap().as_str();
-            let right_str = m.get(3).unwrap().as_str();
-            return Instruction::Assume(Assume {
-                cond: Condition {
-                    op: cmpops[op_str],
-                    left: reg(left_str),
-                    right: reg_or_imm(right_str),
-                    is64: is64_reg(left_str),
-                },
-                is_implicit: false,
-            });
-        }
+    if let Some(m) = RE_ASSUME.captures(text) {
+        let left_str = m.get(1).unwrap().as_str();
+        let op_str = m.get(2).unwrap().as_str();
+        let right_str = m.get(3).unwrap().as_str();
+        return Instruction::Assume(Assume {
+            cond: Condition {
+                op: cmpops[op_str],
+                left: reg(left_str),
+                right: reg_or_imm(right_str),
+                is64: is64_reg(left_str),
+            },
+            is_implicit: false,
+        });
     }
 
     // [if <wreg> <cmpop> <reg_or_imm> ]goto [<imm>] <label>
     {
-        let pat = format!(
-            "^(?:if {}{}{})?goto\\s+(?:{})?{}$",
-            WREG,
-            CMPOP,
-            REG_OR_IMM,
-            IMM,
-            wrapped_label()
-        );
-        if let Some(m) = Regex::new(&pat).unwrap().captures(text) {
+        if let Some(m) = RE_GOTO.captures(text) {
             let label_str = m.get(5).unwrap().as_str().to_string();
             let cond = if let Some(m1) = m.get(1) {
                 let left_str = m1.as_str();
@@ -672,9 +718,6 @@ pub fn parse_instruction_with_platform(
 /// Each line may optionally be preceded by a label of the form `<name>:`.
 /// Lines with only whitespace or that parse to `Undefined` are skipped.
 pub fn parse_program(source: &str) -> InstructionSeq {
-    let label_re = Regex::new(&format!("{}:", LABEL_PAT)).unwrap();
-    let prefix_re = Regex::new(r"^\s*(\d+:)?\s*").unwrap();
-
     let mut labeled_insts: InstructionSeq = Vec::new();
     let mut seen_labels: BTreeSet<Label> = BTreeSet::new();
     let mut next_label: Option<Label> = None;
@@ -682,8 +725,8 @@ pub fn parse_program(source: &str) -> InstructionSeq {
     for line in source.lines() {
         let mut remaining = line.to_string();
 
-        if let Some(m) = label_re.find(&remaining) {
-            let caps = label_re.captures(&remaining).unwrap();
+        if let Some(m) = RE_LABEL.find(&remaining) {
+            let caps = RE_LABEL.captures(&remaining).unwrap();
             let label_text = caps.get(1).unwrap().as_str();
             let l = Label::new(to_int(label_text));
             if seen_labels.contains(&l) {
@@ -694,7 +737,7 @@ pub fn parse_program(source: &str) -> InstructionSeq {
             remaining = remaining[m.end()..].to_string();
         }
 
-        if let Some(m) = prefix_re.find(&remaining) {
+        if let Some(m) = RE_PREFIX.find(&remaining) {
             remaining = remaining[m.end()..].to_string();
         }
 
@@ -772,39 +815,8 @@ pub fn parse_linear_constraints(
     let mut type_equalities: Vec<(Variable, Variable)> = Vec::new();
     let mut type_restrictions: Vec<(Variable, crate::crab::type_encoding::TypeSet)> = Vec::new();
 
-    // Pre-compile all the regex patterns.
-    let re_special_eq_imm = Regex::new(&format!("^{}={}$", SPECIAL_VAR, IMM)).unwrap();
-    let re_special_eq_interval = Regex::new(&format!("^{}={}$", SPECIAL_VAR, INTERVAL)).unwrap();
-    let re_special_eq_reg_kind =
-        Regex::new(&format!("^{}={}{}{}$", SPECIAL_VAR, REG, DOT, KIND)).unwrap();
-    let re_reg_kind_eq_special =
-        Regex::new(&format!("^{}{}{}={}$", REG, DOT, KIND, SPECIAL_VAR)).unwrap();
-    let re_reg_kind_eq_reg_kind =
-        Regex::new(&format!("^{}{}{}={}{}{}$", REG, DOT, KIND, REG, DOT, KIND)).unwrap();
-    let re_reg_type_eq_reg_type =
-        Regex::new(&format!("^{}{}type={}{}type$", REG, DOT, REG, DOT)).unwrap();
-    let re_reg_type_eq_type = Regex::new(&format!("^{}{}type={}$", REG, DOT, TYPE_PAT)).unwrap();
-    let re_reg_type_in_typeset =
-        Regex::new(&format!("^{}{}type{}{}$", REG, DOT, IN, TYPE_SET)).unwrap();
-    let re_reg_kind_eq_imm = Regex::new(&format!("^{}{}{}={}$", REG, DOT, KIND, IMM)).unwrap();
-    let re_reg_kind_eq_interval =
-        Regex::new(&format!("^{}{}{}={}$", REG, DOT, KIND, INTERVAL)).unwrap();
-    let re_reg_kind_diff_leq = Regex::new(&format!(
-        "^{}{}{}-{}{}{}<={}$",
-        REG, DOT, KIND, REG, DOT, KIND, IMM
-    ))
-    .unwrap();
-    let re_stack_range_type =
-        Regex::new(&format!("^s{}{}type={}$", ARRAY_RANGE, DOT, TYPE_PAT)).unwrap();
-    let re_stack_range_svalue =
-        Regex::new(&format!("^s{}{}svalue={}$", ARRAY_RANGE, DOT, IMM)).unwrap();
-    let re_stack_range_uvalue =
-        Regex::new(&format!("^s{}{}uvalue={}$", ARRAY_RANGE, DOT, IMM)).unwrap();
-
-    let type_tok_regex = Regex::new(TYPE_PAT).unwrap();
-
     for cst_text in constraints {
-        if let Some(m) = re_special_eq_imm.captures(cst_text) {
+        if let Some(m) = RE_SPECIAL_EQ_IMM.captures(cst_text) {
             // SPECIAL_VAR = IMM
             let d = special_var(m.get(1).unwrap().as_str(), registry);
             let val = signed_number(m.get(2).unwrap().as_str());
@@ -812,14 +824,14 @@ pub fn parse_linear_constraints(
                 LinearExpression::from(d),
                 LinearExpression::from(val),
             ));
-        } else if let Some(m) = re_special_eq_interval.captures(cst_text) {
+        } else if let Some(m) = RE_SPECIAL_EQ_INTERVAL.captures(cst_text) {
             // SPECIAL_VAR = [lb, ub]
             let d = special_var(m.get(1).unwrap().as_str(), registry);
             let lb = signed_number(m.get(2).unwrap().as_str());
             let ub = signed_number(m.get(3).unwrap().as_str());
             value_csts.push(leq(LinearExpression::from(lb), LinearExpression::from(d)));
             value_csts.push(leq(LinearExpression::from(d), LinearExpression::from(ub)));
-        } else if let Some(m) = re_special_eq_reg_kind.captures(cst_text) {
+        } else if let Some(m) = RE_SPECIAL_EQ_REG_KIND.captures(cst_text) {
             // SPECIAL_VAR = REG.KIND
             let d = special_var(m.get(1).unwrap().as_str(), registry);
             let s = parse_reg_var(&m, 2, 3, registry);
@@ -827,7 +839,7 @@ pub fn parse_linear_constraints(
                 LinearExpression::from(d),
                 LinearExpression::from(s),
             ));
-        } else if let Some(m) = re_reg_kind_eq_special.captures(cst_text) {
+        } else if let Some(m) = RE_REG_KIND_EQ_SPECIAL.captures(cst_text) {
             // REG.KIND = SPECIAL_VAR
             let d = parse_reg_var(&m, 1, 2, registry);
             let s = special_var(m.get(3).unwrap().as_str(), registry);
@@ -835,7 +847,7 @@ pub fn parse_linear_constraints(
                 LinearExpression::from(d),
                 LinearExpression::from(s),
             ));
-        } else if let Some(m) = re_reg_kind_eq_reg_kind.captures(cst_text) {
+        } else if let Some(m) = RE_REG_KIND_EQ_REG_KIND.captures(cst_text) {
             // REG.KIND = REG.KIND
             let d = parse_reg_var(&m, 1, 2, registry);
             let s = parse_reg_var(&m, 3, 4, registry);
@@ -843,24 +855,24 @@ pub fn parse_linear_constraints(
                 LinearExpression::from(d),
                 LinearExpression::from(s),
             ));
-        } else if let Some(m) = re_reg_type_eq_reg_type.captures(cst_text) {
+        } else if let Some(m) = RE_REG_TYPE_EQ_REG_TYPE.captures(cst_text) {
             // REG.type = REG.type
             let d = registry.type_reg(regnum(m.get(1).unwrap().as_str()));
             let s = registry.type_reg(regnum(m.get(2).unwrap().as_str()));
             type_equalities.push((d, s));
-        } else if let Some(m) = re_reg_type_eq_type.captures(cst_text) {
+        } else if let Some(m) = RE_REG_TYPE_EQ_TYPE.captures(cst_text) {
             // REG.type = TYPE
             let d = registry.type_reg(regnum(m.get(1).unwrap().as_str()));
             let enc = string_to_type_encoding(m.get(2).unwrap().as_str())
                 .unwrap_or_else(|| panic!("Unknown type encoding: {}", m.get(2).unwrap().as_str()));
             type_restrictions.push((d, crate::crab::type_encoding::TypeSet::singleton(enc)));
-        } else if let Some(m) = re_reg_type_in_typeset.captures(cst_text) {
+        } else if let Some(m) = RE_REG_TYPE_IN_TYPESET.captures(cst_text) {
             // REG.type in { TYPE, TYPE, ... }
             let d = registry.type_reg(regnum(m.get(1).unwrap().as_str()));
             let inside = m.get(2).unwrap().as_str();
 
             let mut ts = crate::crab::type_encoding::TypeSet::empty();
-            for cap in type_tok_regex.captures_iter(inside) {
+            for cap in RE_TYPE_TOK.captures_iter(inside) {
                 let sym = cap.get(1).unwrap().as_str();
                 let enc = string_to_type_encoding(sym)
                     .unwrap_or_else(|| panic!("Unknown type encoding: {}", sym));
@@ -872,7 +884,7 @@ pub fn parse_linear_constraints(
             }
 
             type_restrictions.push((d, ts));
-        } else if let Some(m) = re_reg_kind_eq_imm.captures(cst_text) {
+        } else if let Some(m) = RE_REG_KIND_EQ_IMM.captures(cst_text) {
             // REG.KIND = IMM
             let d = parse_reg_var(&m, 1, 2, registry);
             let value = if m.get(2).unwrap().as_str() == "uvalue" {
@@ -884,7 +896,7 @@ pub fn parse_linear_constraints(
                 LinearExpression::from(d),
                 LinearExpression::from(value),
             ));
-        } else if let Some(m) = re_reg_kind_eq_interval.captures(cst_text) {
+        } else if let Some(m) = RE_REG_KIND_EQ_INTERVAL.captures(cst_text) {
             // REG.KIND = [lb, ub]
             let d = parse_reg_var(&m, 1, 2, registry);
             let (lb, ub) = if m.get(2).unwrap().as_str() == "uvalue" {
@@ -900,7 +912,7 @@ pub fn parse_linear_constraints(
             };
             value_csts.push(leq(LinearExpression::from(lb), LinearExpression::from(d)));
             value_csts.push(leq(LinearExpression::from(d), LinearExpression::from(ub)));
-        } else if let Some(m) = re_reg_kind_diff_leq.captures(cst_text) {
+        } else if let Some(m) = RE_REG_KIND_DIFF_LEQ.captures(cst_text) {
             // REG.KIND - REG.KIND <= IMM
             let d = parse_reg_var(&m, 1, 2, registry);
             let s = parse_reg_var(&m, 3, 4, registry);
@@ -910,7 +922,7 @@ pub fn parse_linear_constraints(
                 LinearExpression::from(d) - LinearExpression::from(s),
                 LinearExpression::from(diff),
             ));
-        } else if let Some(m) = re_stack_range_type.captures(cst_text) {
+        } else if let Some(m) = RE_STACK_RANGE_TYPE.captures(cst_text) {
             // s[lb...ub].type = TYPE
             let type_enc = string_to_type_encoding(m.get(3).unwrap().as_str())
                 .unwrap_or_else(|| panic!("Unknown type encoding: {}", m.get(3).unwrap().as_str()));
@@ -924,7 +936,7 @@ pub fn parse_linear_constraints(
                 type_restrictions
                     .push((d, crate::crab::type_encoding::TypeSet::singleton(type_enc)));
             }
-        } else if let Some(m) = re_stack_range_svalue.captures(cst_text) {
+        } else if let Some(m) = RE_STACK_RANGE_SVALUE.captures(cst_text) {
             // s[lb...ub].svalue = IMM
             let lb = signed_number(m.get(1).unwrap().as_str());
             let ub = signed_number(m.get(2).unwrap().as_str());
@@ -934,7 +946,7 @@ pub fn parse_linear_constraints(
                 LinearExpression::from(d),
                 LinearExpression::from(signed_number(m.get(3).unwrap().as_str())),
             ));
-        } else if let Some(m) = re_stack_range_uvalue.captures(cst_text) {
+        } else if let Some(m) = RE_STACK_RANGE_UVALUE.captures(cst_text) {
             // s[lb...ub].uvalue = IMM
             let lb = signed_number(m.get(1).unwrap().as_str());
             let ub = signed_number(m.get(2).unwrap().as_str());
