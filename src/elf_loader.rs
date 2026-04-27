@@ -2714,10 +2714,7 @@ mod tests {
 
     fn default_options() -> EbpfVerifierOptions {
         EbpfVerifierOptions {
-            cfg_opts: crate::spec::config::PrepareCfgOptions {
-                check_for_termination: false,
-                must_have_exit: true,
-            },
+            must_have_exit: true,
             mock_map_fds: true,
             verbosity_opts: crate::spec::config::VerbosityOptions {
                 simplify: true,

@@ -272,14 +272,14 @@ fn parse_options(raw: &[String]) -> EbpfVerifierOptions {
     // YAML test defaults (match C++)
     opts.verbosity_opts.simplify = false;
     opts.runtime.setup_constraints = false;
-    opts.cfg_opts.must_have_exit = false;
+    opts.must_have_exit = false;
     // Default to little-endian (x86 host)
     opts.runtime.big_endian = false;
 
     for name in raw {
         match name.as_str() {
             "!allow_division_by_zero" => opts.runtime.allow_division_by_zero = false,
-            "termination" => opts.cfg_opts.check_for_termination = true,
+            "termination" => opts.runtime.check_for_termination = true,
             "strict" => opts.runtime.strict = true,
             "simplify" => opts.verbosity_opts.simplify = true,
             "big_endian" => opts.runtime.big_endian = true,

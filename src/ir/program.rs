@@ -361,7 +361,7 @@ impl Program {
         let mut builder = instruction_seq_to_cfg(
             inst_seq,
             info,
-            options.cfg_opts.must_have_exit,
+            options.must_have_exit,
             options.runtime.max_call_stack_frames,
             &resolved_kfunc_calls,
         )?;
@@ -426,7 +426,7 @@ impl Program {
         // CFG that identifies all strongly connected components (cycles) and their
         // entry points. These entry points serve as natural locations for loop
         // counters that help verify program termination.
-        if options.cfg_opts.check_for_termination {
+        if options.runtime.check_for_termination {
             let mut loop_heads = Vec::new();
             wto.for_each_loop_head(&mut |label| loop_heads.push(label.clone()));
             for label in loop_heads {

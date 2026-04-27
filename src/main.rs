@@ -18,9 +18,7 @@ use prevail::ir::unmarshal;
 use prevail::linux::linux_platform::LinuxPlatform;
 use prevail::linux_verifier;
 use prevail::memsize;
-use prevail::spec::config::{
-    EbpfRuntimeConfig, EbpfVerifierOptions, PrepareCfgOptions, VerbosityOptions,
-};
+use prevail::spec::config::{EbpfRuntimeConfig, EbpfVerifierOptions, VerbosityOptions};
 use prevail::spec::type_descriptors::RawProgram;
 use prevail::spec::vm_isa::EbpfInst;
 
@@ -327,16 +325,14 @@ fn main() -> ExitCode {
     }
 
     let mut opts = EbpfVerifierOptions {
-        cfg_opts: PrepareCfgOptions {
-            check_for_termination,
-            must_have_exit: true,
-        },
+        must_have_exit: true,
         mock_map_fds: true,
         runtime: EbpfRuntimeConfig {
             strict: cli.strict,
             allow_division_by_zero,
             setup_constraints: true,
             big_endian: false,
+            check_for_termination,
             subprogram_stack_size: cli.stack_size,
             max_call_stack_frames: cli.max_call_stack_frames,
             max_packet_size: cli.max_packet_size,

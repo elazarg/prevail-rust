@@ -5,13 +5,6 @@
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
-pub struct PrepareCfgOptions {
-    pub check_for_termination: bool,
-    pub must_have_exit: bool,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default)]
 pub struct VerbosityOptions {
     pub simplify: bool,
     pub print_invariants: bool,
@@ -21,11 +14,9 @@ pub struct VerbosityOptions {
     pub collect_instruction_deps: bool,
 }
 
-/// Verifier-semantic options consumed by the abstract-domain layer.
-///
-/// Grouped separately so that the verifier core sees only what it
-/// needs, not CFG-build or display options. Mirrors the C++ structure
-/// logically (upstream keeps a flat `ebpf_verifier_options_t`).
+/// Runtime/semantic configuration: knobs read by the analyzer, checker,
+/// and abstract domain whose values affect which programs are accepted.
+/// Mirrors upstream `RuntimeConfig`.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct EbpfRuntimeConfig {
@@ -33,6 +24,9 @@ pub struct EbpfRuntimeConfig {
     pub allow_division_by_zero: bool,
     pub setup_constraints: bool,
     pub big_endian: bool,
+    /// When true, instrument loop heads with bounded-loop-count counters and
+    /// require the analysis to prove they remain within the loop bound.
+    pub check_for_termination: bool,
     /// Per-subprogram stack frame size in bytes.
     pub subprogram_stack_size: i32,
     /// Maximum number of nested function calls.
@@ -100,6 +94,7 @@ impl Default for EbpfRuntimeConfig {
             allow_division_by_zero: true,
             setup_constraints: true,
             big_endian: false,
+            check_for_termination: false,
             subprogram_stack_size: Self::DEFAULT_SUBPROGRAM_STACK_SIZE,
             max_call_stack_frames: Self::DEFAULT_MAX_CALL_STACK_FRAMES,
             max_packet_size: Self::DEFAULT_MAX_PACKET_SIZE,
@@ -108,12 +103,25 @@ impl Default for EbpfRuntimeConfig {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug)]
 pub struct EbpfVerifierOptions {
-    pub cfg_opts: PrepareCfgOptions,
     pub runtime: EbpfRuntimeConfig,
     pub verbosity_opts: VerbosityOptions,
+    /// When true, ensures the program has a valid exit block.
+    pub must_have_exit: bool,
+    /// False to use actual map fd's, true to use mock fd's.
     pub mock_map_fds: bool,
+}
+
+impl Default for EbpfVerifierOptions {
+    fn default() -> Self {
+        EbpfVerifierOptions {
+            runtime: EbpfRuntimeConfig::default(),
+            verbosity_opts: VerbosityOptions::default(),
+            must_have_exit: true,
+            mock_map_fds: false,
+        }
+    }
 }
 
 impl EbpfVerifierOptions {

@@ -500,7 +500,7 @@ impl EbpfDomain {
             );
             inv.add_value_constraint(&geq(r.packet_offset.into(), 0i64.into()), registry);
 
-            if ctx.options.cfg_opts.check_for_termination {
+            if ctx.options.runtime.check_for_termination {
                 for counter in registry.get_loop_counters() {
                     inv.add_value_constraint(
                         &leq(counter.into(), (i32::MAX as i64).into()),

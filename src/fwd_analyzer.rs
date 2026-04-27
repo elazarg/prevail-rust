@@ -435,7 +435,7 @@ impl<'a, P: Program> FwdFixpointIterator<'a, P> {
         let mut analyzer = FwdFixpointIterator::new(prog, ctx, registry);
         analyzer.array_map = array_map;
 
-        if ctx.options.cfg_opts.check_for_termination {
+        if ctx.options.runtime.check_for_termination {
             // Initialize loop counters for potential loop headers.
             // This enables enforcement of upper bounds on loop iterations
             // during program verification.
@@ -461,7 +461,7 @@ impl<'a, P: Program> FwdFixpointIterator<'a, P> {
             analyzer.visit_component(component);
         }
 
-        if !analyzer.result.failed && ctx.options.cfg_opts.check_for_termination {
+        if !analyzer.result.failed && ctx.options.runtime.check_for_termination {
             analyzer.find_termination_errors();
             if !analyzer.result.failed {
                 analyzer.result.max_loop_count = analyzer.max_loop_count();
