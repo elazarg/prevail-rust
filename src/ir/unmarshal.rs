@@ -6,15 +6,14 @@
 use std::rc::Rc;
 
 use crate::cfg::label::Label;
-use crate::crab::type_encoding::{T_ALLOC_MEM, T_BTF_ID, T_SOCKET};
 use crate::ir::syntax::{
-    ArgPair, ArgPairKind, ArgSingle, ArgSingleKind, Atomic, AtomicOp, Bin, BinOp, Call, CallBtf,
-    CallKind, CallLocal, Callx, Condition, ConditionOp, Deref, Exit, Imm, Instruction,
-    InstructionSeq, Jmp, LoadMapAddress, LoadMapFd, LoadPseudo, Mem, Packet, PseudoAddress,
-    PseudoAddressKind, Reg, Un, UnOp, Value,
+    Atomic, AtomicOp, Bin, BinOp, Call, CallBtf, CallKind, CallLocal, Callx, Condition,
+    ConditionOp, Deref, Exit, Imm, Instruction, InstructionSeq, Jmp, LoadMapAddress, LoadMapFd,
+    LoadPseudo, Mem, Packet, PseudoAddress, PseudoAddressKind, Reg, Un, UnOp, Value,
 };
 use crate::platform::EbpfPlatform;
 use crate::spec::config::EbpfVerifierOptions;
+use crate::spec::ebpf_base::EbpfReturnType;
 use crate::spec::type_descriptors::ProgramInfo;
 use crate::spec::vm_isa::*;
 
@@ -1111,20 +1110,7 @@ pub fn unmarshal(
 // make_call — convert helper prototype to Call instruction
 // ============================================================================
 
-use crate::ir::arg_kind;
-use crate::spec::ebpf_base::{EbpfArgumentType, EbpfReturnType};
-
-/// Helper-call mapping: fall back to `Anything` for unmapped types
-/// (matches the C++ default).
-fn to_arg_single_kind(t: EbpfArgumentType) -> ArgSingleKind {
-    arg_kind::to_arg_single_kind(t).unwrap_or(ArgSingleKind::Anything)
-}
-
-/// Helper-call mapping: fall back to `PtrToReadableMem` for unmapped types
-/// (matches the C++ default).
-fn to_arg_pair_kind(t: EbpfArgumentType) -> ArgPairKind {
-    arg_kind::to_arg_pair_kind(t).unwrap_or(ArgPairKind::PtrToReadableMem)
-}
+use crate::ir::call_proto::{self, ArgOutcome, ReturnTypeOutcome};
 
 /// Convert a helper function id + platform into a `Call` instruction.
 ///
@@ -1141,12 +1127,10 @@ pub fn make_call(imm: i32, platform: &dyn EbpfPlatform) -> Call {
 pub fn make_call_result(imm: i32, platform: &dyn EbpfPlatform) -> Result<Call, String> {
     let proto = platform.get_helper_prototype(imm);
 
-    let name: Rc<str> = Rc::from(proto.name);
-
     let mut res = Call {
         func: imm,
         kind: CallKind::Helper,
-        name,
+        name: Rc::from(proto.name),
         is_supported: true,
         unsupported_reason: Rc::from(""),
         contract: crate::ir::syntax::CallContract {
@@ -1161,55 +1145,27 @@ pub fn make_call_result(imm: i32, platform: &dyn EbpfPlatform) -> Result<Call, S
         res.unsupported_reason = Rc::from(why);
     };
 
-    match proto.return_type {
-        EbpfReturnType::Integer
-        | EbpfReturnType::PtrToMapValueOrNull
-        | EbpfReturnType::IntegerOrNoReturnIfSucceed => {}
-        EbpfReturnType::PtrToSockCommonOrNull
-        | EbpfReturnType::PtrToSocketOrNull
-        | EbpfReturnType::PtrToTcpSocketOrNull => {
-            res.contract.return_ptr_type = Some(T_SOCKET);
-            res.contract.return_nullable = true;
-        }
-        EbpfReturnType::PtrToAllocMemOrNull => {
-            res.contract.return_ptr_type = Some(T_ALLOC_MEM);
-            res.contract.return_nullable = true;
-        }
-        EbpfReturnType::PtrToBtfIdOrNull | EbpfReturnType::PtrToMemOrBtfIdOrNull => {
-            res.contract.return_ptr_type = Some(T_BTF_ID);
-            res.contract.return_nullable = true;
-        }
-        EbpfReturnType::PtrToBtfId | EbpfReturnType::PtrToMemOrBtfId => {
-            res.contract.return_ptr_type = Some(T_BTF_ID);
-            res.contract.return_nullable = false;
-        }
-        _ => {
-            mark_unsupported(
-                &mut res,
-                format!(
-                    "helper prototype is unavailable on this platform: {}",
-                    proto.name
-                ),
-            );
-            return Ok(res);
-        }
+    if let ReturnTypeOutcome::Unavailable =
+        call_proto::apply_return_type(&mut res.contract, proto.return_type)
+    {
+        mark_unsupported(
+            &mut res,
+            format!(
+                "helper prototype is unavailable on this platform: {}",
+                proto.name
+            ),
+        );
+        return Ok(res);
     }
 
-    // Build argument list: pad with DontCare sentinel on each end (matching C++ array layout)
-    let args = [
-        EbpfArgumentType::DontCare,
-        proto.argument_type[0],
-        proto.argument_type[1],
-        proto.argument_type[2],
-        proto.argument_type[3],
-        proto.argument_type[4],
-        EbpfArgumentType::DontCare,
-    ];
-
+    let args = call_proto::padded_args(&proto.argument_type);
     let mut i = 1usize;
     while i < args.len() - 1 {
-        match args[i] {
-            EbpfArgumentType::Unsupported => {
+        match call_proto::process_arg(&mut res.contract, &args, i) {
+            ArgOutcome::Single => i += 1,
+            ArgOutcome::Pair => i += 2,
+            ArgOutcome::Stop => break,
+            ArgOutcome::Unavailable => {
                 mark_unsupported(
                     &mut res,
                     format!(
@@ -1219,102 +1175,7 @@ pub fn make_call_result(imm: i32, platform: &dyn EbpfPlatform) -> Result<Call, S
                 );
                 return Ok(res);
             }
-            EbpfArgumentType::DontCare => {
-                // No more arguments
-                break;
-            }
-            EbpfArgumentType::Anything
-            | EbpfArgumentType::PtrToMap
-            | EbpfArgumentType::ConstPtrToMap
-            | EbpfArgumentType::PtrToMapOfPrograms
-            | EbpfArgumentType::PtrToMapKey
-            | EbpfArgumentType::PtrToMapValue
-            | EbpfArgumentType::PtrToUninitMapValue
-            | EbpfArgumentType::PtrToStack
-            | EbpfArgumentType::PtrToCtx
-            | EbpfArgumentType::PtrToFunc => {
-                res.contract.singles.push(ArgSingle {
-                    kind: to_arg_single_kind(args[i]),
-                    or_null: false,
-                    reg: Reg { v: i as u8 },
-                });
-            }
-            EbpfArgumentType::PtrToStackOrNull | EbpfArgumentType::PtrToCtxOrNull => {
-                res.contract.singles.push(ArgSingle {
-                    kind: to_arg_single_kind(args[i]),
-                    or_null: true,
-                    reg: Reg { v: i as u8 },
-                });
-            }
-            EbpfArgumentType::PtrToBtfIdSockCommon | EbpfArgumentType::PtrToSockCommon => {
-                res.contract.singles.push(ArgSingle {
-                    kind: ArgSingleKind::PtrToSocket,
-                    or_null: false,
-                    reg: Reg { v: i as u8 },
-                });
-            }
-            EbpfArgumentType::PtrToBtfId | EbpfArgumentType::PtrToPercpuBtfId => {
-                res.contract.singles.push(ArgSingle {
-                    kind: ArgSingleKind::PtrToBtfId,
-                    or_null: false,
-                    reg: Reg { v: i as u8 },
-                });
-            }
-            EbpfArgumentType::PtrToAllocMem => {
-                res.contract.singles.push(ArgSingle {
-                    kind: ArgSingleKind::PtrToAllocMem,
-                    or_null: false,
-                    reg: Reg { v: i as u8 },
-                });
-            }
-            EbpfArgumentType::PtrToSpinLock => {
-                res.contract.singles.push(ArgSingle {
-                    kind: ArgSingleKind::PtrToSpinLock,
-                    or_null: false,
-                    reg: Reg { v: i as u8 },
-                });
-            }
-            EbpfArgumentType::PtrToTimer => {
-                res.contract.singles.push(ArgSingle {
-                    kind: ArgSingleKind::PtrToTimer,
-                    or_null: false,
-                    reg: Reg { v: i as u8 },
-                });
-            }
-            EbpfArgumentType::ConstAllocSizeOrZero => {
-                res.contract.alloc_size_reg = Some(Reg { v: i as u8 });
-                res.contract.singles.push(ArgSingle {
-                    kind: ArgSingleKind::ConstSizeOrZero,
-                    or_null: false,
-                    reg: Reg { v: i as u8 },
-                });
-            }
-            EbpfArgumentType::PtrToLong => {
-                res.contract.singles.push(ArgSingle {
-                    kind: ArgSingleKind::PtrToWritableLong,
-                    or_null: false,
-                    reg: Reg { v: i as u8 },
-                });
-            }
-            EbpfArgumentType::PtrToInt => {
-                res.contract.singles.push(ArgSingle {
-                    kind: ArgSingleKind::PtrToWritableInt,
-                    or_null: false,
-                    reg: Reg { v: i as u8 },
-                });
-            }
-            EbpfArgumentType::PtrToConstStr => {
-                mark_unsupported(
-                    &mut res,
-                    format!(
-                        "helper argument type is unavailable on this platform: {}",
-                        proto.name
-                    ),
-                );
-                return Ok(res);
-            }
-            EbpfArgumentType::ConstSize | EbpfArgumentType::ConstSizeOrZero => {
-                // These should not appear without a preceding PTR_TO_*_MEM
+            ArgOutcome::MismatchedSize => {
                 mark_unsupported(
                     &mut res,
                     format!(
@@ -1324,50 +1185,7 @@ pub fn make_call_result(imm: i32, platform: &dyn EbpfPlatform) -> Result<Call, S
                 );
                 return Ok(res);
             }
-            EbpfArgumentType::PtrToReadableMemOrNull
-            | EbpfArgumentType::PtrToReadableMem
-            | EbpfArgumentType::PtrToReadonlyMemOrNull
-            | EbpfArgumentType::PtrToReadonlyMem
-            | EbpfArgumentType::PtrToWritableMemOrNull
-            | EbpfArgumentType::PtrToWritableMem => {
-                // Must be followed by ConstSize or ConstSizeOrZero
-                if i + 1 >= args.len() - 1 {
-                    mark_unsupported(
-                        &mut res,
-                        format!(
-                            "mismatched EBPF_ARGUMENT_TYPE_PTR_TO* and EBPF_ARGUMENT_TYPE_CONST_SIZE: {}",
-                            proto.name
-                        ),
-                    );
-                    return Ok(res);
-                }
-                if args[i + 1] != EbpfArgumentType::ConstSize
-                    && args[i + 1] != EbpfArgumentType::ConstSizeOrZero
-                {
-                    mark_unsupported(
-                        &mut res,
-                        format!(
-                            "Pointer argument not followed by EBPF_ARGUMENT_TYPE_CONST_SIZE or EBPF_ARGUMENT_TYPE_CONST_SIZE_OR_ZERO: {}",
-                            proto.name
-                        ),
-                    );
-                    return Ok(res);
-                }
-                let can_be_zero = args[i + 1] == EbpfArgumentType::ConstSizeOrZero;
-                let or_null = args[i] == EbpfArgumentType::PtrToReadableMemOrNull
-                    || args[i] == EbpfArgumentType::PtrToReadonlyMemOrNull
-                    || args[i] == EbpfArgumentType::PtrToWritableMemOrNull;
-                res.contract.pairs.push(ArgPair {
-                    kind: to_arg_pair_kind(args[i]),
-                    or_null,
-                    mem: Reg { v: i as u8 },
-                    size: Reg { v: (i + 1) as u8 },
-                    can_be_zero,
-                });
-                i += 1; // skip the size argument
-            }
         }
-        i += 1;
     }
 
     Ok(res)

@@ -4,6 +4,7 @@
 pub(crate) mod arg_kind;
 pub mod assembler;
 pub(crate) mod assertions;
+pub(crate) mod call_proto;
 pub(crate) mod marshal;
 pub mod parse;
 pub mod program;
