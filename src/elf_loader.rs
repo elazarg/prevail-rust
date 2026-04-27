@@ -93,7 +93,6 @@ type MapOffsets = BTreeMap<String, usize>;
 
 enum MapResolution {
     /// Legacy mode — retained for future legacy-record-size path.
-    /// Upstream parity: matches the legacy branch in the C++ parser.
     #[expect(dead_code)]
     Legacy(usize),
     /// Name-based lookup from map/section name to descriptor index.
@@ -157,7 +156,7 @@ fn get_symbol_details(
 
 // ── Function relocation record ──────────────────────────────────────
 
-/// Upstream parity: fields are populated for diagnostics; not all are read today.
+/// Fields are populated for diagnostics; not all are read today.
 #[expect(dead_code)]
 struct FunctionRelocation {
     prog_index: usize,

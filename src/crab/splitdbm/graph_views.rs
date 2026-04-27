@@ -22,11 +22,9 @@ use super::{VertId, Weight};
 /// The performance cost is negligible compared to the graph algorithm work.
 pub trait ReadableGraph {
     fn size(&self) -> usize;
-    /// Upstream parity: part of the `ReadableGraph` concept, mirrors `elem` in
-    /// `adapt_sgraph.hpp` and `graph_views.hpp`. Inherent callers use
-    /// `AdaptGraph::elem`, so rustc flags the trait method as dead.
-    #[allow(dead_code)] // `#[expect(dead_code)]` is unfulfilled here; trait-method
-    // dead-code reporting differs from item-level reporting.
+    /// Inherent callers use `AdaptGraph::elem`, which shadows the trait
+    /// method — rustc flags it as dead.
+    #[allow(dead_code)]
     fn elem(&self, s: VertId, d: VertId) -> bool;
     fn edge_val(&self, s: VertId, d: VertId) -> Weight;
     fn lookup(&self, s: VertId, d: VertId) -> Option<Weight>;
