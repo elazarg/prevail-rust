@@ -268,14 +268,12 @@ pub fn make_kfunc_call_result(btf_id: i32, info: Option<&ProgramInfo>) -> Result
         name: Rc::from(proto.name),
         is_supported: true,
         unsupported_reason: Rc::from(""),
-        is_map_lookup: proto.return_type == EbpfReturnType::PtrToMapValueOrNull,
-        reallocate_packet: proto.reallocate_packet,
-        return_ptr_type: None,
-        return_nullable: false,
-        singles: Vec::new(),
-        pairs: Vec::new(),
+        contract: crate::ir::syntax::CallContract {
+            is_map_lookup: proto.return_type == EbpfReturnType::PtrToMapValueOrNull,
+            reallocate_packet: proto.reallocate_packet,
+            ..Default::default()
+        },
         stack_frame_prefix: Rc::from(""),
-        alloc_size_reg: None,
     };
 
     let accepted_flags = KFUNC_FLAG_ACQUIRE
@@ -318,20 +316,20 @@ pub fn make_kfunc_call_result(btf_id: i32, info: Option<&ProgramInfo>) -> Result
         EbpfReturnType::PtrToSockCommonOrNull
         | EbpfReturnType::PtrToSocketOrNull
         | EbpfReturnType::PtrToTcpSocketOrNull => {
-            res.return_ptr_type = Some(T_SOCKET);
-            res.return_nullable = true;
+            res.contract.return_ptr_type = Some(T_SOCKET);
+            res.contract.return_nullable = true;
         }
         EbpfReturnType::PtrToAllocMemOrNull => {
-            res.return_ptr_type = Some(T_ALLOC_MEM);
-            res.return_nullable = true;
+            res.contract.return_ptr_type = Some(T_ALLOC_MEM);
+            res.contract.return_nullable = true;
         }
         EbpfReturnType::PtrToBtfIdOrNull | EbpfReturnType::PtrToMemOrBtfIdOrNull => {
-            res.return_ptr_type = Some(T_BTF_ID);
-            res.return_nullable = true;
+            res.contract.return_ptr_type = Some(T_BTF_ID);
+            res.contract.return_nullable = true;
         }
         EbpfReturnType::PtrToBtfId | EbpfReturnType::PtrToMemOrBtfId => {
-            res.return_ptr_type = Some(T_BTF_ID);
-            res.return_nullable = false;
+            res.contract.return_ptr_type = Some(T_BTF_ID);
+            res.contract.return_nullable = false;
         }
         _ => {
             return Err(format!(
@@ -370,7 +368,7 @@ pub fn make_kfunc_call_result(btf_id: i32, info: Option<&ProgramInfo>) -> Result
             | EbpfArgumentType::PtrToUninitMapValue
             | EbpfArgumentType::PtrToStack
             | EbpfArgumentType::PtrToCtx => {
-                res.singles.push(ArgSingle {
+                res.contract.singles.push(ArgSingle {
                     kind: to_arg_single_kind(args[i])?,
                     or_null: false,
                     reg: Reg { v: i as u8 },
@@ -378,7 +376,7 @@ pub fn make_kfunc_call_result(btf_id: i32, info: Option<&ProgramInfo>) -> Result
                 i += 1;
             }
             EbpfArgumentType::PtrToStackOrNull | EbpfArgumentType::PtrToCtxOrNull => {
-                res.singles.push(ArgSingle {
+                res.contract.singles.push(ArgSingle {
                     kind: to_arg_single_kind(args[i])?,
                     or_null: true,
                     reg: Reg { v: i as u8 },
@@ -386,7 +384,7 @@ pub fn make_kfunc_call_result(btf_id: i32, info: Option<&ProgramInfo>) -> Result
                 i += 1;
             }
             EbpfArgumentType::PtrToBtfIdSockCommon | EbpfArgumentType::PtrToSockCommon => {
-                res.singles.push(ArgSingle {
+                res.contract.singles.push(ArgSingle {
                     kind: ArgSingleKind::PtrToSocket,
                     or_null: false,
                     reg: Reg { v: i as u8 },
@@ -394,7 +392,7 @@ pub fn make_kfunc_call_result(btf_id: i32, info: Option<&ProgramInfo>) -> Result
                 i += 1;
             }
             EbpfArgumentType::PtrToBtfId | EbpfArgumentType::PtrToPercpuBtfId => {
-                res.singles.push(ArgSingle {
+                res.contract.singles.push(ArgSingle {
                     kind: ArgSingleKind::PtrToBtfId,
                     or_null: false,
                     reg: Reg { v: i as u8 },
@@ -402,7 +400,7 @@ pub fn make_kfunc_call_result(btf_id: i32, info: Option<&ProgramInfo>) -> Result
                 i += 1;
             }
             EbpfArgumentType::PtrToAllocMem => {
-                res.singles.push(ArgSingle {
+                res.contract.singles.push(ArgSingle {
                     kind: ArgSingleKind::PtrToAllocMem,
                     or_null: false,
                     reg: Reg { v: i as u8 },
@@ -410,7 +408,7 @@ pub fn make_kfunc_call_result(btf_id: i32, info: Option<&ProgramInfo>) -> Result
                 i += 1;
             }
             EbpfArgumentType::PtrToSpinLock => {
-                res.singles.push(ArgSingle {
+                res.contract.singles.push(ArgSingle {
                     kind: ArgSingleKind::PtrToSpinLock,
                     or_null: false,
                     reg: Reg { v: i as u8 },
@@ -418,7 +416,7 @@ pub fn make_kfunc_call_result(btf_id: i32, info: Option<&ProgramInfo>) -> Result
                 i += 1;
             }
             EbpfArgumentType::PtrToTimer => {
-                res.singles.push(ArgSingle {
+                res.contract.singles.push(ArgSingle {
                     kind: ArgSingleKind::PtrToTimer,
                     or_null: false,
                     reg: Reg { v: i as u8 },
@@ -426,8 +424,8 @@ pub fn make_kfunc_call_result(btf_id: i32, info: Option<&ProgramInfo>) -> Result
                 i += 1;
             }
             EbpfArgumentType::ConstAllocSizeOrZero => {
-                res.alloc_size_reg = Some(Reg { v: i as u8 });
-                res.singles.push(ArgSingle {
+                res.contract.alloc_size_reg = Some(Reg { v: i as u8 });
+                res.contract.singles.push(ArgSingle {
                     kind: ArgSingleKind::ConstSizeOrZero,
                     or_null: false,
                     reg: Reg { v: i as u8 },
@@ -435,7 +433,7 @@ pub fn make_kfunc_call_result(btf_id: i32, info: Option<&ProgramInfo>) -> Result
                 i += 1;
             }
             EbpfArgumentType::PtrToLong => {
-                res.singles.push(ArgSingle {
+                res.contract.singles.push(ArgSingle {
                     kind: ArgSingleKind::PtrToWritableLong,
                     or_null: false,
                     reg: Reg { v: i as u8 },
@@ -443,7 +441,7 @@ pub fn make_kfunc_call_result(btf_id: i32, info: Option<&ProgramInfo>) -> Result
                 i += 1;
             }
             EbpfArgumentType::PtrToInt => {
-                res.singles.push(ArgSingle {
+                res.contract.singles.push(ArgSingle {
                     kind: ArgSingleKind::PtrToWritableInt,
                     or_null: false,
                     reg: Reg { v: i as u8 },
@@ -480,7 +478,7 @@ pub fn make_kfunc_call_result(btf_id: i32, info: Option<&ProgramInfo>) -> Result
                     EbpfArgumentType::PtrToReadableMemOrNull
                         | EbpfArgumentType::PtrToWritableMemOrNull
                 );
-                res.pairs.push(ArgPair {
+                res.contract.pairs.push(ArgPair {
                     kind: to_arg_pair_kind(args[i])?,
                     or_null,
                     mem: Reg { v: i as u8 },
@@ -524,7 +522,7 @@ mod tests {
         let call = make_kfunc_call_result(1005, None).expect("known id should resolve");
         assert_eq!(call.kind, CallKind::Kfunc);
         assert_eq!(call.func, 1005);
-        assert!(call.is_map_lookup);
+        assert!(call.contract.is_map_lookup);
     }
 
     #[test]
@@ -563,15 +561,21 @@ mod tests {
     #[test]
     fn kfunc_pointer_size_pairs_are_encoded() {
         let readable = make_kfunc_call_result(1006, None).expect("1006 should resolve");
-        assert_eq!(readable.pairs.len(), 1);
-        assert_eq!(readable.pairs[0].kind, ArgPairKind::PtrToReadableMem);
-        assert!(readable.pairs[0].or_null);
-        assert!(readable.pairs[0].can_be_zero);
+        assert_eq!(readable.contract.pairs.len(), 1);
+        assert_eq!(
+            readable.contract.pairs[0].kind,
+            ArgPairKind::PtrToReadableMem
+        );
+        assert!(readable.contract.pairs[0].or_null);
+        assert!(readable.contract.pairs[0].can_be_zero);
 
         let writable = make_kfunc_call_result(1007, None).expect("1007 should resolve");
-        assert_eq!(writable.pairs.len(), 1);
-        assert_eq!(writable.pairs[0].kind, ArgPairKind::PtrToWritableMem);
-        assert!(!writable.pairs[0].or_null);
-        assert!(!writable.pairs[0].can_be_zero);
+        assert_eq!(writable.contract.pairs.len(), 1);
+        assert_eq!(
+            writable.contract.pairs[0].kind,
+            ArgPairKind::PtrToWritableMem
+        );
+        assert!(!writable.contract.pairs[0].or_null);
+        assert!(!writable.contract.pairs[0].can_be_zero);
     }
 }

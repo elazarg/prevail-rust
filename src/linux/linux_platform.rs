@@ -423,14 +423,12 @@ fn builtin_call(name: &'static str, id: i32, singles: Vec<ArgSingle>, pairs: Vec
         name: Rc::from(name),
         is_supported: true,
         unsupported_reason: Rc::from(""),
-        is_map_lookup: false,
-        reallocate_packet: false,
-        return_ptr_type: None,
-        return_nullable: false,
-        singles,
-        pairs,
+        contract: crate::ir::syntax::CallContract {
+            singles,
+            pairs,
+            ..Default::default()
+        },
         stack_frame_prefix: Rc::from(""),
-        alloc_size_reg: None,
     }
 }
 
@@ -966,40 +964,38 @@ impl EbpfPlatform for LinuxPlatform {
                 name: Rc::from("extern_unspecified"),
                 is_supported: true,
                 unsupported_reason: Rc::from(""),
-                is_map_lookup: false,
-                reallocate_packet: true,
-                return_ptr_type: None,
-                return_nullable: false,
-                singles: vec![
-                    ArgSingle {
-                        kind: ArgSingleKind::Anything,
-                        or_null: false,
-                        reg: reg1,
-                    },
-                    ArgSingle {
-                        kind: ArgSingleKind::Anything,
-                        or_null: false,
-                        reg: reg2,
-                    },
-                    ArgSingle {
-                        kind: ArgSingleKind::Anything,
-                        or_null: false,
-                        reg: reg3,
-                    },
-                    ArgSingle {
-                        kind: ArgSingleKind::Anything,
-                        or_null: false,
-                        reg: Reg { v: 4 },
-                    },
-                    ArgSingle {
-                        kind: ArgSingleKind::Anything,
-                        or_null: false,
-                        reg: Reg { v: 5 },
-                    },
-                ],
-                pairs: vec![],
+                contract: crate::ir::syntax::CallContract {
+                    reallocate_packet: true,
+                    singles: vec![
+                        ArgSingle {
+                            kind: ArgSingleKind::Anything,
+                            or_null: false,
+                            reg: reg1,
+                        },
+                        ArgSingle {
+                            kind: ArgSingleKind::Anything,
+                            or_null: false,
+                            reg: reg2,
+                        },
+                        ArgSingle {
+                            kind: ArgSingleKind::Anything,
+                            or_null: false,
+                            reg: reg3,
+                        },
+                        ArgSingle {
+                            kind: ArgSingleKind::Anything,
+                            or_null: false,
+                            reg: Reg { v: 4 },
+                        },
+                        ArgSingle {
+                            kind: ArgSingleKind::Anything,
+                            or_null: false,
+                            reg: Reg { v: 5 },
+                        },
+                    ],
+                    ..Default::default()
+                },
                 stack_frame_prefix: Rc::from(""),
-                alloc_size_reg: None,
             }),
             _ => None,
         }
@@ -1140,7 +1136,7 @@ mod tests {
         assert_eq!(extern_id, Some(LINUX_BUILTIN_CALL_EXTERN_UNSPEC));
         let extern_call = platform.get_builtin_call(extern_id.unwrap()).unwrap();
         assert_eq!(&*extern_call.name, "extern_unspecified");
-        assert!(extern_call.reallocate_packet);
+        assert!(extern_call.contract.reallocate_packet);
 
         // Empty name returns None.
         assert!(platform.resolve_builtin_call("").is_none());

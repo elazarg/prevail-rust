@@ -1252,10 +1252,11 @@ fn add_cfg_nodes(
 pub fn instype(ins: &Instruction) -> &'static str {
     match ins {
         Instruction::Call(call) => {
-            if call.is_map_lookup {
+            if call.contract.is_map_lookup {
                 "call_1"
-            } else if call.pairs.is_empty() {
+            } else if call.contract.pairs.is_empty() {
                 if call
+                    .contract
                     .singles
                     .iter()
                     .all(|kr| kr.kind == ArgSingleKind::Anything)
@@ -1332,7 +1333,7 @@ pub fn collect_stats(prog: &Program) -> BTreeMap<String, i32> {
             res.insert("map_in_map".to_string(), 1);
         }
         if let Instruction::Call(call) = cmd
-            && call.reallocate_packet
+            && call.contract.reallocate_packet
         {
             res.insert("reallocate".to_string(), 1);
         }
@@ -1583,14 +1584,8 @@ mod tests {
                     name: Rc::from("tail_call"),
                     is_supported: true,
                     unsupported_reason: Rc::from(""),
-                    is_map_lookup: false,
-                    reallocate_packet: false,
-                    return_ptr_type: None,
-                    return_nullable: false,
-                    singles: vec![],
-                    pairs: vec![],
+                    contract: crate::ir::syntax::CallContract::default(),
                     stack_frame_prefix: Rc::from(""),
-                    alloc_size_reg: None,
                 }),
                 None,
             ));
@@ -1625,14 +1620,8 @@ mod tests {
                     name: Rc::from("tail_call"),
                     is_supported: true,
                     unsupported_reason: Rc::from(""),
-                    is_map_lookup: false,
-                    reallocate_packet: false,
-                    return_ptr_type: None,
-                    return_nullable: false,
-                    singles: vec![],
-                    pairs: vec![],
+                    contract: crate::ir::syntax::CallContract::default(),
                     stack_frame_prefix: Rc::from(""),
-                    alloc_size_reg: None,
                 }),
                 None,
             ));

@@ -137,7 +137,7 @@ fn assertions_call(ins: &Call, info: &ProgramInfo, label: &Option<Label>) -> Vec
     let mut res = Vec::new();
     let mut map_fd_reg: Option<Reg> = None;
 
-    for arg in &ins.singles {
+    for arg in &ins.contract.singles {
         match arg.kind {
             ArgSingleKind::Anything => {
                 // Avoid pointer leakage.
@@ -268,7 +268,7 @@ fn assertions_call(ins: &Call, info: &ProgramInfo, label: &Option<Label>) -> Vec
         }
     }
 
-    for arg in &ins.pairs {
+    for arg in &ins.contract.pairs {
         let group = if arg.or_null {
             TypeGroup::MemOrNum
         } else {

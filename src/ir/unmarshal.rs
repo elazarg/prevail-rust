@@ -791,14 +791,8 @@ impl<'a> Unmarshaller<'a> {
                         unsupported_reason: Rc::from(
                             "helper function is unavailable on this platform",
                         ),
-                        is_map_lookup: false,
-                        reallocate_packet: false,
-                        return_ptr_type: None,
-                        return_nullable: false,
-                        singles: Vec::new(),
-                        pairs: Vec::new(),
+                        contract: crate::ir::syntax::CallContract::default(),
                         stack_frame_prefix: Rc::from(""),
-                        alloc_size_reg: None,
                     }));
                 }
 
@@ -816,14 +810,8 @@ impl<'a> Unmarshaller<'a> {
                         unsupported_reason: Rc::from(
                             "helper function is unavailable on this platform",
                         ),
-                        is_map_lookup: false,
-                        reallocate_packet: false,
-                        return_ptr_type: None,
-                        return_nullable: false,
-                        singles: Vec::new(),
-                        pairs: Vec::new(),
+                        contract: crate::ir::syntax::CallContract::default(),
                         stack_frame_prefix: Rc::from(""),
-                        alloc_size_reg: None,
                     }));
                 }
 
@@ -1177,14 +1165,12 @@ pub fn make_call_result(imm: i32, platform: &dyn EbpfPlatform) -> Result<Call, S
         name,
         is_supported: true,
         unsupported_reason: Rc::from(""),
-        is_map_lookup: proto.return_type == EbpfReturnType::PtrToMapValueOrNull,
-        reallocate_packet: proto.reallocate_packet,
-        return_ptr_type: None,
-        return_nullable: false,
-        singles: vec![],
-        pairs: vec![],
+        contract: crate::ir::syntax::CallContract {
+            is_map_lookup: proto.return_type == EbpfReturnType::PtrToMapValueOrNull,
+            reallocate_packet: proto.reallocate_packet,
+            ..Default::default()
+        },
         stack_frame_prefix: Rc::from(""),
-        alloc_size_reg: None,
     };
     let mark_unsupported = |res: &mut Call, why: String| {
         res.is_supported = false;
@@ -1198,20 +1184,20 @@ pub fn make_call_result(imm: i32, platform: &dyn EbpfPlatform) -> Result<Call, S
         EbpfReturnType::PtrToSockCommonOrNull
         | EbpfReturnType::PtrToSocketOrNull
         | EbpfReturnType::PtrToTcpSocketOrNull => {
-            res.return_ptr_type = Some(T_SOCKET);
-            res.return_nullable = true;
+            res.contract.return_ptr_type = Some(T_SOCKET);
+            res.contract.return_nullable = true;
         }
         EbpfReturnType::PtrToAllocMemOrNull => {
-            res.return_ptr_type = Some(T_ALLOC_MEM);
-            res.return_nullable = true;
+            res.contract.return_ptr_type = Some(T_ALLOC_MEM);
+            res.contract.return_nullable = true;
         }
         EbpfReturnType::PtrToBtfIdOrNull | EbpfReturnType::PtrToMemOrBtfIdOrNull => {
-            res.return_ptr_type = Some(T_BTF_ID);
-            res.return_nullable = true;
+            res.contract.return_ptr_type = Some(T_BTF_ID);
+            res.contract.return_nullable = true;
         }
         EbpfReturnType::PtrToBtfId | EbpfReturnType::PtrToMemOrBtfId => {
-            res.return_ptr_type = Some(T_BTF_ID);
-            res.return_nullable = false;
+            res.contract.return_ptr_type = Some(T_BTF_ID);
+            res.contract.return_nullable = false;
         }
         _ => {
             mark_unsupported(
@@ -1263,71 +1249,71 @@ pub fn make_call_result(imm: i32, platform: &dyn EbpfPlatform) -> Result<Call, S
             | EbpfArgumentType::PtrToStack
             | EbpfArgumentType::PtrToCtx
             | EbpfArgumentType::PtrToFunc => {
-                res.singles.push(ArgSingle {
+                res.contract.singles.push(ArgSingle {
                     kind: to_arg_single_kind(args[i]),
                     or_null: false,
                     reg: Reg { v: i as u8 },
                 });
             }
             EbpfArgumentType::PtrToStackOrNull | EbpfArgumentType::PtrToCtxOrNull => {
-                res.singles.push(ArgSingle {
+                res.contract.singles.push(ArgSingle {
                     kind: to_arg_single_kind(args[i]),
                     or_null: true,
                     reg: Reg { v: i as u8 },
                 });
             }
             EbpfArgumentType::PtrToBtfIdSockCommon | EbpfArgumentType::PtrToSockCommon => {
-                res.singles.push(ArgSingle {
+                res.contract.singles.push(ArgSingle {
                     kind: ArgSingleKind::PtrToSocket,
                     or_null: false,
                     reg: Reg { v: i as u8 },
                 });
             }
             EbpfArgumentType::PtrToBtfId | EbpfArgumentType::PtrToPercpuBtfId => {
-                res.singles.push(ArgSingle {
+                res.contract.singles.push(ArgSingle {
                     kind: ArgSingleKind::PtrToBtfId,
                     or_null: false,
                     reg: Reg { v: i as u8 },
                 });
             }
             EbpfArgumentType::PtrToAllocMem => {
-                res.singles.push(ArgSingle {
+                res.contract.singles.push(ArgSingle {
                     kind: ArgSingleKind::PtrToAllocMem,
                     or_null: false,
                     reg: Reg { v: i as u8 },
                 });
             }
             EbpfArgumentType::PtrToSpinLock => {
-                res.singles.push(ArgSingle {
+                res.contract.singles.push(ArgSingle {
                     kind: ArgSingleKind::PtrToSpinLock,
                     or_null: false,
                     reg: Reg { v: i as u8 },
                 });
             }
             EbpfArgumentType::PtrToTimer => {
-                res.singles.push(ArgSingle {
+                res.contract.singles.push(ArgSingle {
                     kind: ArgSingleKind::PtrToTimer,
                     or_null: false,
                     reg: Reg { v: i as u8 },
                 });
             }
             EbpfArgumentType::ConstAllocSizeOrZero => {
-                res.alloc_size_reg = Some(Reg { v: i as u8 });
-                res.singles.push(ArgSingle {
+                res.contract.alloc_size_reg = Some(Reg { v: i as u8 });
+                res.contract.singles.push(ArgSingle {
                     kind: ArgSingleKind::ConstSizeOrZero,
                     or_null: false,
                     reg: Reg { v: i as u8 },
                 });
             }
             EbpfArgumentType::PtrToLong => {
-                res.singles.push(ArgSingle {
+                res.contract.singles.push(ArgSingle {
                     kind: ArgSingleKind::PtrToWritableLong,
                     or_null: false,
                     reg: Reg { v: i as u8 },
                 });
             }
             EbpfArgumentType::PtrToInt => {
-                res.singles.push(ArgSingle {
+                res.contract.singles.push(ArgSingle {
                     kind: ArgSingleKind::PtrToWritableInt,
                     or_null: false,
                     reg: Reg { v: i as u8 },
@@ -1387,7 +1373,7 @@ pub fn make_call_result(imm: i32, platform: &dyn EbpfPlatform) -> Result<Call, S
                 let or_null = args[i] == EbpfArgumentType::PtrToReadableMemOrNull
                     || args[i] == EbpfArgumentType::PtrToReadonlyMemOrNull
                     || args[i] == EbpfArgumentType::PtrToWritableMemOrNull;
-                res.pairs.push(ArgPair {
+                res.contract.pairs.push(ArgPair {
                     kind: to_arg_pair_kind(args[i]),
                     or_null,
                     mem: Reg { v: i as u8 },

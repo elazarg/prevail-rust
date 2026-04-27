@@ -257,7 +257,8 @@ fn test_make_call_supports_ptr_to_func_for_bpf_loop() {
     let call = make_call_result(181, &platform).expect("bpf_loop helper must resolve");
     assert!(call.is_supported);
     assert!(
-        call.singles
+        call.contract
+            .singles
             .iter()
             .any(|arg| arg.kind == ArgSingleKind::PtrToFunc && arg.reg.v == 2)
     );
@@ -267,7 +268,8 @@ fn test_make_call_supports_ptr_to_func_for_bpf_loop() {
 fn test_make_call_maps_new_helper_abi_classes() {
     let platform = LinuxPlatform::new();
     let has_single = |call: &Call, kind: ArgSingleKind, reg: u8, or_null: bool| {
-        call.singles
+        call.contract
+            .singles
             .iter()
             .any(|arg| arg.kind == kind && arg.reg.v == reg && arg.or_null == or_null)
     };
@@ -288,8 +290,8 @@ fn test_make_call_maps_new_helper_abi_classes() {
         "{}",
         ringbuf_reserve.unsupported_reason
     );
-    assert_eq!(ringbuf_reserve.return_ptr_type, Some(T_ALLOC_MEM));
-    assert!(ringbuf_reserve.return_nullable);
+    assert_eq!(ringbuf_reserve.contract.return_ptr_type, Some(T_ALLOC_MEM));
+    assert!(ringbuf_reserve.contract.return_nullable);
     assert!(has_single(
         &ringbuf_reserve,
         ArgSingleKind::ConstSizeOrZero,
@@ -317,8 +319,8 @@ fn test_make_call_maps_new_helper_abi_classes() {
         "{}",
         per_cpu_ptr.unsupported_reason
     );
-    assert_eq!(per_cpu_ptr.return_ptr_type, Some(T_BTF_ID));
-    assert!(per_cpu_ptr.return_nullable);
+    assert_eq!(per_cpu_ptr.contract.return_ptr_type, Some(T_BTF_ID));
+    assert!(per_cpu_ptr.contract.return_nullable);
     assert!(has_single(
         &per_cpu_ptr,
         ArgSingleKind::PtrToBtfId,
@@ -332,8 +334,8 @@ fn test_make_call_maps_new_helper_abi_classes() {
         "{}",
         this_cpu_ptr.unsupported_reason
     );
-    assert_eq!(this_cpu_ptr.return_ptr_type, Some(T_BTF_ID));
-    assert!(!this_cpu_ptr.return_nullable);
+    assert_eq!(this_cpu_ptr.contract.return_ptr_type, Some(T_BTF_ID));
+    assert!(!this_cpu_ptr.contract.return_nullable);
     assert!(has_single(
         &this_cpu_ptr,
         ArgSingleKind::PtrToBtfId,
@@ -360,8 +362,8 @@ fn test_make_call_maps_new_helper_abi_classes() {
         "{}",
         sk_fullsock.unsupported_reason
     );
-    assert_eq!(sk_fullsock.return_ptr_type, Some(T_SOCKET));
-    assert!(sk_fullsock.return_nullable);
+    assert_eq!(sk_fullsock.contract.return_ptr_type, Some(T_SOCKET));
+    assert!(sk_fullsock.contract.return_nullable);
     assert!(has_single(
         &sk_fullsock,
         ArgSingleKind::PtrToSocket,
@@ -418,13 +420,16 @@ fn test_unmarshal_builtin_calls_only_when_relocation_gated() {
     assert!(gated_call.is_supported);
     assert_eq!(&*gated_call.name, "memset");
     assert_eq!(gated_call.func, memset_id);
-    assert_eq!(gated_call.singles.len(), 1);
-    assert_eq!(gated_call.pairs.len(), 1);
-    assert_eq!(gated_call.singles[0].kind, ArgSingleKind::Anything);
-    assert_eq!(gated_call.singles[0].reg.v, 2);
-    assert_eq!(gated_call.pairs[0].kind, ArgPairKind::PtrToWritableMem);
-    assert_eq!(gated_call.pairs[0].mem.v, 1);
-    assert_eq!(gated_call.pairs[0].size.v, 3);
+    assert_eq!(gated_call.contract.singles.len(), 1);
+    assert_eq!(gated_call.contract.pairs.len(), 1);
+    assert_eq!(gated_call.contract.singles[0].kind, ArgSingleKind::Anything);
+    assert_eq!(gated_call.contract.singles[0].reg.v, 2);
+    assert_eq!(
+        gated_call.contract.pairs[0].kind,
+        ArgPairKind::PtrToWritableMem
+    );
+    assert_eq!(gated_call.contract.pairs[0].mem.v, 1);
+    assert_eq!(gated_call.contract.pairs[0].size.v, 3);
 
     let assertions = get_assertions(
         &Instruction::Call(gated_call.clone()),

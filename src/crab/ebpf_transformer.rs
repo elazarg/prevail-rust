@@ -1490,7 +1490,7 @@ fn transform_call(
     }
 
     let mut maybe_fd_reg: Option<Reg> = None;
-    for param in &call.singles {
+    for param in &call.contract.singles {
         match param.kind {
             ArgSingleKind::MapFd => {
                 maybe_fd_reg = Some(param.reg);
@@ -1546,7 +1546,7 @@ fn transform_call(
         }
     }
 
-    for param in &call.pairs {
+    for param in &call.contract.pairs {
         match param.kind {
             ArgPairKind::PtrToReadableMem => {
                 // Do nothing. No side effect allowed.
@@ -1617,7 +1617,7 @@ fn transform_call(
             dom.state.assign_type_encoding(&r0_reg, T_SHARED, registry);
         };
 
-    if call.is_map_lookup {
+    if call.contract.is_map_lookup {
         // Map lookup is the only way to get a null pointer.
         let resolved = 'resolve: {
             let Some(ref fd_reg) = maybe_fd_reg else {
@@ -1650,12 +1650,12 @@ fn transform_call(
         if !resolved {
             assign_shared_map_value(dom, None, registry);
         }
-    } else if let Some(return_ptr_type) = call.return_ptr_type {
-        assign_valid_ptr(dom, &r0_reg, call.return_nullable, ctx, registry);
+    } else if let Some(return_ptr_type) = call.contract.return_ptr_type {
+        assign_valid_ptr(dom, &r0_reg, call.contract.return_nullable, ctx, registry);
         dom.state
             .assign_type_encoding(&r0_reg, return_ptr_type, registry);
         if return_ptr_type == T_ALLOC_MEM
-            && let Some(alloc_size_reg) = &call.alloc_size_reg
+            && let Some(alloc_size_reg) = &call.contract.alloc_size_reg
         {
             let r0_pack = reg_pack(&r0_reg, registry);
             dom.state
@@ -1677,7 +1677,7 @@ fn transform_call(
     }
 
     scratch_caller_saved_registers(dom, registry);
-    if call.reallocate_packet {
+    if call.contract.reallocate_packet {
         forget_packet_pointers(dom, ctx, registry);
     }
     Ok(())

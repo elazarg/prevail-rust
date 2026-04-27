@@ -297,7 +297,7 @@ impl fmt::Display for Call {
         let mut r: u8 = 1;
         while r <= 5 {
             // Look for a singleton.
-            if let Some(single) = self.singles.iter().find(|a| a.reg.v == r) {
+            if let Some(single) = self.contract.singles.iter().find(|a| a.reg.v == r) {
                 if r > 1 {
                     write!(f, ", ")?;
                 }
@@ -307,7 +307,7 @@ impl fmt::Display for Call {
             }
 
             // Look for the start of a pair.
-            if let Some(pair) = self.pairs.iter().find(|a| a.mem.v == r) {
+            if let Some(pair) = self.contract.pairs.iter().find(|a| a.mem.v == r) {
                 if r > 1 {
                     write!(f, ", ")?;
                 }
@@ -1937,24 +1937,26 @@ mod tests {
             name: Rc::from("bpf_map_lookup_elem"),
             is_supported: true,
             unsupported_reason: Rc::from(""),
-            is_map_lookup: true,
-            reallocate_packet: false,
-            return_ptr_type: None,
-            return_nullable: false,
-            singles: vec![ArgSingle {
-                kind: ArgSingleKind::MapFd,
-                or_null: false,
-                reg: Reg { v: 1 },
-            }],
-            pairs: vec![ArgPair {
-                kind: ArgPairKind::PtrToReadableMem,
-                or_null: false,
-                mem: Reg { v: 2 },
-                size: Reg { v: 3 },
-                can_be_zero: false,
-            }],
+            contract: crate::ir::syntax::CallContract {
+                is_map_lookup: true,
+                reallocate_packet: false,
+                return_ptr_type: None,
+                return_nullable: false,
+                singles: vec![ArgSingle {
+                    kind: ArgSingleKind::MapFd,
+                    or_null: false,
+                    reg: Reg { v: 1 },
+                }],
+                pairs: vec![ArgPair {
+                    kind: ArgPairKind::PtrToReadableMem,
+                    or_null: false,
+                    mem: Reg { v: 2 },
+                    size: Reg { v: 3 },
+                    can_be_zero: false,
+                }],
+                alloc_size_reg: None,
+            },
             stack_frame_prefix: Rc::from(""),
-            alloc_size_reg: None,
         };
         assert_eq!(
             format!("{call}"),

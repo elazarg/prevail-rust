@@ -228,7 +228,28 @@ pub enum CallKind {
     Kfunc,
 }
 
-/// Helper function call.
+/// What a helper / kfunc requires of its arguments and how it shapes its
+/// return. Consumed by assertion extraction and the abstract transformer.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CallContract {
+    pub singles: Vec<ArgSingle>,
+    pub pairs: Vec<ArgPair>,
+    /// Non-integer return pointer type, if any.
+    pub return_ptr_type: Option<TypeEncoding>,
+    /// Whether the return pointer may be null.
+    pub return_nullable: bool,
+    pub is_map_lookup: bool,
+    pub reallocate_packet: bool,
+    /// Register holding allocation size (for T_ALLOC_MEM returns).
+    pub alloc_size_reg: Option<Reg>,
+}
+
+/// Static call to a helper / kfunc. The pair `(func, kind)` is the call's
+/// identity (used for `PartialEq`); `name` and support flags are resolved
+/// metadata; `contract` collects the argument requirements, return contract,
+/// and side-effects consumed by the verifier. Mirrors upstream
+/// `Call`/`ResolvedCall` (we keep one shape because the Rust port resolves
+/// at IR-build time and stores the resolved form).
 #[derive(Clone, Debug)]
 pub struct Call {
     pub func: i32,
@@ -236,18 +257,15 @@ pub struct Call {
     pub name: Rc<str>,
     pub is_supported: bool,
     pub unsupported_reason: Rc<str>,
-    pub is_map_lookup: bool,
-    pub reallocate_packet: bool,
-    pub return_ptr_type: Option<TypeEncoding>,
-    pub return_nullable: bool,
-    pub singles: Vec<ArgSingle>,
-    pub pairs: Vec<ArgPair>,
+    pub contract: CallContract,
+    /// Variable prefix at point of call.
     pub stack_frame_prefix: Rc<str>,
-    /// Register holding allocation size (for T_ALLOC_MEM returns).
-    pub alloc_size_reg: Option<Reg>,
 }
 
 impl PartialEq for Call {
+    // Equality intentionally matches only functional identity (func, kind);
+    // metadata like is_supported/unsupported_reason and the contract are
+    // diagnostic / derivable.
     fn eq(&self, other: &Self) -> bool {
         self.func == other.func && self.kind == other.kind
     }
