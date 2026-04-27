@@ -20,7 +20,7 @@ use crate::ir::syntax::{
 };
 use crate::ir::unmarshal::conformance_groups;
 use crate::platform::EbpfPlatform;
-use crate::spec::config::EbpfVerifierOptions;
+use crate::spec::config::{EbpfRuntimeConfig, EbpfVerifierOptions};
 use crate::spec::type_descriptors::ProgramInfo;
 
 /// Delimiter used between stack frame components in labels.
@@ -357,9 +357,11 @@ impl Program {
 
     /// Build a `Program` from an instruction sequence.
     ///
-    /// This converts the linear sequence into a deterministic CFG, optionally
-    /// inserts loop counters (if `check_for_termination` is set), and annotates
-    /// each label with its assertions.
+    /// `from_sequence` reads as orchestration: each soundness-relevant
+    /// transformation is its own `pass_*` function with a documented
+    /// Reads / Writes / Throws / Invariant header. Ordering between passes
+    /// is encoded by the call sequence below — and, where load-bearing,
+    /// by debug-asserts inside the passes themselves.
     pub fn from_sequence(
         inst_seq: &InstructionSeq,
         info: &mut ProgramInfo,
@@ -369,99 +371,385 @@ impl Program {
         options
             .validate()
             .map_err(|message| InvalidControlFlow { message })?;
-        let mut resolved_kfunc_calls = ResolvedKfuncCalls::new();
-        validate_instruction_feature_support(inst_seq, info, platform, &mut resolved_kfunc_calls)?;
 
-        // Convert the instruction sequence to a deterministic control-flow graph.
-        let mut builder = instruction_seq_to_cfg(
+        pass_validate_instruction_support(inst_seq, info)?;
+        let resolved_kfunc_calls = pass_resolve_kfunc_calls(inst_seq, info, platform)?;
+        let lowered_pseudo_loads = pass_lower_pseudo_loads(inst_seq, info)?;
+
+        let mut builder = CfgBuilder::new();
+        pass_populate_nodes(
+            &mut builder,
             inst_seq,
-            info,
-            options.must_have_exit,
-            options.runtime.max_call_stack_frames,
             &resolved_kfunc_calls,
+            &lowered_pseudo_loads,
+        );
+        pass_connect_edges(&mut builder, inst_seq, options.must_have_exit)?;
+        pass_inline_local_calls(
+            &mut builder,
+            inst_seq,
+            options.runtime.max_call_stack_frames,
         )?;
+
         let wto = Wto::new(&builder.prog.cfg);
-
-        validate_tail_call_chain_depth(&builder.prog, &wto, platform)?;
-
-        // Record valid callback targets for PTR_TO_FUNC:
-        // top-level concrete instruction labels (no stack-frame prefix, no jump labels, no Exit).
-        let mut callback_target_labels = BTreeSet::new();
-        for label in builder.prog.labels() {
-            if *label == Label::entry()
-                || *label == Label::exit()
-                || label.isjump()
-                || !label.stack_frame_prefix.is_empty()
-            {
-                continue;
-            }
-            if matches!(builder.prog.instruction_at(label), Instruction::Exit(_)) {
-                continue;
-            }
-            callback_target_labels.insert(label.from);
-        }
-
-        // Callback bodies must be able to reach a top-level Exit.
-        let has_reachable_top_level_exit = |start: &Label, prog: &Program| -> bool {
-            let mut seen = BTreeSet::new();
-            let mut worklist = vec![start.clone()];
-            while let Some(label) = worklist.pop() {
-                if !seen.insert(label.clone()) {
-                    continue;
-                }
-                if label == Label::exit() {
-                    return true;
-                }
-                if label != Label::entry()
-                    && prog.cfg().contains(&label)
-                    && matches!(prog.instruction_at(&label), Instruction::Exit(_))
-                    && label.stack_frame_prefix.is_empty()
-                {
-                    return true;
-                }
-                for child in prog.cfg().children_of(&label) {
-                    worklist.push(child.clone());
-                }
-            }
-            false
-        };
-
-        let mut callback_targets_with_exit = BTreeSet::new();
-        for label_num in &callback_target_labels {
-            let label = Label::new(*label_num);
-            if has_reachable_top_level_exit(&label, &builder.prog) {
-                callback_targets_with_exit.insert(*label_num);
-            }
-        }
-        builder.prog.callback_target_labels = callback_target_labels;
-        builder.prog.callback_targets_with_exit = callback_targets_with_exit;
-
-        // Detect loops using Weak Topological Ordering (WTO) and insert counters
-        // at loop entry points. WTO provides a hierarchical decomposition of the
-        // CFG that identifies all strongly connected components (cycles) and their
-        // entry points. These entry points serve as natural locations for loop
-        // counters that help verify program termination.
+        pass_validate_tail_call_depth(&builder.prog, &wto, platform)?;
+        pass_compute_callback_metadata(&mut builder.prog);
         if options.runtime.check_for_termination {
-            let mut loop_heads = Vec::new();
-            wto.for_each_loop_head(&mut |label| loop_heads.push(label.clone()));
-            for label in loop_heads {
-                let counter_label = Label::make_increment_counter(&label);
-                let ins = Instruction::IncrementLoopCounter(IncrementLoopCounter {
-                    name: label.clone(),
-                });
-                builder.insert_after(&label, counter_label, ins);
-            }
+            pass_insert_termination_counters(&mut builder, &wto);
         }
-
-        // Annotate the CFG by explicitly adding assertions before every instruction.
-        let labels: Vec<Label> = builder.prog.cfg.labels().cloned().collect();
-        for label in &labels {
-            let ins = builder.prog.instruction_at(label);
-            let assertions = get_assertions(ins, info, &options.runtime, &Some(label.clone()));
-            builder.set_assertions(label, assertions);
-        }
+        pass_extract_assertions(&mut builder, info, &options.runtime);
 
         Ok(builder.prog)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Preparation passes
+//
+// Each pass below carries a Reads / Writes / Throws / Invariant header. The
+// invariant lines call out ordering constraints between passes; debug-asserts
+// inside the passes guard the cases where mis-sequencing would silently
+// produce wrong CFG shape rather than fail loudly.
+// ---------------------------------------------------------------------------
+
+/// Pass: ValidateInstructionSupport
+/// Reads    : instruction sequence, platform conformance groups (via `info`).
+/// Writes   : nothing.
+/// Throws   : `InvalidControlFlow` on any instruction the platform cannot run.
+/// Invariant: must run before CFG construction; later passes assume every
+///            instruction has been vetted here.
+fn pass_validate_instruction_support(
+    insts: &InstructionSeq,
+    info: &ProgramInfo,
+) -> Result<(), InvalidControlFlow> {
+    for (label, inst, _) in insts {
+        if let Some(reason) = check_instruction_feature_support(inst, info) {
+            return Err(InvalidControlFlow {
+                message: match reason.kind {
+                    RejectKind::Capability => format!("rejected: {} (at {})", reason.detail, label),
+                },
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Pass: ResolveKfuncCalls
+/// Reads    : instruction sequence, platform kfunc resolver.
+/// Writes   : returns a `Label -> Call` map for every `CallBtf` in the sequence.
+/// Throws   : `InvalidControlFlow` if any `CallBtf` cannot be resolved for this
+///            platform.
+/// Invariant: `pass_populate_nodes` consults this map to replace `CallBtf` with
+///            the resolved `Call`.
+fn pass_resolve_kfunc_calls(
+    insts: &InstructionSeq,
+    info: &ProgramInfo,
+    platform: &dyn EbpfPlatform,
+) -> Result<ResolvedKfuncCalls, InvalidControlFlow> {
+    let mut resolved = ResolvedKfuncCalls::new();
+    for (label, inst, _) in insts {
+        if let Instruction::CallBtf(call_btf) = inst {
+            let call = platform
+                .resolve_kfunc_call(call_btf.btf_id, info)
+                .map_err(|why_not| InvalidControlFlow {
+                    message: format!("not implemented: {} (at {})", why_not, label),
+                })?;
+            resolved.insert(label.clone(), call);
+        }
+    }
+    Ok(resolved)
+}
+
+/// Pass: LowerPseudoLoads
+/// Reads    : instruction sequence, program info (`map_descriptors`).
+/// Writes   : returns a `Label -> Instruction` map with the concrete replacement
+///            for every `LoadPseudo` that is lowered. `CodeAddr` `LoadPseudo`
+///            instructions are intentionally excluded so they remain observable
+///            to the abstract transformer (which types them as `T_FUNC`); every
+///            other kind is replaced.
+/// Throws   : `InvalidControlFlow` if a `MapByIdx` / `MapValueByIdx` references
+///            an out-of-range map descriptor.
+/// Invariant: `pass_populate_nodes` consults this map to substitute `LoadPseudo`
+///            with its lowered form while inserting CFG nodes.
+fn pass_lower_pseudo_loads(
+    insts: &InstructionSeq,
+    info: &ProgramInfo,
+) -> Result<LoweredPseudoLoads, InvalidControlFlow> {
+    let mut lowered = LoweredPseudoLoads::new();
+    for (label, inst, _) in insts {
+        if let Instruction::LoadPseudo(pseudo) = inst
+            && pseudo.addr.kind != PseudoAddressKind::CodeAddr
+        {
+            lowered.insert(label.clone(), resolve_pseudo_load(pseudo, info)?);
+        }
+    }
+    Ok(lowered)
+}
+
+/// Pass: PopulateNodes (BuildInitialCfg, populate step).
+/// Reads    : instruction sequence, resolved-kfunc map, lowered-pseudo-load map.
+/// Writes   : inserts one CFG node per live instruction into `builder` (labels +
+///            instructions). `CallBtf` is replaced with the resolved `Call`;
+///            non-`CodeAddr` `LoadPseudo` is replaced with its lowered form;
+///            every other instruction is inserted verbatim.
+/// Invariant: `pass_validate_instruction_support`, `pass_resolve_kfunc_calls`,
+///            and `pass_lower_pseudo_loads` have been applied on the same
+///            instruction sequence.
+fn pass_populate_nodes(
+    builder: &mut CfgBuilder,
+    insts: &InstructionSeq,
+    resolved_kfunc_calls: &ResolvedKfuncCalls,
+    lowered_pseudo_loads: &LoweredPseudoLoads,
+) {
+    for (label, inst, _) in insts {
+        if matches!(inst, Instruction::Undefined(_)) {
+            continue;
+        }
+        if matches!(inst, Instruction::CallBtf(_)) {
+            let call = resolved_kfunc_calls
+                .get(label)
+                .expect("internal error: missing validated kfunc resolution")
+                .clone();
+            builder.insert(label.clone(), Instruction::Call(call));
+            continue;
+        }
+        if let Some(lowered) = lowered_pseudo_loads.get(label) {
+            builder.insert(label.clone(), lowered.clone());
+            continue;
+        }
+        builder.insert(label.clone(), inst.clone());
+    }
+}
+
+/// Pass: ConnectEdges (BuildInitialCfg, connect step; also performs
+///       InsertAssumeEdges).
+/// Reads    : instruction sequence, `must_have_exit` flag.
+/// Writes   : CFG edges from entry, and for every populated node to its
+///            successors. Conditional `Jmp` instructions are materialised as
+///            two synthetic Assume jump-labels (`insert_jump`) carrying the
+///            positive and negated conditions.
+/// Throws   : `InvalidControlFlow` on empty sequence, fallthrough past the
+///            final instruction, or a jump whose target label is not in the CFG.
+/// Invariant: `pass_populate_nodes` has been applied (all nodes exist before
+///            edges are added).
+fn pass_connect_edges(
+    builder: &mut CfgBuilder,
+    insts: &InstructionSeq,
+    must_have_exit: bool,
+) -> Result<(), InvalidControlFlow> {
+    if insts.is_empty() {
+        return Err(InvalidControlFlow {
+            message: "empty instruction sequence".to_string(),
+        });
+    }
+    // Ordering check: pass_populate_nodes must run first so the entry's target
+    // already exists (unless it is an Undefined slot — which we do not insert).
+    debug_assert!(
+        matches!(insts[0].1, Instruction::Undefined(_)) || builder.prog.cfg.contains(&insts[0].0)
+    );
+
+    let first_label = &insts[0].0;
+    builder.add_child(&Label::entry(), first_label);
+
+    for i in 0..insts.len() {
+        let (label, inst, _) = &insts[i];
+
+        if matches!(inst, Instruction::Undefined(_)) {
+            continue;
+        }
+
+        let fallthrough = if i + 1 < insts.len() {
+            insts[i + 1].0.clone()
+        } else {
+            if has_fall(inst) && must_have_exit {
+                return Err(InvalidControlFlow {
+                    message: "fallthrough in last instruction".to_string(),
+                });
+            }
+            Label::exit()
+        };
+
+        if let Instruction::Jmp(jmp) = inst
+            && let Some(cond) = &jmp.cond
+        {
+            // Conditional jump.
+            let target_label = &jmp.target;
+            if *target_label == fallthrough {
+                builder.add_child(label, &fallthrough);
+            } else {
+                if !builder.prog.cfg.contains(target_label) {
+                    return Err(InvalidControlFlow {
+                        message: format!("jump to undefined label {}", target_label),
+                    });
+                }
+                builder.insert_jump(
+                    label,
+                    target_label,
+                    Instruction::Assume(Assume {
+                        cond: cond.clone(),
+                        is_implicit: true,
+                    }),
+                );
+                builder.insert_jump(
+                    label,
+                    &fallthrough,
+                    Instruction::Assume(Assume {
+                        cond: reverse_condition(cond),
+                        is_implicit: true,
+                    }),
+                );
+            }
+        } else if let Instruction::Jmp(jmp) = inst {
+            builder.add_child(label, &jmp.target);
+        } else if has_fall(inst) {
+            builder.add_child(label, &fallthrough);
+        }
+
+        if matches!(inst, Instruction::Exit(_)) {
+            builder.add_child(label, &Label::exit());
+        }
+    }
+    Ok(())
+}
+
+/// Pass: InlineLocalCalls
+/// Reads    : instruction sequence, `max_call_stack_frames` bound.
+/// Writes   : for every `CallLocal` in the sequence, clones the callee region
+///            into the CFG under a unique stack-frame prefix. Recurses into
+///            nested calls.
+/// Throws   : `InvalidControlFlow` on illegal recursion or exceeding the
+///            call-stack frame bound.
+/// Invariant: `pass_connect_edges` has been applied — inlining walks existing
+///            parents/children. Restricted to callees that are reachable after
+///            edge connection, which is why this runs as a separate pass rather
+///            than during population.
+fn pass_inline_local_calls(
+    builder: &mut CfgBuilder,
+    insts: &InstructionSeq,
+    max_call_stack_frames: i32,
+) -> Result<(), InvalidControlFlow> {
+    debug_assert!(
+        insts.is_empty() || !builder.prog.cfg.children_of(&Label::entry()).is_empty(),
+        "pass_connect_edges must run before pass_inline_local_calls"
+    );
+    for (label, inst, _) in insts {
+        if let Instruction::CallLocal(call_local) = inst {
+            add_cfg_nodes(builder, label, &call_local.target, max_call_stack_frames)?;
+        }
+    }
+    Ok(())
+}
+
+/// Pass: ValidateTailCallDepth
+/// Reads    : Program (CFG + instructions), Wto, platform.
+/// Writes   : nothing.
+/// Throws   : `InvalidControlFlow` if the reachable tail-call chain exceeds
+///            the fixed limit (33).
+/// Notes    : Counts tail-call sites along the longest path through the
+///            reachable maximal-SCC DAG so cycles do not inflate depth.
+///            Maximal SCCs are derived from WTO nesting.
+fn pass_validate_tail_call_depth(
+    prog: &Program,
+    wto: &Wto,
+    platform: &dyn EbpfPlatform,
+) -> Result<(), InvalidControlFlow> {
+    validate_tail_call_chain_depth(prog, wto, platform)
+}
+
+/// Pass: ComputeCallbackMetadata
+/// Reads    : Program (CFG + instructions).
+/// Writes   : `prog.callback_target_labels` (top-level concrete-instruction
+///            labels eligible as `PTR_TO_FUNC` targets) and
+///            `prog.callback_targets_with_exit` (subset whose body can reach a
+///            top-level Exit).
+/// Notes    : Excludes `Label::entry`/`Label::exit`, synthetic jump labels,
+///            labels under an inlined stack-frame prefix, and Exit instructions
+///            themselves.
+fn pass_compute_callback_metadata(prog: &mut Program) {
+    let mut callback_target_labels = BTreeSet::new();
+    for label in prog.labels() {
+        if *label == Label::entry()
+            || *label == Label::exit()
+            || label.isjump()
+            || !label.stack_frame_prefix.is_empty()
+        {
+            continue;
+        }
+        if matches!(prog.instruction_at(label), Instruction::Exit(_)) {
+            continue;
+        }
+        callback_target_labels.insert(label.from);
+    }
+
+    let has_reachable_top_level_exit = |start: &Label, prog: &Program| -> bool {
+        let mut seen = BTreeSet::new();
+        let mut worklist = vec![start.clone()];
+        while let Some(label) = worklist.pop() {
+            if !seen.insert(label.clone()) {
+                continue;
+            }
+            if label == Label::exit() {
+                return true;
+            }
+            if label != Label::entry()
+                && prog.cfg().contains(&label)
+                && matches!(prog.instruction_at(&label), Instruction::Exit(_))
+                && label.stack_frame_prefix.is_empty()
+            {
+                return true;
+            }
+            for child in prog.cfg().children_of(&label) {
+                worklist.push(child.clone());
+            }
+        }
+        false
+    };
+
+    let mut callback_targets_with_exit = BTreeSet::new();
+    for label_num in &callback_target_labels {
+        let label = Label::new(*label_num);
+        if has_reachable_top_level_exit(&label, prog) {
+            callback_targets_with_exit.insert(*label_num);
+        }
+    }
+    prog.callback_target_labels = callback_target_labels;
+    prog.callback_targets_with_exit = callback_targets_with_exit;
+}
+
+/// Pass: InsertTerminationCounters
+/// Reads    : WTO of the current CFG.
+/// Writes   : inserts an `IncrementLoopCounter` instruction immediately after
+///            every loop head identified by WTO. These counters are the natural
+///            locations for the bounded-loop-count check.
+/// Invariant: only invoked when `runtime.check_for_termination` is set.
+fn pass_insert_termination_counters(builder: &mut CfgBuilder, wto: &Wto) {
+    let mut loop_heads = Vec::new();
+    wto.for_each_loop_head(&mut |label| loop_heads.push(label.clone()));
+    for label in loop_heads {
+        let counter_label = Label::make_increment_counter(&label);
+        let ins = Instruction::IncrementLoopCounter(IncrementLoopCounter {
+            name: label.clone(),
+        });
+        builder.insert_after(&label, counter_label, ins);
+    }
+}
+
+/// Pass: ExtractAssertions
+/// Reads    : Program (CFG + instructions), `ProgramInfo`, runtime config.
+/// Writes   : annotates every CFG label with the assertions that must hold
+///            before its instruction, via `builder.set_assertions`.
+/// Invariant: must run last — assertions reference the final CFG shape, so
+///            any pass that adds nodes (e.g. `pass_insert_termination_counters`)
+///            must run first.
+fn pass_extract_assertions(
+    builder: &mut CfgBuilder,
+    info: &ProgramInfo,
+    runtime: &EbpfRuntimeConfig,
+) {
+    let labels: Vec<Label> = builder.prog.cfg.labels().cloned().collect();
+    for label in &labels {
+        let ins = builder.prog.instruction_at(label);
+        let assertions = get_assertions(ins, info, runtime, &Some(label.clone()));
+        builder.set_assertions(label, assertions);
     }
 }
 
@@ -771,36 +1059,7 @@ fn check_instruction_feature_support(
 }
 
 type ResolvedKfuncCalls = BTreeMap<Label, Call>;
-
-fn validate_instruction_feature_support(
-    insts: &InstructionSeq,
-    info: &ProgramInfo,
-    platform: &dyn EbpfPlatform,
-    resolved_kfunc_calls: &mut ResolvedKfuncCalls,
-) -> Result<(), InvalidControlFlow> {
-    for (label, inst, _) in insts {
-        if let Some(reason) = check_instruction_feature_support(inst, info) {
-            return Err(InvalidControlFlow {
-                message: match reason.kind {
-                    RejectKind::Capability => format!("rejected: {} (at {})", reason.detail, label),
-                },
-            });
-        }
-        if let Instruction::CallBtf(call_btf) = inst {
-            let call = platform
-                .resolve_kfunc_call(call_btf.btf_id, info)
-                .map_err(|why_not| InvalidControlFlow {
-                    message: format!("not implemented: {} (at {})", why_not, label),
-                })?;
-            resolved_kfunc_calls.insert(label.clone(), call);
-        }
-    }
-    Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// instruction_seq_to_cfg
-// ---------------------------------------------------------------------------
+type LoweredPseudoLoads = BTreeMap<Label, Instruction>;
 
 fn merge_imm32_to_u64(lo: i32, hi: i32) -> u64 {
     (lo as u32 as u64) | ((hi as u32 as u64) << 32)
@@ -846,146 +1105,6 @@ fn resolve_pseudo_load(
         })),
         _ => unreachable!("pseudo kind handled earlier: {:?}", pseudo.addr.kind),
     }
-}
-
-/// Convert an instruction sequence to a control-flow graph (CFG).
-///
-/// This builds the CFG in two passes:
-/// 1. Add all instructions as nodes and wire up edges (jumps, fall-throughs).
-/// 2. Inline function macros (`CallLocal` instructions).
-fn instruction_seq_to_cfg(
-    insts: &InstructionSeq,
-    info: &ProgramInfo,
-    must_have_exit: bool,
-    max_call_stack_frames: i32,
-    resolved_kfunc_calls: &ResolvedKfuncCalls,
-) -> Result<CfgBuilder, InvalidControlFlow> {
-    let mut builder = CfgBuilder::new();
-
-    // First, add all instructions to the CFG without connecting.
-    for (label, inst, _) in insts {
-        if matches!(inst, Instruction::Undefined(_)) {
-            continue;
-        }
-        if matches!(inst, Instruction::CallBtf(_)) {
-            let call = resolved_kfunc_calls
-                .get(label)
-                .ok_or_else(|| InvalidControlFlow {
-                    message: format!(
-                        "internal error: missing validated kfunc resolution (at {})",
-                        label
-                    ),
-                })?
-                .clone();
-            builder.insert(label.clone(), Instruction::Call(call));
-        } else if let Instruction::LoadPseudo(pseudo) = inst {
-            if pseudo.addr.kind == PseudoAddressKind::CodeAddr {
-                // Keep CODE_ADDR pseudo intact so abstract transformation can type it as T_FUNC.
-                builder.insert(label.clone(), inst.clone());
-            } else {
-                // Resolve other pseudo loads to concrete instructions.
-                builder.insert(label.clone(), resolve_pseudo_load(pseudo, info)?);
-            }
-        } else {
-            builder.insert(label.clone(), inst.clone());
-        }
-    }
-
-    if insts.is_empty() {
-        return Err(InvalidControlFlow {
-            message: "empty instruction sequence".to_string(),
-        });
-    }
-
-    // Connect entry to the first instruction.
-    let first_label = &insts[0].0;
-    builder.add_child(&Label::entry(), first_label);
-
-    // Do a first pass ignoring all function macro calls.
-    for i in 0..insts.len() {
-        let (label, inst, _) = &insts[i];
-
-        if matches!(inst, Instruction::Undefined(_)) {
-            continue;
-        }
-
-        // Determine the fall-through target.
-        let fallthrough = if i + 1 < insts.len() {
-            insts[i + 1].0.clone()
-        } else {
-            if has_fall(inst) && must_have_exit {
-                return Err(InvalidControlFlow {
-                    message: "fallthrough in last instruction".to_string(),
-                });
-            }
-            Label::exit()
-        };
-
-        if let Instruction::Jmp(jmp) = inst
-            && let Some(cond) = &jmp.cond
-        {
-            // Conditional jump.
-            let target_label = &jmp.target;
-            if *target_label == fallthrough {
-                // Target equals fallthrough — just add one edge.
-                builder.add_child(label, &fallthrough);
-                // Also handle the Exit edge below (via the exit check).
-            } else {
-                if !builder.prog.cfg.contains(target_label) {
-                    return Err(InvalidControlFlow {
-                        message: format!("jump to undefined label {}", target_label),
-                    });
-                }
-                // Insert Assume nodes on each branch edge.
-                builder.insert_jump(
-                    label,
-                    target_label,
-                    Instruction::Assume(Assume {
-                        cond: cond.clone(),
-                        is_implicit: true,
-                    }),
-                );
-                builder.insert_jump(
-                    label,
-                    &fallthrough,
-                    Instruction::Assume(Assume {
-                        cond: reverse_condition(cond),
-                        is_implicit: true,
-                    }),
-                );
-            }
-        } else if let Instruction::Jmp(jmp) = inst {
-            // Unconditional jump.
-            builder.add_child(label, &jmp.target);
-        } else if has_fall(inst) {
-            builder.add_child(label, &fallthrough);
-        }
-
-        // Exit instructions also get an edge to the exit label.
-        if matches!(inst, Instruction::Exit(_)) {
-            builder.add_child(label, &Label::exit());
-        }
-    }
-
-    // Now replace macros. We have to do this as a second pass so that
-    // we only add new nodes that are actually reachable, based on the
-    // results of the first pass.
-    let macro_labels: Vec<(Label, Label)> = insts
-        .iter()
-        .filter_map(|(label, inst, _)| {
-            if let Instruction::CallLocal(call_local) = inst {
-                Some((label.clone(), call_local.target.clone()))
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    for (label, target) in macro_labels {
-        add_cfg_nodes(&mut builder, &label, &target, max_call_stack_frames)?;
-    }
-
-    Ok(builder)
 }
 
 // ---------------------------------------------------------------------------
