@@ -605,7 +605,12 @@ impl<'a> EbpfChecker<'a> {
                 TypeEncoding::TPacket => {
                     let lb = LinearExpression::from(access_reg.packet_offset);
                     let ub = lb.clone() + LinearExpression::from(width);
-                    self.check_access_packet(lb, ub, None)?;
+                    // Helper map key/value pointers are real reads/writes, so
+                    // bound the upper edge by the runtime packet_size — same
+                    // as ValidAccess's T_PACKET dereference path. Using
+                    // max_packet_size here was unsoundly loose (upstream #1099).
+                    let packet_size = self.registry.packet_size();
+                    self.check_access_packet(lb, ub, Some(packet_size))?;
                 }
                 TypeEncoding::TShared => {
                     let lb = LinearExpression::from(access_reg.shared_offset);
