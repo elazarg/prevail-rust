@@ -1,6 +1,7 @@
 // Copyright (c) Prevail Verifier contributors.
 // SPDX-License-Identifier: MIT
 
+pub(crate) mod arg_kind;
 pub mod assembler;
 pub(crate) mod assertions;
 pub(crate) mod marshal;

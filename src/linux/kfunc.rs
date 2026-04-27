@@ -4,6 +4,7 @@
 use std::rc::Rc;
 
 use crate::crab::type_encoding::{T_ALLOC_MEM, T_BTF_ID, T_SOCKET};
+use crate::ir::arg_kind;
 use crate::ir::syntax::{ArgPair, ArgPairKind, ArgSingle, ArgSingleKind, Call, CallKind, Reg};
 use crate::linux::spec_prototypes::HelperPrototype;
 use crate::spec::ebpf_base::{EbpfArgumentType, EbpfReturnType};
@@ -222,39 +223,16 @@ fn lookup_kfunc_prototype(btf_id: i32) -> Option<&'static KfuncPrototypeEntry> {
         .map(|idx| &KFUNC_PROTOTYPES[idx])
 }
 
+/// Kfunc-call mapping: surface an error for any unmapped argument type
+/// (kfuncs do not have a silent fallback like helpers do).
 fn to_arg_single_kind(t: EbpfArgumentType) -> Result<ArgSingleKind, String> {
-    use ArgSingleKind::*;
-    match t {
-        EbpfArgumentType::Anything => Ok(Anything),
-        EbpfArgumentType::PtrToStack | EbpfArgumentType::PtrToStackOrNull => Ok(PtrToStack),
-        EbpfArgumentType::PtrToMap | EbpfArgumentType::ConstPtrToMap => Ok(MapFd),
-        EbpfArgumentType::PtrToMapOfPrograms => Ok(MapFdPrograms),
-        EbpfArgumentType::PtrToMapKey => Ok(PtrToMapKey),
-        EbpfArgumentType::PtrToMapValue | EbpfArgumentType::PtrToUninitMapValue => {
-            Ok(PtrToMapValue)
-        }
-        EbpfArgumentType::PtrToCtx | EbpfArgumentType::PtrToCtxOrNull => Ok(PtrToCtx),
-        _ => Err(format!(
-            "internal error: unmapped kfunc single-arg type {:?}",
-            t
-        )),
-    }
+    arg_kind::to_arg_single_kind(t)
+        .ok_or_else(|| format!("internal error: unmapped kfunc single-arg type {t:?}"))
 }
 
 fn to_arg_pair_kind(t: EbpfArgumentType) -> Result<ArgPairKind, String> {
-    use ArgPairKind::*;
-    match t {
-        EbpfArgumentType::PtrToReadableMem | EbpfArgumentType::PtrToReadableMemOrNull => {
-            Ok(PtrToReadableMem)
-        }
-        EbpfArgumentType::PtrToWritableMem | EbpfArgumentType::PtrToWritableMemOrNull => {
-            Ok(PtrToWritableMem)
-        }
-        _ => Err(format!(
-            "internal error: unmapped kfunc pair-arg type {:?}",
-            t
-        )),
-    }
+    arg_kind::to_arg_pair_kind(t)
+        .ok_or_else(|| format!("internal error: unmapped kfunc pair-arg type {t:?}"))
 }
 
 pub fn make_kfunc_call_result(btf_id: i32, info: Option<&ProgramInfo>) -> Result<Call, String> {

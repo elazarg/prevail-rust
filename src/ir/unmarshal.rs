@@ -1111,35 +1111,19 @@ pub fn unmarshal(
 // make_call — convert helper prototype to Call instruction
 // ============================================================================
 
+use crate::ir::arg_kind;
 use crate::spec::ebpf_base::{EbpfArgumentType, EbpfReturnType};
 
+/// Helper-call mapping: fall back to `Anything` for unmapped types
+/// (matches the C++ default).
 fn to_arg_single_kind(t: EbpfArgumentType) -> ArgSingleKind {
-    use crate::ir::syntax::ArgSingleKind::*;
-    match t {
-        EbpfArgumentType::Anything => Anything,
-        EbpfArgumentType::PtrToStack | EbpfArgumentType::PtrToStackOrNull => PtrToStack,
-        EbpfArgumentType::PtrToMap | EbpfArgumentType::ConstPtrToMap => MapFd,
-        EbpfArgumentType::PtrToMapOfPrograms => MapFdPrograms,
-        EbpfArgumentType::PtrToMapKey => PtrToMapKey,
-        EbpfArgumentType::PtrToMapValue | EbpfArgumentType::PtrToUninitMapValue => PtrToMapValue,
-        EbpfArgumentType::PtrToCtx | EbpfArgumentType::PtrToCtxOrNull => PtrToCtx,
-        EbpfArgumentType::PtrToFunc => PtrToFunc,
-        _ => Anything, // fallback (matches C++ default)
-    }
+    arg_kind::to_arg_single_kind(t).unwrap_or(ArgSingleKind::Anything)
 }
 
+/// Helper-call mapping: fall back to `PtrToReadableMem` for unmapped types
+/// (matches the C++ default).
 fn to_arg_pair_kind(t: EbpfArgumentType) -> ArgPairKind {
-    use crate::ir::syntax::ArgPairKind::*;
-    match t {
-        EbpfArgumentType::PtrToReadableMem
-        | EbpfArgumentType::PtrToReadableMemOrNull
-        | EbpfArgumentType::PtrToReadonlyMem
-        | EbpfArgumentType::PtrToReadonlyMemOrNull => PtrToReadableMem,
-        EbpfArgumentType::PtrToWritableMem | EbpfArgumentType::PtrToWritableMemOrNull => {
-            PtrToWritableMem
-        }
-        _ => PtrToReadableMem, // fallback
-    }
+    arg_kind::to_arg_pair_kind(t).unwrap_or(ArgPairKind::PtrToReadableMem)
 }
 
 /// Convert a helper function id + platform into a `Call` instruction.
