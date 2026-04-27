@@ -292,34 +292,56 @@ impl fmt::Display for Un {
 }
 
 impl fmt::Display for Call {
+    /// Cheap, context-free Call print: `r0 = call:<func>` (or `call_kfunc`).
+    /// Mirrors upstream's `CommandPrinterVisitor` cheap path used when no
+    /// `ProgramInfo` is available. Rich printing (helper name + arg list) is
+    /// produced by `write_call_rich`, called from the asm/CFG/dot dumps that
+    /// have `ProgramInfo` in scope.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "r0 = {}:{}(", self.name, self.func)?;
-        let mut r: u8 = 1;
-        while r <= 5 {
-            // Look for a singleton.
-            if let Some(single) = self.contract.singles.iter().find(|a| a.reg.v == r) {
-                if r > 1 {
-                    write!(f, ", ")?;
-                }
-                write!(f, "{single}")?;
-                r += 1;
-                continue;
-            }
+        let kind_label = match self.kind {
+            crate::ir::syntax::CallKind::Helper => "call",
+            crate::ir::syntax::CallKind::Kfunc => "call_kfunc",
+        };
+        write!(f, "r0 = {}:{}", kind_label, self.func)
+    }
+}
 
-            // Look for the start of a pair.
-            if let Some(pair) = self.contract.pairs.iter().find(|a| a.mem.v == r) {
-                if r > 1 {
-                    write!(f, ", ")?;
-                }
-                write!(f, "{pair}")?;
-                r += 2; // pair consumes two registers
-                continue;
+/// Rich Call print: `r0 = <name>:<func>(<arg list>)`. Used by asm/CFG/dot
+/// dumps where the program's `ProgramInfo` (and thus the resolved name and
+/// contract) is available — failure slices and other context-light printers
+/// fall back to the cheap `Display` form.
+fn write_call_rich(out: &mut dyn Write, call: &Call) -> io::Result<()> {
+    write!(out, "r0 = {}:{}(", call.name, call.func)?;
+    let mut r: u8 = 1;
+    while r <= 5 {
+        if let Some(single) = call.contract.singles.iter().find(|a| a.reg.v == r) {
+            if r > 1 {
+                write!(out, ", ")?;
             }
-
-            // Not found — no more arguments.
-            break;
+            write!(out, "{single}")?;
+            r += 1;
+            continue;
         }
-        write!(f, ")")
+        if let Some(pair) = call.contract.pairs.iter().find(|a| a.mem.v == r) {
+            if r > 1 {
+                write!(out, ", ")?;
+            }
+            write!(out, "{pair}")?;
+            r += 2;
+            continue;
+        }
+        break;
+    }
+    write!(out, ")")
+}
+
+/// Print a single `Instruction` in rich form: `Call` resolves to its helper
+/// name and contract, every other variant falls through to its `Display`.
+fn write_instruction_rich(out: &mut dyn Write, ins: &Instruction) -> io::Result<()> {
+    if let Instruction::Call(call) = ins {
+        write_call_rich(out, call)
+    } else {
+        write!(out, "{ins}")
     }
 }
 
@@ -833,7 +855,10 @@ fn print_line_info_for_label(
     Ok(())
 }
 
-/// Print instructions and assertions for a label.
+/// Print instructions and assertions for a label using the rich Call form
+/// (helper name + arg list). Used by the asm dump and invariants printer
+/// where the program's `ProgramInfo` is available; failure slices use
+/// `Display` directly to fall through to the cheap form.
 fn print_instruction_at_label(
     out: &mut dyn Write,
     prog: &Program,
@@ -842,7 +867,9 @@ fn print_instruction_at_label(
     for pre in prog.assertions_at(label) {
         writeln!(out, "  assert {pre};")?;
     }
-    writeln!(out, "  {};", prog.instruction_at(label))
+    write!(out, "  ")?;
+    write_instruction_rich(out, prog.instruction_at(label))?;
+    writeln!(out, ";")
 }
 
 /// Print the program as assembly-like output grouped by basic blocks.
@@ -932,7 +959,8 @@ pub fn print_dot(prog: &Program, out: &mut dyn Write) -> io::Result<()> {
         for pre in prog.assertions_at(label) {
             write!(out, "assert {pre}\\l")?;
         }
-        write!(out, "{}\\l", prog.instruction_at(label))?;
+        write_instruction_rich(out, prog.instruction_at(label))?;
+        write!(out, "\\l")?;
         writeln!(out, "\"];")?;
         for next in prog.cfg().children_of(label) {
             writeln!(out, "    \"{label}\" -> \"{next}\";")?;
@@ -1958,8 +1986,16 @@ mod tests {
             },
             stack_frame_prefix: Rc::from(""),
         };
+        // Display is the cheap, context-free form (matches upstream
+        // CommandPrinterVisitor when ProgramInfo is null).
+        assert_eq!(format!("{call}"), "r0 = call:1");
+
+        // Rich form is produced via write_call_rich and used by asm/CFG/dot
+        // dumps that have ProgramInfo in scope.
+        let mut buf: Vec<u8> = Vec::new();
+        write_call_rich(&mut buf, &call).unwrap();
         assert_eq!(
-            format!("{call}"),
+            std::str::from_utf8(&buf).unwrap(),
             "r0 = bpf_map_lookup_elem:1(map_fd r1, mem r2[r3], uint64_t r3)"
         );
     }
