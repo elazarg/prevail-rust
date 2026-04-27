@@ -301,6 +301,7 @@ impl fmt::Display for Call {
         let kind_label = match self.kind {
             crate::ir::syntax::CallKind::Helper => "call",
             crate::ir::syntax::CallKind::Kfunc => "call_kfunc",
+            crate::ir::syntax::CallKind::Builtin => "call_builtin",
         };
         write!(f, "r0 = {}:{}", kind_label, self.func)
     }

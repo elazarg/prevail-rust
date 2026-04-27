@@ -419,7 +419,7 @@ const LINUX_BUILTIN_CALL_EXTERN_UNSPEC: i32 = -100;
 fn builtin_call(name: &'static str, id: i32, singles: Vec<ArgSingle>, pairs: Vec<ArgPair>) -> Call {
     Call {
         func: id,
-        kind: CallKind::Helper,
+        kind: CallKind::Builtin,
         name: Rc::from(name),
         is_supported: true,
         unsupported_reason: Rc::from(""),
@@ -960,7 +960,7 @@ impl EbpfPlatform for LinuxPlatform {
             )),
             LINUX_BUILTIN_CALL_EXTERN_UNSPEC => Some(Call {
                 func: id,
-                kind: CallKind::Helper,
+                kind: CallKind::Builtin,
                 name: Rc::from("extern_unspecified"),
                 is_supported: true,
                 unsupported_reason: Rc::from(""),

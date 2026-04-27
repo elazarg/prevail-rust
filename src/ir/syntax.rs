@@ -224,8 +224,13 @@ pub enum ArgPairKind {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CallKind {
+    /// Resolved via platform.get_helper_prototype.
     Helper,
+    /// Resolved via platform.resolve_kfunc_call (CALL src=2).
     Kfunc,
+    /// Compiler intrinsic (memset/memcpy/...) emitted as a relocation target
+    /// by the ELF loader; resolved via platform.get_builtin_call.
+    Builtin,
 }
 
 /// What a helper / kfunc requires of its arguments and how it shapes its
