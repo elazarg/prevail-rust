@@ -20,6 +20,7 @@ use crate::crab::string_constraints::StringInvariant;
 use crate::crab::type_encoding::*;
 use crate::crab::type_to_number::{TypeToNumDomain, reg_pack};
 use crate::crab::var_registry::VariableRegistry;
+use crate::ir::program::Program;
 use crate::ir::syntax::Reg;
 use crate::platform::EbpfPlatform;
 use crate::spec::config::{EbpfRuntimeConfig, EbpfVerifierOptions};
@@ -71,6 +72,7 @@ impl std::fmt::Display for VerificationError {
 /// should prefer `runtime`.
 pub struct DomainContext<'a> {
     pub program_info: &'a ProgramInfo,
+    pub program: &'a Program,
     pub runtime: &'a EbpfRuntimeConfig,
     pub options: &'a EbpfVerifierOptions,
     pub platform: &'a dyn EbpfPlatform,
@@ -80,11 +82,13 @@ impl<'a> DomainContext<'a> {
     /// Construct a `DomainContext` from the full options struct.
     pub fn new(
         program_info: &'a ProgramInfo,
+        program: &'a Program,
         options: &'a EbpfVerifierOptions,
         platform: &'a dyn EbpfPlatform,
     ) -> Self {
         DomainContext {
             program_info,
+            program,
             runtime: &options.runtime,
             options,
             platform,

@@ -309,6 +309,7 @@ fn run_conformance_test_case(data_file: &Path) -> ConformanceTestResult {
 
     let ctx = DomainContext {
         program_info: &info,
+        program: &prog,
         runtime: &options.runtime,
         options: &options,
         platform: &platform,

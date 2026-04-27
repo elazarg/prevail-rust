@@ -579,6 +579,7 @@ fn main() -> ExitCode {
 
     let ctx = DomainContext {
         program_info: info,
+        program: &program,
         runtime: &opts.runtime,
         options: &opts,
         platform: &rust_platform,

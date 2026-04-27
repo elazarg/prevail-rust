@@ -283,6 +283,11 @@ pub struct Program {
     assertions: BTreeMap<Label, Vec<Assertion>>,
     /// Control-flow graph over labels.
     cfg: Cfg,
+    /// Valid top-level instruction labels usable as callback entries via
+    /// PTR_TO_FUNC. Populated by `from_sequence` from the CFG.
+    callback_target_labels: BTreeSet<i32>,
+    /// Subset of `callback_target_labels` whose body can reach a top-level Exit.
+    callback_targets_with_exit: BTreeSet<i32>,
 }
 
 impl crate::fwd_analyzer::Program for Program {
@@ -338,6 +343,16 @@ impl Program {
         self.assertions
             .get(label)
             .unwrap_or_else(|| panic!("Label {} not found in the CFG", label))
+    }
+
+    /// Top-level instruction labels usable as callback entries via PTR_TO_FUNC.
+    pub fn callback_target_labels(&self) -> &BTreeSet<i32> {
+        &self.callback_target_labels
+    }
+
+    /// Subset of `callback_target_labels` whose body can reach a top-level Exit.
+    pub fn callback_targets_with_exit(&self) -> &BTreeSet<i32> {
+        &self.callback_targets_with_exit
     }
 
     /// Build a `Program` from an instruction sequence.
@@ -418,8 +433,8 @@ impl Program {
                 callback_targets_with_exit.insert(*label_num);
             }
         }
-        info.callback_target_labels = callback_target_labels;
-        info.callback_targets_with_exit = callback_targets_with_exit;
+        builder.prog.callback_target_labels = callback_target_labels;
+        builder.prog.callback_targets_with_exit = callback_targets_with_exit;
 
         // Detect loops using Weak Topological Ordering (WTO) and insert counters
         // at loop entry points. WTO provides a hierarchical decomposition of the
@@ -484,6 +499,8 @@ impl CfgBuilder {
                 instructions,
                 assertions,
                 cfg: Cfg::new(),
+                callback_target_labels: BTreeSet::new(),
+                callback_targets_with_exit: BTreeSet::new(),
             },
         }
     }
@@ -1425,13 +1442,14 @@ mod tests {
         let mut info = ProgramInfo::default();
         let platform = LinuxPlatform::new();
         let opts = EbpfVerifierOptions::default();
-        Program::from_sequence(&seq, &mut info, &platform, &opts).expect("expected valid CFG");
+        let prog =
+            Program::from_sequence(&seq, &mut info, &platform, &opts).expect("expected valid CFG");
 
-        assert!(info.callback_target_labels.contains(&0));
-        assert!(info.callback_target_labels.contains(&2));
+        assert!(prog.callback_target_labels().contains(&0));
+        assert!(prog.callback_target_labels().contains(&2));
 
-        assert!(info.callback_targets_with_exit.contains(&0));
-        assert!(!info.callback_targets_with_exit.contains(&2));
+        assert!(prog.callback_targets_with_exit().contains(&0));
+        assert!(!prog.callback_targets_with_exit().contains(&2));
     }
 
     #[test]

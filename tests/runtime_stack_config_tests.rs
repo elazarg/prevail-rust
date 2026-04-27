@@ -53,6 +53,7 @@ fn verify(asm: &str, options: &EbpfVerifierOptions) -> Result<(), String> {
 
     let ctx = DomainContext {
         program_info: &info,
+        program: &program,
         runtime: &options.runtime,
         options,
         platform: &platform,

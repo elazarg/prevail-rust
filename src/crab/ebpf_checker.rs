@@ -670,8 +670,8 @@ impl<'a> EbpfChecker<'a> {
 
         if !self
             .ctx
-            .program_info
-            .callback_target_labels
+            .program
+            .callback_target_labels()
             .contains(&callback_label)
         {
             return self
@@ -679,8 +679,8 @@ impl<'a> EbpfChecker<'a> {
         }
         if !self
             .ctx
-            .program_info
-            .callback_targets_with_exit
+            .program
+            .callback_targets_with_exit()
             .contains(&callback_label)
         {
             return self.throw_fail("callback function does not have a reachable exit");

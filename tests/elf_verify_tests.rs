@@ -53,6 +53,7 @@ fn verify_section(path: &str, section: &str, opts: &EbpfVerifierOptions) -> bool
 
     let ctx = DomainContext {
         program_info: &raw_prog.info,
+        program: &program,
         runtime: &opts.runtime,
         options: opts,
         platform: &platform,
@@ -99,6 +100,7 @@ fn verify_program(
 
             let ctx = DomainContext {
                 program_info: &raw_prog.info,
+                program: &program,
                 runtime: &opts.runtime,
                 options: opts,
                 platform: &platform,
@@ -147,6 +149,7 @@ fn try_verify_section(path: &str, section: &str, opts: &EbpfVerifierOptions) -> 
 
     let ctx = DomainContext {
         program_info: &raw_prog.info,
+        program: &program,
         runtime: &opts.runtime,
         options: opts,
         platform: &platform,
@@ -204,6 +207,7 @@ fn try_verify_program(
 
             let ctx = DomainContext {
                 program_info: &raw_prog.info,
+                program: &program,
                 runtime: &opts.runtime,
                 options: opts,
                 platform: &platform,
@@ -2763,6 +2767,7 @@ fn fail_cilium_examples_uretprobe_bpf_x86_bpfel() {
         .expect("build CFG");
     let ctx = DomainContext {
         program_info: &raw_prog.info,
+        program: &program,
         runtime: &opts.runtime,
         options: &opts,
         platform: &platform2,

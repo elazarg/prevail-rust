@@ -91,16 +91,6 @@ pub struct ProgramInfo {
     pub cache: BTreeMap<EquivalenceKey, i32>,
     pub line_info: BTreeMap<usize, BtfLineInfo>,
     pub supported_conformance_groups: u32,
-    /// Valid top-level instruction labels usable as callback entries via PTR_TO_FUNC.
-    ///
-    /// Populated by `Program::from_sequence` (CFG build). Upstream C++ mutates
-    /// this through a const reference; in Rust we pass `ProgramInfo` by `&mut`
-    /// at the construction site so the mutation is visible to the borrow checker.
-    pub callback_target_labels: BTreeSet<i32>,
-    /// Subset of callback labels that can reach a top-level Exit.
-    ///
-    /// Populated alongside `callback_target_labels`; see that field.
-    pub callback_targets_with_exit: BTreeSet<i32>,
     /// Per-program instruction indices rewritten from builtin relocations.
     pub builtin_call_offsets: BTreeSet<usize>,
 }
@@ -114,8 +104,6 @@ impl Default for ProgramInfo {
             line_info: BTreeMap::new(),
             // Unknown context defaults to permissive mask.
             supported_conformance_groups: u32::MAX,
-            callback_target_labels: BTreeSet::new(),
-            callback_targets_with_exit: BTreeSet::new(),
             builtin_call_offsets: BTreeSet::new(),
         }
     }
