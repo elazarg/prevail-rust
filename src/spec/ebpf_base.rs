@@ -62,7 +62,7 @@ pub enum EbpfArgumentType {
 /// Describes how to access the layout in memory of the data (e.g. actual packet).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct EbpfContextDescriptor {
+pub struct EbpfCtxDescriptor {
     pub size: i32,
     pub data: i32,
     pub end: i32,

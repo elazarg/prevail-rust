@@ -16,10 +16,10 @@ use prevail::ir::program::Program;
 use prevail::ir::unmarshal;
 use prevail::linux::linux_platform::LinuxPlatform;
 use prevail::spec::config::{EbpfRuntimeConfig, EbpfVerifierOptions};
-use prevail::spec::ebpf_base::EbpfContextDescriptor;
+use prevail::spec::ebpf_base::EbpfCtxDescriptor;
 use prevail::spec::type_descriptors::{EbpfProgramType, ProgramInfo};
 
-static TEST_CTX: EbpfContextDescriptor = EbpfContextDescriptor {
+static TEST_CTX: EbpfCtxDescriptor = EbpfCtxDescriptor {
     size: 32,
     data: 0,
     end: 8,
@@ -33,7 +33,7 @@ fn verify(asm: &str, options: &EbpfVerifierOptions) -> Result<(), String> {
 
     let program_type = EbpfProgramType {
         name: "test".to_string(),
-        context_descriptor: Some(&TEST_CTX),
+        ctx_descriptor: Some(&TEST_CTX),
         platform_specific_data: 0,
         section_prefixes: vec![],
         is_privileged: false,

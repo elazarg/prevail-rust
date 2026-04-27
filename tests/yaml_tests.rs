@@ -35,7 +35,7 @@ use prevail::linux::spec_prototypes::HelperPrototype;
 use prevail::platform::EbpfPlatform;
 use prevail::result::{InvariantPoint, ObservationCheckMode};
 use prevail::spec::config::EbpfVerifierOptions;
-use prevail::spec::ebpf_base::EbpfContextDescriptor;
+use prevail::spec::ebpf_base::EbpfCtxDescriptor;
 use prevail::spec::type_descriptors::{
     EbpfMapDescriptor, EbpfMapType, EbpfProgramType, ProgramInfo,
 };
@@ -452,16 +452,15 @@ fn run_test_case(test_case: &TestCase, platform: &TestPlatform) -> Option<Failur
     }
 
     // Build context
-    let context_descriptor: &'static EbpfContextDescriptor =
-        Box::leak(Box::new(EbpfContextDescriptor {
-            size: 64,
-            data: 0,
-            end: 4,
-            meta: -1,
-        }));
+    let ctx_descriptor: &'static EbpfCtxDescriptor = Box::leak(Box::new(EbpfCtxDescriptor {
+        size: 64,
+        data: 0,
+        end: 4,
+        meta: -1,
+    }));
     let program_type = EbpfProgramType {
         name: test_case.name.clone(),
-        context_descriptor: Some(context_descriptor),
+        ctx_descriptor: Some(ctx_descriptor),
         platform_specific_data: 0,
         section_prefixes: vec![],
         is_privileged: false,

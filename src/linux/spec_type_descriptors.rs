@@ -6,7 +6,7 @@
 // All Linux program type descriptors retained for spec completeness.
 #![allow(dead_code)]
 
-use crate::spec::ebpf_base::EbpfContextDescriptor;
+use crate::spec::ebpf_base::EbpfCtxDescriptor;
 
 pub const NMAPS: i32 = 64;
 pub const NONMAPS: i32 = 5;
@@ -40,133 +40,133 @@ pub const NETFILTER_REGIONS: i32 = 2 * 8;
 // Syscall: context is user-supplied buffer, kernel allows up to U16_MAX.
 pub const SYSCALL_REGIONS: i32 = 65535;
 
-pub static SK_BUFF: EbpfContextDescriptor = EbpfContextDescriptor {
+pub static SK_BUFF: EbpfCtxDescriptor = EbpfCtxDescriptor {
     size: SK_SKB_REGIONS,
     data: 76,  // data
     end: 80,   // data_end
     meta: 140, // data_meta
 };
 
-pub static XDP_MD: EbpfContextDescriptor = EbpfContextDescriptor {
+pub static XDP_MD: EbpfCtxDescriptor = EbpfCtxDescriptor {
     size: XDP_REGIONS,
     data: 0, // data
     end: 4,  // data_end
     meta: 8, // data_meta
 };
 
-pub static SK_MSG_MD: EbpfContextDescriptor = EbpfContextDescriptor {
+pub static SK_MSG_MD: EbpfCtxDescriptor = EbpfCtxDescriptor {
     size: 80, // sizeof(sk_msg_md)
     data: 0,
     end: 8, // data_end
     meta: -1,
 };
 
-pub static UNSPEC_DESCR: EbpfContextDescriptor = EbpfContextDescriptor {
+pub static UNSPEC_DESCR: EbpfCtxDescriptor = EbpfCtxDescriptor {
     size: 0,
     data: -1,
     end: -1,
     meta: -1,
 };
 
-pub static TRACING_DESCR: EbpfContextDescriptor = EbpfContextDescriptor {
+pub static TRACING_DESCR: EbpfCtxDescriptor = EbpfCtxDescriptor {
     size: TRACING_REGIONS,
     data: -1,
     end: -1,
     meta: -1,
 };
 
-pub static LIRC_MODE2_DESCR: EbpfContextDescriptor = EbpfContextDescriptor {
+pub static LIRC_MODE2_DESCR: EbpfCtxDescriptor = EbpfCtxDescriptor {
     size: LIRC_MODE2_REGIONS,
     data: -1,
     end: -1,
     meta: -1,
 };
 
-pub static NETFILTER_DESCR: EbpfContextDescriptor = EbpfContextDescriptor {
+pub static NETFILTER_DESCR: EbpfCtxDescriptor = EbpfCtxDescriptor {
     size: NETFILTER_REGIONS,
     data: -1,
     end: -1,
     meta: -1,
 };
 
-pub static SYSCALL_DESCR: EbpfContextDescriptor = EbpfContextDescriptor {
+pub static SYSCALL_DESCR: EbpfCtxDescriptor = EbpfCtxDescriptor {
     size: SYSCALL_REGIONS,
     data: -1,
     end: -1,
     meta: -1,
 };
 
-pub static CGROUP_DEV_DESCR: EbpfContextDescriptor = EbpfContextDescriptor {
+pub static CGROUP_DEV_DESCR: EbpfCtxDescriptor = EbpfCtxDescriptor {
     size: CGROUP_DEV_REGIONS,
     data: -1,
     end: -1,
     meta: -1,
 };
 
-pub static KPROBE_DESCR: EbpfContextDescriptor = EbpfContextDescriptor {
+pub static KPROBE_DESCR: EbpfCtxDescriptor = EbpfCtxDescriptor {
     size: KPROBE_REGIONS,
     data: -1,
     end: -1,
     meta: -1,
 };
 
-pub static TRACEPOINT_DESCR: EbpfContextDescriptor = EbpfContextDescriptor {
+pub static TRACEPOINT_DESCR: EbpfCtxDescriptor = EbpfCtxDescriptor {
     size: TRACEPOINT_REGIONS,
     data: -1,
     end: -1,
     meta: -1,
 };
 
-pub static PERF_EVENT_DESCR: EbpfContextDescriptor = EbpfContextDescriptor {
+pub static PERF_EVENT_DESCR: EbpfCtxDescriptor = EbpfCtxDescriptor {
     size: PERF_EVENT_REGIONS,
     data: -1,
     end: -1,
     meta: -1,
 };
 
-pub static CGROUP_SOCK_DESCR: EbpfContextDescriptor = EbpfContextDescriptor {
+pub static CGROUP_SOCK_DESCR: EbpfCtxDescriptor = EbpfCtxDescriptor {
     size: CGROUP_SOCK_REGIONS,
     data: -1,
     end: -1,
     meta: -1,
 };
 
-pub static SOCK_OPS_DESCR: EbpfContextDescriptor = EbpfContextDescriptor {
+pub static SOCK_OPS_DESCR: EbpfCtxDescriptor = EbpfCtxDescriptor {
     size: SOCK_OPS_REGIONS,
     data: -1,
     end: -1,
     meta: -1,
 };
 
-pub static SOCK_ADDR_DESCR: EbpfContextDescriptor = EbpfContextDescriptor {
+pub static SOCK_ADDR_DESCR: EbpfCtxDescriptor = EbpfCtxDescriptor {
     size: SOCK_ADDR_REGIONS,
     data: -1,
     end: -1,
     meta: -1,
 };
 
-pub static SOCKOPT_DESCR: EbpfContextDescriptor = EbpfContextDescriptor {
+pub static SOCKOPT_DESCR: EbpfCtxDescriptor = EbpfCtxDescriptor {
     size: SOCKOPT_REGIONS,
     data: -1,
     end: -1,
     meta: -1,
 };
 
-pub static SK_LOOKUP_DESCR: EbpfContextDescriptor = EbpfContextDescriptor {
+pub static SK_LOOKUP_DESCR: EbpfCtxDescriptor = EbpfCtxDescriptor {
     size: SK_LOOKUP_REGIONS,
     data: -1,
     end: -1,
     meta: -1,
 };
 
-pub static SK_REUSEPORT_DESCR: EbpfContextDescriptor = EbpfContextDescriptor {
+pub static SK_REUSEPORT_DESCR: EbpfCtxDescriptor = EbpfCtxDescriptor {
     size: SK_REUSEPORT_REGIONS,
     data: 0,
     end: 8,
     meta: -1,
 };
 
-pub static CGROUP_SYSCTL_DESCR: EbpfContextDescriptor = EbpfContextDescriptor {
+pub static CGROUP_SYSCTL_DESCR: EbpfCtxDescriptor = EbpfCtxDescriptor {
     size: CGROUP_SYSCTL_REGIONS,
     data: -1,
     end: -1,
@@ -174,7 +174,7 @@ pub static CGROUP_SYSCTL_DESCR: EbpfContextDescriptor = EbpfContextDescriptor {
 };
 
 // flow_dissector uses __sk_buff layout but without data_meta.
-pub static FLOW_DISSECTOR_DESCR: EbpfContextDescriptor = EbpfContextDescriptor {
+pub static FLOW_DISSECTOR_DESCR: EbpfCtxDescriptor = EbpfCtxDescriptor {
     size: SK_SKB_REGIONS,
     data: 76, // data
     end: 80,  // data_end
@@ -183,20 +183,20 @@ pub static FLOW_DISSECTOR_DESCR: EbpfContextDescriptor = EbpfContextDescriptor {
 
 // The following all use the __sk_buff context struct (with data/data_end/data_meta).
 // In C++ these are #define aliases; in Rust, we just re-export references.
-pub static SOCKET_FILTER_DESCR: &EbpfContextDescriptor = &SK_BUFF;
-pub static SCHED_DESCR: &EbpfContextDescriptor = &SK_BUFF;
-pub static LWT_XMIT_DESCR: &EbpfContextDescriptor = &SK_BUFF;
-pub static LWT_INOUT_DESCR: &EbpfContextDescriptor = &SK_BUFF;
-pub static SK_SKB_DESCR: &EbpfContextDescriptor = &SK_BUFF;
+pub static SOCKET_FILTER_DESCR: &EbpfCtxDescriptor = &SK_BUFF;
+pub static SCHED_DESCR: &EbpfCtxDescriptor = &SK_BUFF;
+pub static LWT_XMIT_DESCR: &EbpfCtxDescriptor = &SK_BUFF;
+pub static LWT_INOUT_DESCR: &EbpfCtxDescriptor = &SK_BUFF;
+pub static SK_SKB_DESCR: &EbpfCtxDescriptor = &SK_BUFF;
 
-pub static XDP_DESCR: &EbpfContextDescriptor = &XDP_MD;
+pub static XDP_DESCR: &EbpfCtxDescriptor = &XDP_MD;
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_new_linux_context_descriptor_layouts() {
+    fn test_new_linux_ctx_descriptor_layouts() {
         assert_eq!(SOCK_ADDR_DESCR.size, 72);
         assert_eq!(SOCK_ADDR_DESCR.data, -1);
         assert_eq!(SOCK_ADDR_DESCR.end, -1);

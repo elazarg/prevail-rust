@@ -22,7 +22,7 @@ use crate::linux::spec_type_descriptors::{
 };
 use crate::platform::{EbpfPlatform, KsymBtfId};
 use crate::spec::config::EbpfVerifierOptions;
-use crate::spec::ebpf_base::EbpfContextDescriptor;
+use crate::spec::ebpf_base::EbpfCtxDescriptor;
 use crate::spec::type_descriptors::{
     EbpfMapDescriptor, EbpfMapType, EbpfMapValueType, EbpfProgramType, EquivalenceKey, ProgramInfo,
 };
@@ -160,7 +160,7 @@ pub struct BpfLoadMapDef {
 
 fn ptype(
     name: &str,
-    descr: Option<&'static EbpfContextDescriptor>,
+    descr: Option<&'static EbpfCtxDescriptor>,
     native_type: u64,
     prefixes: &[&str],
 ) -> EbpfProgramType {
@@ -169,7 +169,7 @@ fn ptype(
 
 fn ptype_privileged(
     name: &str,
-    descr: Option<&'static EbpfContextDescriptor>,
+    descr: Option<&'static EbpfCtxDescriptor>,
     native_type: u64,
     prefixes: &[&str],
 ) -> EbpfProgramType {
@@ -178,14 +178,14 @@ fn ptype_privileged(
 
 fn ptype_with_privilege(
     name: &str,
-    descr: Option<&'static EbpfContextDescriptor>,
+    descr: Option<&'static EbpfCtxDescriptor>,
     native_type: u64,
     prefixes: &[&str],
     is_privileged: bool,
 ) -> EbpfProgramType {
     EbpfProgramType {
         name: name.to_owned(),
-        context_descriptor: descr,
+        ctx_descriptor: descr,
         platform_specific_data: native_type,
         section_prefixes: prefixes.iter().map(|s| (*s).to_owned()).collect(),
         is_privileged,
@@ -771,8 +771,8 @@ pub struct LinuxPlatform {
     /// Conformance groups bitmask.
     pub conformance_groups: u32,
     /// Context descriptor for the current program type.
-    /// Set from `ProgramInfo.program_type.context_descriptor` before analysis.
-    pub context_descriptor: Option<&'static EbpfContextDescriptor>,
+    /// Set from `ProgramInfo.program_type.ctx_descriptor` before analysis.
+    pub ctx_descriptor: Option<&'static EbpfCtxDescriptor>,
     /// Program type name for helper availability gating when context alone is ambiguous.
     pub program_type_name: Option<String>,
 }
@@ -782,13 +782,13 @@ impl LinuxPlatform {
         Self {
             map_descriptors: Vec::new(),
             conformance_groups: conformance_groups::DEFAULT_GROUPS | conformance_groups::PACKET,
-            context_descriptor: None,
+            ctx_descriptor: None,
             program_type_name: None,
         }
     }
 
     pub fn set_program_type(&mut self, program_type: &EbpfProgramType) {
-        self.context_descriptor = program_type.context_descriptor;
+        self.ctx_descriptor = program_type.ctx_descriptor;
         self.program_type_name = Some(program_type.name.clone());
     }
 }
@@ -813,11 +813,7 @@ impl EbpfPlatform for LinuxPlatform {
     }
 
     fn is_helper_usable(&self, n: i32) -> bool {
-        spec_prototypes::is_helper_usable(
-            n,
-            self.context_descriptor,
-            self.program_type_name.as_deref(),
-        )
+        spec_prototypes::is_helper_usable(n, self.ctx_descriptor, self.program_type_name.as_deref())
     }
 
     fn resolve_ksym_btf_id(&self, name: &str) -> Option<KsymBtfId> {
@@ -1064,7 +1060,7 @@ mod tests {
         ] {
             let program_type = get_program_type_linux(section, "");
             assert_eq!(program_type.name, "cgroup_sock_addr");
-            assert_eq!(program_type.context_descriptor, Some(&SOCK_ADDR_DESCR));
+            assert_eq!(program_type.ctx_descriptor, Some(&SOCK_ADDR_DESCR));
         }
     }
 

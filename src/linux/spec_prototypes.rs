@@ -9,7 +9,7 @@
 use crate::linux::spec_type_descriptors::{
     PERF_EVENT_DESCR, SK_BUFF, SK_MSG_MD, SOCK_OPS_DESCR, XDP_MD,
 };
-use crate::spec::ebpf_base::{EbpfArgumentType, EbpfContextDescriptor, EbpfReturnType};
+use crate::spec::ebpf_base::{EbpfArgumentType, EbpfCtxDescriptor, EbpfReturnType};
 
 // ── Short aliases for readability ──────────────────────────────────
 //
@@ -44,7 +44,7 @@ pub struct HelperPrototype {
     pub return_type: EbpfReturnType,
     pub argument_type: [EbpfArgumentType; 5],
     pub reallocate_packet: bool,
-    pub context_descriptor: Option<&'static EbpfContextDescriptor>,
+    pub ctx_descriptor: Option<&'static EbpfCtxDescriptor>,
     pub unsupported: bool,
 }
 
@@ -58,7 +58,7 @@ macro_rules! proto {
             return_type: $ret,
             argument_type: [DontCare, DontCare, DontCare, DontCare, DontCare],
             reallocate_packet: false,
-            context_descriptor: None,
+            ctx_descriptor: None,
             unsupported: false,
         }
     };
@@ -91,7 +91,7 @@ macro_rules! proto {
                 if ARGS.len() > 4 { ARGS[4] } else { DontCare },
             ],
             reallocate_packet: $realloc,
-            context_descriptor: $ctx,
+            ctx_descriptor: $ctx,
             unsupported: $unsup,
         }
     }};
@@ -1325,7 +1325,7 @@ pub fn resolve_helper_id(name: &str) -> Option<i32> {
 ///
 pub fn is_helper_usable(
     n: i32,
-    program_context: Option<&EbpfContextDescriptor>,
+    program_context: Option<&EbpfCtxDescriptor>,
     program_type_name: Option<&str>,
 ) -> bool {
     if n < 0 || n >= PROTOTYPES.len() as i32 {
@@ -1363,14 +1363,14 @@ pub fn is_helper_usable(
     }
 
     // If the helper requires a specific context, it must match.
-    if let Some(required_ctx) = proto.context_descriptor
+    if let Some(required_ctx) = proto.ctx_descriptor
         && let Some(prog_ctx) = program_context
     {
         // Compare by pointer identity first, then by value.
         if !std::ptr::eq(required_ctx, prog_ctx) && *required_ctx != *prog_ctx {
             return false;
         }
-    } else if proto.context_descriptor.is_some() {
+    } else if proto.ctx_descriptor.is_some() {
         return false;
     }
 
@@ -1440,15 +1440,15 @@ mod tests {
     }
 
     #[test]
-    fn test_context_descriptor_helpers() {
+    fn test_ctx_descriptor_helpers() {
         // skb_store_bytes (9) requires SK_BUFF context
         let p = &PROTOTYPES[9];
-        assert!(p.context_descriptor.is_some());
-        let ctx = p.context_descriptor.unwrap();
+        assert!(p.ctx_descriptor.is_some());
+        let ctx = p.ctx_descriptor.unwrap();
         assert_eq!(ctx.size, SK_SKB_REGIONS);
 
         // get_prandom_u32 (7) has no context requirement
-        assert!(PROTOTYPES[7].context_descriptor.is_none());
+        assert!(PROTOTYPES[7].ctx_descriptor.is_none());
     }
 
     #[test]
@@ -1493,7 +1493,7 @@ mod tests {
     #[test]
     fn test_is_helper_usable_context_value_match() {
         // A separately defined descriptor with the same values should match.
-        let matching_ctx = EbpfContextDescriptor {
+        let matching_ctx = EbpfCtxDescriptor {
             size: SK_SKB_REGIONS,
             data: 19 * 4,
             end: 20 * 4,

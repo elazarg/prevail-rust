@@ -141,7 +141,7 @@ impl<'a> EbpfChecker<'a> {
             .ctx
             .program_info
             .program_type
-            .context_descriptor
+            .ctx_descriptor
             .expect("missing program context descriptor")
             .size;
 

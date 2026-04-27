@@ -5,7 +5,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::ebpf_base::EbpfContextDescriptor;
+use super::ebpf_base::EbpfCtxDescriptor;
 use super::vm_isa::EbpfInst;
 
 /// Describes the key properties of an eBPF map.
@@ -46,13 +46,13 @@ pub struct EbpfMapType {
 /// Describes an eBPF program type.
 /// Mirrors C++ `EbpfProgramType`.
 ///
-/// `context_descriptor` references a static descriptor from platform modules
+/// `ctx_descriptor` references a static descriptor from platform modules
 /// (e.g. `&SK_BUFF_DESCR`). The verifier can compare descriptors by pointer
 /// identity via `std::ptr::eq` on the references.
 #[derive(Clone, Debug, Default)]
 pub struct EbpfProgramType {
     pub name: String,
-    pub context_descriptor: Option<&'static EbpfContextDescriptor>,
+    pub ctx_descriptor: Option<&'static EbpfCtxDescriptor>,
     pub platform_specific_data: u64,
     pub section_prefixes: Vec<String>,
     pub is_privileged: bool,

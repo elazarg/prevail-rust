@@ -26,7 +26,7 @@ use prevail::ir::unmarshal;
 use prevail::linux::linux_platform::LinuxPlatform;
 use prevail::spec::config::EbpfRuntimeConfig;
 use prevail::spec::config::EbpfVerifierOptions;
-use prevail::spec::ebpf_base::EbpfContextDescriptor;
+use prevail::spec::ebpf_base::EbpfCtxDescriptor;
 
 /// Default total stack size used for conformance-test harness purposes.
 /// The conformance tests always run with default stack options, so using
@@ -244,17 +244,16 @@ fn run_conformance_test_case(data_file: &Path) -> ConformanceTestResult {
     };
 
     // Build conformance context descriptor: {size: 64, data: -1, end: -1, meta: -1}
-    let context_descriptor: &'static EbpfContextDescriptor =
-        Box::leak(Box::new(EbpfContextDescriptor {
-            size: 64,
-            data: -1,
-            end: -1,
-            meta: -1,
-        }));
+    let ctx_descriptor: &'static EbpfCtxDescriptor = Box::leak(Box::new(EbpfCtxDescriptor {
+        size: 64,
+        data: -1,
+        end: -1,
+        meta: -1,
+    }));
 
     let program_type = EbpfProgramType {
         name: "conformance_check".to_string(),
-        context_descriptor: Some(context_descriptor),
+        ctx_descriptor: Some(ctx_descriptor),
         platform_specific_data: 0,
         section_prefixes: vec![],
         is_privileged: false,
