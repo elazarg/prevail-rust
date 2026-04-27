@@ -29,7 +29,7 @@ pub enum DataKind {
 }
 
 /// Upstream parity: mirrors `KIND_MIN` in `type_encoding.hpp`.
-#[allow(dead_code)]
+#[expect(dead_code)]
 pub const KIND_MIN: DataKind = DataKind::Types;
 pub const KIND_VALUE_MIN: DataKind = DataKind::Svalues;
 pub const KIND_MAX: DataKind = DataKind::AllocMemSizes;
@@ -383,13 +383,13 @@ pub const TS_SINGLETON_PTR: TypeSet = TypeSet::of(&[TCtx, TPacket, TStack]);
 /// `{packet, stack, shared}` — memory-accessible pointer types
 pub const TS_MEM: TypeSet = TypeSet::of(&[TPacket, TStack, TShared]);
 /// Upstream parity: mirrors `TS_SOCKET` in `type_encoding.hpp`.
-#[allow(dead_code)]
+#[expect(dead_code)]
 pub const TS_SOCKET: TypeSet = TypeSet::singleton(TSocket);
 /// Upstream parity: mirrors `TS_BTF_ID` in `type_encoding.hpp`.
-#[allow(dead_code)]
+#[expect(dead_code)]
 pub const TS_BTF_ID: TypeSet = TypeSet::singleton(TBtfId);
 /// Upstream parity: mirrors `TS_ALLOC_MEM` in `type_encoding.hpp`.
-#[allow(dead_code)]
+#[expect(dead_code)]
 pub const TS_ALLOC_MEM: TypeSet = TypeSet::singleton(TAllocMem);
 
 // ============================================================================
