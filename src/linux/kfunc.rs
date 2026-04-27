@@ -25,195 +25,98 @@ struct KfuncPrototypeEntry {
     requires_privileged: bool,
 }
 
+impl KfuncPrototypeEntry {
+    /// Construct a kfunc entry with default flags (none), unrestricted
+    /// program type, and no privilege requirement. Argument list is padded
+    /// to 5 entries with `DontCare`.
+    const fn new(btf_id: i32, name: &'static str, return_type: EbpfReturnType) -> Self {
+        Self {
+            btf_id,
+            proto: HelperPrototype {
+                name,
+                return_type,
+                argument_type: [EbpfArgumentType::DontCare; 5],
+                reallocate_packet: false,
+                ctx_descriptor: None,
+                unsupported: false,
+            },
+            flags: KFUNC_FLAG_NONE,
+            required_program_type: "",
+            requires_privileged: false,
+        }
+    }
+
+    const fn with_args(mut self, args: &'static [EbpfArgumentType]) -> Self {
+        let mut i = 0;
+        while i < args.len() && i < 5 {
+            self.proto.argument_type[i] = args[i];
+            i += 1;
+        }
+        self
+    }
+
+    const fn with_flags(mut self, flags: u32) -> Self {
+        self.flags = flags;
+        self
+    }
+
+    const fn with_program(mut self, program: &'static str) -> Self {
+        self.required_program_type = program;
+        self
+    }
+
+    const fn privileged(mut self) -> Self {
+        self.requires_privileged = true;
+        self
+    }
+}
+
 const KFUNC_PROTOTYPES: [KfuncPrototypeEntry; 12] = [
-    KfuncPrototypeEntry {
-        btf_id: 12,
-        proto: HelperPrototype {
-            name: "kfunc_test_id_overlap_tail_call",
-            return_type: EbpfReturnType::Integer,
-            argument_type: [EbpfArgumentType::DontCare; 5],
-            reallocate_packet: false,
-            ctx_descriptor: None,
-            unsupported: false,
-        },
-        flags: KFUNC_FLAG_NONE,
-        required_program_type: "",
-        requires_privileged: false,
-    },
-    KfuncPrototypeEntry {
-        btf_id: 1000,
-        proto: HelperPrototype {
-            name: "kfunc_test_ret_int",
-            return_type: EbpfReturnType::Integer,
-            argument_type: [EbpfArgumentType::DontCare; 5],
-            reallocate_packet: false,
-            ctx_descriptor: None,
-            unsupported: false,
-        },
-        flags: KFUNC_FLAG_NONE,
-        required_program_type: "",
-        requires_privileged: false,
-    },
-    KfuncPrototypeEntry {
-        btf_id: 1001,
-        proto: HelperPrototype {
-            name: "kfunc_test_ctx_arg",
-            return_type: EbpfReturnType::Integer,
-            argument_type: [
-                EbpfArgumentType::PtrToCtx,
-                EbpfArgumentType::DontCare,
-                EbpfArgumentType::DontCare,
-                EbpfArgumentType::DontCare,
-                EbpfArgumentType::DontCare,
-            ],
-            reallocate_packet: false,
-            ctx_descriptor: None,
-            unsupported: false,
-        },
-        flags: KFUNC_FLAG_NONE,
-        required_program_type: "",
-        requires_privileged: false,
-    },
-    KfuncPrototypeEntry {
-        btf_id: 1002,
-        proto: HelperPrototype {
-            name: "kfunc_test_acquire_flag",
-            return_type: EbpfReturnType::Integer,
-            argument_type: [EbpfArgumentType::DontCare; 5],
-            reallocate_packet: false,
-            ctx_descriptor: None,
-            unsupported: false,
-        },
-        flags: KFUNC_FLAG_ACQUIRE,
-        required_program_type: "",
-        requires_privileged: false,
-    },
-    KfuncPrototypeEntry {
-        btf_id: 1003,
-        proto: HelperPrototype {
-            name: "kfunc_test_xdp_only",
-            return_type: EbpfReturnType::Integer,
-            argument_type: [EbpfArgumentType::DontCare; 5],
-            reallocate_packet: false,
-            ctx_descriptor: None,
-            unsupported: false,
-        },
-        flags: KFUNC_FLAG_NONE,
-        required_program_type: "xdp",
-        requires_privileged: false,
-    },
-    KfuncPrototypeEntry {
-        btf_id: 1004,
-        proto: HelperPrototype {
-            name: "kfunc_test_privileged_only",
-            return_type: EbpfReturnType::Integer,
-            argument_type: [EbpfArgumentType::DontCare; 5],
-            reallocate_packet: false,
-            ctx_descriptor: None,
-            unsupported: false,
-        },
-        flags: KFUNC_FLAG_NONE,
-        required_program_type: "",
-        requires_privileged: true,
-    },
-    KfuncPrototypeEntry {
-        btf_id: 1005,
-        proto: HelperPrototype {
-            name: "kfunc_test_ret_map_value_or_null",
-            return_type: EbpfReturnType::PtrToMapValueOrNull,
-            argument_type: [EbpfArgumentType::DontCare; 5],
-            reallocate_packet: false,
-            ctx_descriptor: None,
-            unsupported: false,
-        },
-        flags: KFUNC_FLAG_NONE,
-        required_program_type: "",
-        requires_privileged: false,
-    },
-    KfuncPrototypeEntry {
-        btf_id: 1006,
-        proto: HelperPrototype {
-            name: "kfunc_test_readable_mem_or_null_size",
-            return_type: EbpfReturnType::Integer,
-            argument_type: [
-                EbpfArgumentType::PtrToReadableMemOrNull,
-                EbpfArgumentType::ConstSizeOrZero,
-                EbpfArgumentType::DontCare,
-                EbpfArgumentType::DontCare,
-                EbpfArgumentType::DontCare,
-            ],
-            reallocate_packet: false,
-            ctx_descriptor: None,
-            unsupported: false,
-        },
-        flags: KFUNC_FLAG_NONE,
-        required_program_type: "",
-        requires_privileged: false,
-    },
-    KfuncPrototypeEntry {
-        btf_id: 1007,
-        proto: HelperPrototype {
-            name: "kfunc_test_writable_mem_size",
-            return_type: EbpfReturnType::Integer,
-            argument_type: [
-                EbpfArgumentType::PtrToWritableMem,
-                EbpfArgumentType::ConstSize,
-                EbpfArgumentType::DontCare,
-                EbpfArgumentType::DontCare,
-                EbpfArgumentType::DontCare,
-            ],
-            reallocate_packet: false,
-            ctx_descriptor: None,
-            unsupported: false,
-        },
-        flags: KFUNC_FLAG_NONE,
-        required_program_type: "",
-        requires_privileged: false,
-    },
-    KfuncPrototypeEntry {
-        btf_id: 1008,
-        proto: HelperPrototype {
-            name: "kfunc_test_release_flag",
-            return_type: EbpfReturnType::Integer,
-            argument_type: [EbpfArgumentType::DontCare; 5],
-            reallocate_packet: false,
-            ctx_descriptor: None,
-            unsupported: false,
-        },
-        flags: KFUNC_FLAG_RELEASE,
-        required_program_type: "",
-        requires_privileged: false,
-    },
+    KfuncPrototypeEntry::new(
+        12,
+        "kfunc_test_id_overlap_tail_call",
+        EbpfReturnType::Integer,
+    ),
+    KfuncPrototypeEntry::new(1000, "kfunc_test_ret_int", EbpfReturnType::Integer),
+    KfuncPrototypeEntry::new(1001, "kfunc_test_ctx_arg", EbpfReturnType::Integer)
+        .with_args(&[EbpfArgumentType::PtrToCtx]),
+    KfuncPrototypeEntry::new(1002, "kfunc_test_acquire_flag", EbpfReturnType::Integer)
+        .with_flags(KFUNC_FLAG_ACQUIRE),
+    KfuncPrototypeEntry::new(1003, "kfunc_test_xdp_only", EbpfReturnType::Integer)
+        .with_program("xdp"),
+    KfuncPrototypeEntry::new(1004, "kfunc_test_privileged_only", EbpfReturnType::Integer)
+        .privileged(),
+    KfuncPrototypeEntry::new(
+        1005,
+        "kfunc_test_ret_map_value_or_null",
+        EbpfReturnType::PtrToMapValueOrNull,
+    ),
+    KfuncPrototypeEntry::new(
+        1006,
+        "kfunc_test_readable_mem_or_null_size",
+        EbpfReturnType::Integer,
+    )
+    .with_args(&[
+        EbpfArgumentType::PtrToReadableMemOrNull,
+        EbpfArgumentType::ConstSizeOrZero,
+    ]),
+    KfuncPrototypeEntry::new(
+        1007,
+        "kfunc_test_writable_mem_size",
+        EbpfReturnType::Integer,
+    )
+    .with_args(&[
+        EbpfArgumentType::PtrToWritableMem,
+        EbpfArgumentType::ConstSize,
+    ]),
+    KfuncPrototypeEntry::new(1008, "kfunc_test_release_flag", EbpfReturnType::Integer)
+        .with_flags(KFUNC_FLAG_RELEASE),
     // bpf_cpumask_create/bpf_cpumask_release form an acquire/release pair.
     // Acquire without enforced release — verifier does not yet track release obligations (see ID 1010).
-    KfuncPrototypeEntry {
-        btf_id: 1009,
-        proto: HelperPrototype {
-            name: "bpf_cpumask_create",
-            return_type: EbpfReturnType::Integer,
-            argument_type: [EbpfArgumentType::DontCare; 5],
-            reallocate_packet: false,
-            ctx_descriptor: None,
-            unsupported: false,
-        },
-        flags: KFUNC_FLAG_ACQUIRE,
-        required_program_type: "",
-        requires_privileged: false,
-    },
-    KfuncPrototypeEntry {
-        btf_id: 1010,
-        proto: HelperPrototype {
-            name: "bpf_cpumask_release",
-            return_type: EbpfReturnType::Integer,
-            argument_type: [EbpfArgumentType::DontCare; 5],
-            reallocate_packet: false,
-            ctx_descriptor: None,
-            unsupported: false,
-        },
-        flags: KFUNC_FLAG_NONE, // release semantics not yet enforced by verifier
-        required_program_type: "",
-        requires_privileged: false,
-    },
+    KfuncPrototypeEntry::new(1009, "bpf_cpumask_create", EbpfReturnType::Integer)
+        .with_flags(KFUNC_FLAG_ACQUIRE),
+    // release semantics not yet enforced by verifier
+    KfuncPrototypeEntry::new(1010, "bpf_cpumask_release", EbpfReturnType::Integer),
 ];
 
 fn lookup_kfunc_prototype(btf_id: i32) -> Option<&'static KfuncPrototypeEntry> {
