@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "suite": "all",
-  "basis_hash": "927785e7df2abaa2",
+  "basis_hash": "f90caff01e53dca5",
   "depends_mode": "all_tracked_at_head_except_default_and_certignore_exclusions",
   "command": [
     "cargo",
@@ -25,7 +25,9 @@
     ],
     [
       "cargo",
-      "test"
+      "test",
+      "--",
+      "--test-threads=1"
     ],
     [
       "cargo",
@@ -39,7 +41,7 @@
     "tests_upstream_clean_except_tests_certs"
   ],
   "result": "pass",
-  "timestamp_unix_utc": 1777310004,
+  "timestamp_unix_utc": 1779966235,
   "toolchain": "rustc 1.94.0 (4a4ef493e 2026-03-02)",
   "runner_version": "0.1.0"
 }

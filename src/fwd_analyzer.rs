@@ -14,7 +14,6 @@ use crate::arith::number::Number;
 use crate::cfg::graph::Cfg;
 use crate::cfg::label::Label;
 use crate::cfg::wto::{CycleOrLabel, Wto, WtoCycle, is_component_member};
-use crate::crab::array_domain::ArrayMap;
 use crate::crab::ebpf_checker::ebpf_domain_check;
 use crate::crab::ebpf_domain::{DomainContext, EbpfDomain, VerificationError};
 use crate::crab::ebpf_transformer::{ebpf_domain_initialize_loop_counter, ebpf_domain_transform};
@@ -98,7 +97,6 @@ struct FwdFixpointIterator<'a, P: Program> {
     result: AnalysisResult,
     ctx: &'a DomainContext<'a>,
     registry: &'a mut VariableRegistry,
-    array_map: ArrayMap,
     /// Used to skip the analysis until the CFG entry is encountered in the WTO.
     skip: bool,
 }
@@ -129,7 +127,6 @@ impl<'a, P: Program> FwdFixpointIterator<'a, P> {
             result,
             ctx,
             registry,
-            array_map: ArrayMap::new(ctx.runtime.total_stack_size()),
             skip: true,
         }
     }
@@ -197,9 +194,7 @@ impl<'a, P: Program> FwdFixpointIterator<'a, P> {
                 }
             }
         }
-        if let Err(mut err) =
-            ebpf_domain_transform(&mut pre, ins, self.ctx, self.registry, &mut self.array_map)
-        {
+        if let Err(mut err) = ebpf_domain_transform(&mut pre, ins, self.ctx, self.registry) {
             err.label = Some(label.clone());
             self.set_error(label, err);
             return;
@@ -415,25 +410,7 @@ impl<'a, P: Program> FwdFixpointIterator<'a, P> {
         ctx: &'a DomainContext<'a>,
         registry: &'a mut VariableRegistry,
     ) -> AnalysisResult {
-        Self::run_with_array_map(
-            prog,
-            entry_inv,
-            ctx,
-            registry,
-            ArrayMap::new(ctx.runtime.total_stack_size()),
-        )
-    }
-
-    /// Run the forward fixpoint analysis with a pre-populated array map.
-    fn run_with_array_map(
-        prog: &'a P,
-        entry_inv: EbpfDomain,
-        ctx: &'a DomainContext<'a>,
-        registry: &'a mut VariableRegistry,
-        array_map: ArrayMap,
-    ) -> AnalysisResult {
         let mut analyzer = FwdFixpointIterator::new(prog, ctx, registry);
-        analyzer.array_map = array_map;
 
         if ctx.options.runtime.check_for_termination {
             // Initialize loop counters for potential loop headers.
@@ -467,10 +444,6 @@ impl<'a, P: Program> FwdFixpointIterator<'a, P> {
                 analyzer.result.max_loop_count = analyzer.max_loop_count();
             }
         }
-
-        // Flush OffsetMap traces before returning (map-trace feature).
-        #[cfg(feature = "map-trace")]
-        crate::crab::array_domain::flush_array_map_traces(&analyzer.array_map);
 
         // Compute exit value from exit post-invariant without cloning.
         let exit_value = if let Some(pair) = analyzer.result.invariants.get(&Label::exit()) {
@@ -516,13 +489,7 @@ pub fn analyze_with_entry<P: Program>(
     ctx: &DomainContext,
     registry: &mut VariableRegistry,
 ) -> AnalysisResult {
-    let mut array_map = ArrayMap::new(ctx.runtime.total_stack_size());
-    let entry_inv = EbpfDomain::from_constraints(
-        entry.value(),
-        ctx.runtime.setup_constraints,
-        ctx,
-        registry,
-        &mut array_map,
-    );
-    FwdFixpointIterator::run_with_array_map(prog, entry_inv, ctx, registry, array_map)
+    let entry_inv =
+        EbpfDomain::from_constraints(entry.value(), ctx.runtime.setup_constraints, ctx, registry);
+    FwdFixpointIterator::run(prog, entry_inv, ctx, registry)
 }

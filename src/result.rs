@@ -329,14 +329,12 @@ impl AnalysisResult {
         state: &StringInvariant,
         ctx: &crate::crab::ebpf_domain::DomainContext,
         registry: &mut VariableRegistry,
-        array_map: &mut crate::crab::array_domain::ArrayMap,
     ) -> bool {
         let abstract_state = EbpfDomain::from_constraints(
             state.value(),
             ctx.runtime.setup_constraints,
             ctx,
             registry,
-            array_map,
         );
         let post = &self.invariants.get(label).expect("label not found").post;
         abstract_state.is_included_in(post, registry)
@@ -369,7 +367,6 @@ impl AnalysisResult {
 
     /// Check whether an observation is consistent with / entailed by
     /// the invariant at `label`.
-    #[expect(clippy::too_many_arguments)]
     pub fn check_observation_at_label(
         &self,
         label: &Label,
@@ -378,7 +375,6 @@ impl AnalysisResult {
         mode: ObservationCheckMode,
         ctx: &crate::crab::ebpf_domain::DomainContext,
         registry: &mut VariableRegistry,
-        array_map: &mut crate::crab::array_domain::ArrayMap,
     ) -> ObservationCheckResult {
         let Some(inv_pair) = self.invariants.get(label) else {
             return ObservationCheckResult {
@@ -399,7 +395,6 @@ impl AnalysisResult {
                 ctx.runtime.setup_constraints,
                 ctx,
                 registry,
-                array_map,
             )
         };
 
@@ -455,16 +450,8 @@ impl AnalysisResult {
         observation: &StringInvariant,
         ctx: &crate::crab::ebpf_domain::DomainContext,
         registry: &mut VariableRegistry,
-        array_map: &mut crate::crab::array_domain::ArrayMap,
     ) -> bool {
-        self.is_consistent_at(
-            label,
-            InvariantPoint::Pre,
-            observation,
-            ctx,
-            registry,
-            array_map,
-        )
+        self.is_consistent_at(label, InvariantPoint::Pre, observation, ctx, registry)
     }
 
     /// Convenience: is the observation consistent with the post-invariant at `label`?
@@ -474,16 +461,8 @@ impl AnalysisResult {
         observation: &StringInvariant,
         ctx: &crate::crab::ebpf_domain::DomainContext,
         registry: &mut VariableRegistry,
-        array_map: &mut crate::crab::array_domain::ArrayMap,
     ) -> bool {
-        self.is_consistent_at(
-            label,
-            InvariantPoint::Post,
-            observation,
-            ctx,
-            registry,
-            array_map,
-        )
+        self.is_consistent_at(label, InvariantPoint::Post, observation, ctx, registry)
     }
 
     fn is_consistent_at(
@@ -493,7 +472,6 @@ impl AnalysisResult {
         observation: &StringInvariant,
         ctx: &crate::crab::ebpf_domain::DomainContext,
         registry: &mut VariableRegistry,
-        array_map: &mut crate::crab::array_domain::ArrayMap,
     ) -> bool {
         self.check_observation_at_label(
             label,
@@ -502,7 +480,6 @@ impl AnalysisResult {
             ObservationCheckMode::Consistent,
             ctx,
             registry,
-            array_map,
         )
         .ok
     }

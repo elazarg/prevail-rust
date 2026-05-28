@@ -160,9 +160,23 @@ fn suite_spec(name: &str) -> Result<SuiteSpec> {
             vec!["cargo", "clippy", "--all-targets", "--", "-D", "warnings"],
             vec!["cargo", "test", "--lib"],
             vec!["cargo", "test", "--test", "conformance_tests"],
-            vec!["cargo", "test", "--test", "elf_verify_tests"],
+            vec![
+                "cargo",
+                "test",
+                "--test",
+                "elf_verify_tests",
+                "--",
+                "--test-threads=1",
+            ],
         ],
-        command: vec!["cargo", "test", "--test", "yaml_tests"],
+        command: vec![
+            "cargo",
+            "test",
+            "--test",
+            "yaml_tests",
+            "--",
+            "--test-threads=1",
+        ],
         clean_requirements: vec!["repo_clean_except_tests_certs"],
     };
 
@@ -172,7 +186,7 @@ fn suite_spec(name: &str) -> Result<SuiteSpec> {
             pre_commands: vec![
                 vec!["cargo", "fmt", "--check"],
                 vec!["cargo", "clippy", "--all-targets", "--", "-D", "warnings"],
-                vec!["cargo", "test"],
+                vec!["cargo", "test", "--", "--test-threads=1"],
             ],
             command: vec!["cargo", "xtask", "parity", "compare"],
             clean_requirements: vec![
@@ -195,25 +209,53 @@ fn suite_spec(name: &str) -> Result<SuiteSpec> {
         "conformance" => Ok(SuiteSpec {
             name: "conformance",
             pre_commands: vec![],
-            command: vec!["cargo", "test", "--test", "conformance_tests"],
+            command: vec![
+                "cargo",
+                "test",
+                "--test",
+                "conformance_tests",
+                "--",
+                "--test-threads=1",
+            ],
             clean_requirements: vec!["repo_clean_except_tests_certs"],
         }),
         "yaml" => Ok(SuiteSpec {
             name: "yaml",
             pre_commands: vec![],
-            command: vec!["cargo", "test", "--test", "yaml_tests"],
+            command: vec![
+                "cargo",
+                "test",
+                "--test",
+                "yaml_tests",
+                "--",
+                "--test-threads=1",
+            ],
             clean_requirements: vec!["repo_clean_except_tests_certs"],
         }),
         "elf-verify" => Ok(SuiteSpec {
             name: "elf-verify",
             pre_commands: vec![],
-            command: vec!["cargo", "test", "--test", "elf_verify_tests"],
+            command: vec![
+                "cargo",
+                "test",
+                "--test",
+                "elf_verify_tests",
+                "--",
+                "--test-threads=1",
+            ],
             clean_requirements: vec!["repo_clean_except_tests_certs"],
         }),
         "parity-invariants" => Ok(SuiteSpec {
             name: "parity-invariants",
             pre_commands: vec![],
-            command: vec!["cargo", "test", "--test", "parity_invariant_tests"],
+            command: vec![
+                "cargo",
+                "test",
+                "--test",
+                "parity_invariant_tests",
+                "--",
+                "--test-threads=1",
+            ],
             clean_requirements: vec![
                 "repo_clean_except_tests_certs",
                 "tests_upstream_clean_except_tests_certs",

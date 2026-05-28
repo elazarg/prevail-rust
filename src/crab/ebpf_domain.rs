@@ -14,7 +14,7 @@ use crate::arith::linear_constraint::{LinearConstraint, geq, leq, lt};
 use crate::arith::number::Number;
 use crate::arith::variable::Variable;
 use crate::cfg::label::Label;
-use crate::crab::array_domain::{ArrayDomain, ArrayMap};
+use crate::crab::array_domain::ArrayDomain;
 use crate::crab::interval::Interval;
 use crate::crab::string_constraints::StringInvariant;
 use crate::crab::type_encoding::*;
@@ -598,7 +598,6 @@ impl EbpfDomain {
         setup_constraints: bool,
         ctx: &DomainContext,
         registry: &mut VariableRegistry,
-        array_map: &mut ArrayMap,
     ) -> EbpfDomain {
         let mut inv = if setup_constraints {
             EbpfDomain::setup_entry(false, ctx, registry)
@@ -622,8 +621,7 @@ impl EbpfDomain {
             let start = lb.to_i64().expect("numeric range lb must fit i64");
             let end = ub.to_i64().expect("numeric range ub must fit i64");
             let width = 1 + (end - start);
-            inv.stack
-                .initialize_numbers(start as i32, width as i32, registry, array_map);
+            inv.stack.initialize_numbers(start as i32, width as i32);
         }
         inv
     }

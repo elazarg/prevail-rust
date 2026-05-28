@@ -21,7 +21,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::Deserialize;
 
 use prevail::cfg::label::Label;
-use prevail::crab::array_domain::ArrayMap;
 use prevail::crab::ebpf_domain::DomainContext;
 use prevail::crab::string_constraints::StringInvariant;
 use prevail::crab::var_registry::VariableRegistry;
@@ -537,7 +536,6 @@ fn run_test_case(test_case: &TestCase, platform: &TestPlatform) -> Option<Failur
 
     // Evaluate observation checks.
     for obs in &test_case.observations {
-        let mut array_map = ArrayMap::new(options.runtime.total_stack_size());
         let check = result.check_observation_at_label(
             &obs.label,
             obs.point,
@@ -545,7 +543,6 @@ fn run_test_case(test_case: &TestCase, platform: &TestPlatform) -> Option<Failur
             obs.mode,
             &ctx,
             &mut registry,
-            &mut array_map,
         );
         if !check.ok {
             actual_messages.insert(format!(
@@ -604,26 +601,7 @@ fn case_selected(name: &str) -> bool {
     {
         return name.contains(&filter);
     }
-    !is_known_precision_gap(name)
-}
-
-/// Cases where Rust's precision diverges from the upstream C++ verifier and
-/// the gap is tracked separately. Currently:
-///
-/// - `stack_numeric_size join minimum allows safe read (4 bytes read after
-///   4/8 write)` exercises the cell-equivalence-across-join behaviour that
-///   upstream gains from its per-domain cell-registry layout (the move out
-///   of the shared AnalysisContext). The Rust port keeps the registry on
-///   the FwdFixpointIterator instead, so a cell created by only one branch
-///   loses its constraint relationship at the join: the load sees the cell
-///   variable but the zone edge between it and the destination register is
-///   not established. C++ passes because both branches independently own
-///   the same cell name and merge it explicitly.
-fn is_known_precision_gap(name: &str) -> bool {
-    matches!(
-        name,
-        "stack_numeric_size join minimum allows safe read (4 bytes read after 4/8 write)"
-    )
+    true
 }
 
 // ============================================================================

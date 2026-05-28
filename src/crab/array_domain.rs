@@ -128,6 +128,20 @@ impl OffsetMap {
         Cell::new(offset, size)
     }
 
+    fn insert_cell(&mut self, cell: Cell) {
+        let off = cell.offset as usize;
+        if off < self.sizes.len() && !self.sizes[off].contains(&cell.size) {
+            self.sizes[off].push(cell.size);
+        }
+    }
+
+    fn iter_cells(&self) -> impl Iterator<Item = Cell> + '_ {
+        self.sizes
+            .iter()
+            .enumerate()
+            .flat_map(|(off, sizes)| sizes.iter().map(move |&s| Cell::new(off as u64, s)))
+    }
+
     /// Get all cells that overlap with `[offset, offset + size)`, excluding the
     /// exact cell `(offset, size)` itself.
     ///
@@ -238,6 +252,22 @@ impl ArrayMap {
     pub fn iter(&self) -> impl Iterator<Item = (&DataKind, &OffsetMap)> {
         self.inner.iter()
     }
+
+    /// Union `other` into `self` so the resulting registry tracks every cell
+    /// either side knew about. Cell-set semantics are idempotent: cells already
+    /// present stay. Used by `ArrayDomain`'s lattice combinators (join, widen,
+    /// meet, narrow) so that a cell created on only one branch survives into
+    /// the joined domain — its Variable name is globally interned by
+    /// (kind, offset, size), so the merged registry agrees with whatever
+    /// constraints the underlying numeric domain still carries for that cell.
+    pub fn merge_from(&mut self, other: &ArrayMap) {
+        for (kind, src) in &other.inner {
+            let dst = self.entry_or_default(*kind);
+            for cell in src.iter_cells() {
+                dst.insert_cell(cell);
+            }
+        }
+    }
 }
 
 // ============================================================================
@@ -320,22 +350,16 @@ fn as_numbytes_range(index: &Interval, width: &Interval, total: i32) -> (i32, i3
 pub struct StackAccess<'a> {
     pub registry: &'a mut VariableRegistry,
     pub big_endian: bool,
-    pub array_map: &'a mut ArrayMap,
 }
 
 impl<'a> StackAccess<'a> {
-    /// Construct a `StackAccess`. Calling this at the call site lets Rust
-    /// automatically reborrow `registry` and `array_map` for the duration of
-    /// the call, so the original `&mut` bindings remain usable afterwards.
-    pub fn new(
-        registry: &'a mut VariableRegistry,
-        big_endian: bool,
-        array_map: &'a mut ArrayMap,
-    ) -> Self {
+    /// Construct a `StackAccess`. The cell registry lives inside `ArrayDomain`,
+    /// so callers thread the registry and endianness here; cell mutation goes
+    /// through `&mut ArrayDomain` directly.
+    pub fn new(registry: &'a mut VariableRegistry, big_endian: bool) -> Self {
         StackAccess {
             registry,
             big_endian,
-            array_map,
         }
     }
 }
@@ -410,7 +434,7 @@ fn kill_and_find_type_var(
 }
 
 fn split_and_find_var(
-    array_domain: &ArrayDomain,
+    array_domain: &mut ArrayDomain,
     inv: &mut NumAbsDomain,
     kind: DataKind,
     idx: &Interval,
@@ -420,7 +444,14 @@ fn split_and_find_var(
     if kind == DataKind::Svalues || kind == DataKind::Uvalues {
         array_domain.split_number_var(inv, kind, idx, elem_size, access);
     }
-    kill_and_find_var(inv, kind, idx, elem_size, access.registry, access.array_map)
+    kill_and_find_var(
+        inv,
+        kind,
+        idx,
+        elem_size,
+        access.registry,
+        &mut array_domain.cells,
+    )
 }
 
 // ============================================================================
@@ -429,18 +460,25 @@ fn split_and_find_var(
 
 /// Array expansion domain for modeling the eBPF stack.
 ///
-/// Tracks which stack bytes are numerical (via `BitsetDomain`).
-/// Cell tracking (offset → variable mappings) is maintained in an
-/// external `ArrayMap` passed to methods that need it.
+/// Tracks which stack bytes are numerical (via `BitsetDomain`) and owns its
+/// own stack-cell registry. Cell membership is per-domain so that two
+/// branches of an `if` can each remember the cells they created; lattice
+/// combinators (join, widen, meet, narrow) union the cell sets so a cell
+/// created on only one branch survives into the joined domain. Cell
+/// variables are globally interned by (kind, offset, size), so independent
+/// domains tracking the same cell agree on its name and on whatever
+/// constraints the underlying numeric domain still carries for it.
 #[derive(Clone)]
 pub struct ArrayDomain {
     num_bytes: BitsetDomain,
+    cells: ArrayMap,
 }
 
 impl ArrayDomain {
     pub fn new(total_stack_size: i32) -> Self {
         ArrayDomain {
             num_bytes: BitsetDomain::new(total_stack_size),
+            cells: ArrayMap::new(total_stack_size),
         }
     }
 
@@ -450,7 +488,24 @@ impl ArrayDomain {
     }
 
     pub fn from_bitset(num_bytes: BitsetDomain) -> Self {
-        ArrayDomain { num_bytes }
+        let stack_size = num_bytes.len() as i32;
+        ArrayDomain {
+            num_bytes,
+            cells: ArrayMap::new(stack_size),
+        }
+    }
+
+    /// Borrow the per-domain cell registry for inspection (used by the
+    /// transformer / fwd-analyzer when they need to consult cell layout
+    /// without going through a load/store method).
+    pub fn cells(&self) -> &ArrayMap {
+        &self.cells
+    }
+
+    /// Borrow the per-domain cell registry mutably (used by code paths that
+    /// need to add or query cells outside of the standard load/store flow).
+    pub fn cells_mut(&mut self) -> &mut ArrayMap {
+        &mut self.cells
     }
 
     pub fn set_to_top(&mut self) {
@@ -474,8 +529,11 @@ impl ArrayDomain {
     }
 
     pub fn join(&self, other: &ArrayDomain) -> ArrayDomain {
+        let mut cells = self.cells.clone();
+        cells.merge_from(&other.cells);
         ArrayDomain {
             num_bytes: self.num_bytes.join(&other.num_bytes),
+            cells,
         }
     }
 
@@ -485,21 +543,25 @@ impl ArrayDomain {
             return;
         }
         self.num_bytes.join_assign(&other.num_bytes);
+        self.cells.merge_from(&other.cells);
     }
 
     pub fn meet(&self, other: &ArrayDomain) -> ArrayDomain {
+        let mut cells = self.cells.clone();
+        cells.merge_from(&other.cells);
         ArrayDomain {
             num_bytes: self.num_bytes.meet(&other.num_bytes),
+            cells,
         }
     }
 
     pub fn widen(&self, other: &ArrayDomain) -> ArrayDomain {
-        // Widen = join for bitset domain.
+        // Widen = join for bitset domain (cells merge identically).
         self.join(other)
     }
 
     pub fn narrow(&self, other: &ArrayDomain) -> ArrayDomain {
-        // Narrow = meet for bitset domain.
+        // Narrow = meet for bitset domain (cells merge identically).
         self.meet(other)
     }
 
@@ -548,15 +610,9 @@ impl ArrayDomain {
     }
 
     /// Mark bytes [lb, lb + width) as numerical.
-    pub fn initialize_numbers(
-        &mut self,
-        lb: i32,
-        width: i32,
-        _registry: &mut VariableRegistry,
-        array_map: &mut ArrayMap,
-    ) {
+    pub fn initialize_numbers(&mut self, lb: i32, width: i32) {
         self.num_bytes.reset(lb as usize, width);
-        let om = array_map.entry_or_default(DataKind::Svalues);
+        let om = self.cells.entry_or_default(DataKind::Svalues);
         om.mk_cell(lb as u64, width as u32);
     }
 
@@ -566,7 +622,7 @@ impl ArrayDomain {
 
     /// Load a value from the stack at a given index with a given width.
     pub fn load(
-        &self,
+        &mut self,
         inv: &NumAbsDomain,
         kind: DataKind,
         i: &Interval,
@@ -579,8 +635,8 @@ impl ArrayDomain {
             let size = width as u32;
 
             // Try to find an exact cell match.
-            let existing = access
-                .array_map
+            let existing = self
+                .cells
                 .get(&kind)
                 .and_then(|om| om.get_cell(offset, size));
             if let Some(cell) = existing {
@@ -605,7 +661,7 @@ impl ArrayDomain {
             }
 
             // Check for overlapping cells.
-            let om = access.array_map.entry_or_default(kind);
+            let om = self.cells.entry_or_default(kind);
             let overlap_cells = om.get_overlap_cells(offset, size);
             if overlap_cells.is_empty() {
                 // Create a new cell.
@@ -707,11 +763,10 @@ impl ArrayDomain {
 
     /// Load a type from the stack.
     pub fn load_type(
-        &self,
+        &mut self,
         i: &Interval,
         width: i32,
         registry: &mut VariableRegistry,
-        array_map: &mut ArrayMap,
     ) -> Option<LinearExpression> {
         if let Some(n) = i.singleton() {
             let k = n.to_i64()?;
@@ -724,7 +779,8 @@ impl ArrayDomain {
             }
             let offset = k as u64;
             let size = width as u32;
-            let existing = array_map
+            let existing = self
+                .cells
                 .get(&DataKind::Types)
                 .and_then(|om| om.get_cell(offset, size));
             if let Some(cell) = existing {
@@ -732,7 +788,7 @@ impl ArrayDomain {
                     cell.get_scalar(DataKind::Types, registry),
                 ));
             }
-            let om = array_map.entry_or_default(DataKind::Types);
+            let om = self.cells.entry_or_default(DataKind::Types);
             let overlap = om.get_overlap_cells(offset, size);
             if overlap.is_empty() {
                 let c = om.mk_cell(offset, size);
@@ -776,7 +832,7 @@ impl ArrayDomain {
         access: &mut StackAccess<'_>,
     ) -> Option<Variable> {
         if let Some((offset, size)) = split_and_find_var(self, inv, kind, idx, elem_size, access) {
-            let om = access.array_map.entry_or_default(kind);
+            let om = self.cells.entry_or_default(kind);
             let v = om.mk_cell(offset, size).get_scalar(kind, access.registry);
             Some(v)
         } else {
@@ -795,14 +851,14 @@ impl ArrayDomain {
     ) -> Option<Variable> {
         let kind = DataKind::Types;
         if let Some((offset, size)) =
-            kill_and_find_type_var(inv, idx, width, access.registry, access.array_map)
+            kill_and_find_type_var(inv, idx, width, access.registry, &mut self.cells)
         {
             if is_num {
                 self.num_bytes.reset(offset as usize, size as i32);
             } else {
                 self.num_bytes.havoc(offset as usize, size as i32);
             }
-            let om = access.array_map.entry_or_default(kind);
+            let om = self.cells.entry_or_default(kind);
             let v = om.mk_cell(offset, size).get_scalar(kind, access.registry);
             Some(v)
         } else {
@@ -841,7 +897,7 @@ impl ArrayDomain {
         access: &mut StackAccess<'_>,
     ) {
         if let Some((offset, size)) =
-            kill_and_find_type_var(inv, idx, elem_size, access.registry, access.array_map)
+            kill_and_find_type_var(inv, idx, elem_size, access.registry, &mut self.cells)
         {
             self.num_bytes.havoc(offset as usize, size as i32);
         }
@@ -874,7 +930,7 @@ impl ArrayDomain {
 
     /// Split a cell that overlaps with the given range.
     fn split_cell(
-        &self,
+        &mut self,
         inv: &mut NumAbsDomain,
         kind: DataKind,
         cell_start_index: i32,
@@ -885,7 +941,7 @@ impl ArrayDomain {
         let idx = Interval::from_i64(cell_start_index as i64);
         let svalue = self.load(inv, DataKind::Svalues, &idx, len as i32, access);
         let uvalue = self.load(inv, DataKind::Uvalues, &idx, len as i32, access);
-        let om = access.array_map.entry_or_default(kind);
+        let om = self.cells.entry_or_default(kind);
         let new_cell = om.mk_cell(cell_start_index as u64, len);
         let sv = new_cell.get_scalar(DataKind::Svalues, access.registry);
         inv.assign_or_havoc(sv, &svalue, access.registry);
@@ -895,7 +951,7 @@ impl ArrayDomain {
 
     /// Prepare to havoc bytes by splitting numeric cells around the havoced region.
     pub fn split_number_var(
-        &self,
+        &mut self,
         inv: &mut NumAbsDomain,
         kind: DataKind,
         ii: &Interval,
@@ -915,7 +971,7 @@ impl ArrayDomain {
         let offset = n.to_i64().unwrap_or(0) as u64;
 
         let cells = {
-            let om = access.array_map.entry_or_default(kind);
+            let om = self.cells.entry_or_default(kind);
             om.get_overlap_cells(offset, size)
         };
         for c in &cells {

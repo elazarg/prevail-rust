@@ -14,7 +14,7 @@ use crate::arith::linear_expression::LinearExpression;
 use crate::arith::number::Number;
 use crate::arith::variable::Variable;
 use crate::cfg::label::Label;
-use crate::crab::array_domain::{ArrayDomain, ArrayMap, StackAccess};
+use crate::crab::array_domain::{ArrayDomain, StackAccess};
 use crate::crab::ebpf_domain::{DomainContext, EbpfDomain, VerificationError};
 use crate::crab::finite_domain::FiniteBinOp;
 use crate::crab::interval::Interval;
@@ -123,7 +123,6 @@ pub fn ebpf_domain_transform(
     ins: &Instruction,
     ctx: &DomainContext,
     registry: &mut VariableRegistry,
-    array_map: &mut ArrayMap,
 ) -> Result<(), VerificationError> {
     if dom.is_bottom() {
         return Ok(());
@@ -133,17 +132,17 @@ pub fn ebpf_domain_transform(
         Instruction::Assume(s) => transform_assume(dom, s, ctx, registry),
         Instruction::Bin(s) => transform_bin(dom, s, ctx, registry)?,
         Instruction::Un(s) => transform_un(dom, s, ctx, registry),
-        Instruction::Mem(s) => transform_mem(dom, s, ctx, registry, array_map)?,
-        Instruction::Call(s) => transform_call(dom, s, ctx, registry, array_map)?,
+        Instruction::Mem(s) => transform_mem(dom, s, ctx, registry)?,
+        Instruction::Call(s) => transform_call(dom, s, ctx, registry)?,
         Instruction::CallLocal(s) => transform_call_local(dom, s, ctx, registry),
-        Instruction::Callx(s) => transform_callx(dom, s, ctx, registry, array_map)?,
+        Instruction::Callx(s) => transform_callx(dom, s, ctx, registry)?,
         Instruction::CallBtf(_) => {
             panic!("CallBtf should be rejected before abstract transformation")
         }
-        Instruction::Exit(s) => transform_exit(dom, s, ctx, registry, array_map),
+        Instruction::Exit(s) => transform_exit(dom, s, ctx, registry),
         Instruction::Jmp(_) => { /* NOP: only holds jump preconditions */ }
         Instruction::Packet(s) => transform_packet(dom, s, ctx, registry),
-        Instruction::Atomic(s) => transform_atomic(dom, s, ctx, registry, array_map)?,
+        Instruction::Atomic(s) => transform_atomic(dom, s, ctx, registry)?,
         Instruction::LoadMapFd(s) => transform_load_map_fd(dom, s, ctx, registry)?,
         Instruction::LoadMapAddress(s) => transform_load_map_address(dom, s, ctx, registry)?,
         Instruction::LoadPseudo(s) => transform_load_pseudo(dom, s, registry),
@@ -272,7 +271,6 @@ fn havoc_subprogram_stack(
     registry: &mut VariableRegistry,
     big_endian: bool,
     subprogram_stack_size: i32,
-    array_map: &mut ArrayMap,
 ) {
     let r10_stack_offset = reg_pack(&R10_STACK_POINTER, registry).stack_offset;
     let intv = dom
@@ -289,7 +287,7 @@ fn havoc_subprogram_stack(
         &mut dom.state.types,
         &idx,
         &width,
-        &mut StackAccess::new(registry, big_endian, array_map),
+        &mut StackAccess::new(registry, big_endian),
     );
     for kind in iterate_kinds() {
         dom.stack.havoc(
@@ -297,7 +295,7 @@ fn havoc_subprogram_stack(
             kind,
             &idx,
             &width,
-            &mut StackAccess::new(registry, big_endian, array_map),
+            &mut StackAccess::new(registry, big_endian),
         );
     }
 }
@@ -469,7 +467,7 @@ fn recompute_stack_numeric_size_reg(
 
 fn do_load_stack(
     state: &mut TypeToNumDomain,
-    stack: &ArrayDomain,
+    stack: &mut ArrayDomain,
     target_reg: &Reg,
     symb_addr: &LinearExpression,
     width: i32,
@@ -482,7 +480,7 @@ fn do_load_stack(
     if state.values.entail(&width_cst, access.registry) {
         state.assign_type_encoding(target_reg, T_NUM, access.registry);
     } else {
-        let loaded_type = stack.load_type(&addr, width, access.registry, access.array_map);
+        let loaded_type = stack.load_type(&addr, width, access.registry);
         state.assign_type_opt_expr(target_reg, &loaded_type, access.registry);
         if !state.types.is_initialized_reg(target_reg, access.registry) {
             state.havoc_register(target_reg, access.registry);
@@ -659,7 +657,6 @@ fn do_load(
     target_reg: &Reg,
     ctx: &DomainContext,
     registry: &mut VariableRegistry,
-    array_map: &mut ArrayMap,
 ) {
     let mem_reg = reg_pack(&b.access.basereg, registry);
     let width = b.access.width.bytes();
@@ -670,12 +667,12 @@ fn do_load(
             LinearExpression::from(mem_reg.stack_offset) + LinearExpression::from(offset as i64);
         do_load_stack(
             &mut dom.state,
-            &dom.stack,
+            &mut dom.stack,
             target_reg,
             &addr,
             width,
             &b.access.basereg,
-            &mut StackAccess::new(registry, ctx.runtime.big_endian, array_map),
+            &mut StackAccess::new(registry, ctx.runtime.big_endian),
         );
         return;
     }
@@ -710,7 +707,7 @@ fn do_load(
                         &addr,
                         width,
                         &basereg,
-                        &mut StackAccess::new(registry, ctx.runtime.big_endian, array_map),
+                        &mut StackAccess::new(registry, ctx.runtime.big_endian),
                     );
                 }
                 TypeEncoding::TPacket => {
@@ -908,7 +905,6 @@ fn update_stack_numeric_size_after_store(
 // do_mem_store: dispatch by base register type
 // ============================================================================
 
-#[expect(clippy::too_many_arguments)]
 fn do_mem_store(
     dom: &mut EbpfDomain,
     b: &Mem,
@@ -917,7 +913,6 @@ fn do_mem_store(
     opt_val_reg: &Option<Reg>,
     ctx: &DomainContext,
     registry: &mut VariableRegistry,
-    array_map: &mut ArrayMap,
 ) {
     if dom.is_bottom() {
         return;
@@ -942,7 +937,7 @@ fn do_mem_store(
                 val_svalue,
                 val_uvalue,
                 opt_val_reg,
-                &mut StackAccess::new(registry, ctx.runtime.big_endian, array_map),
+                &mut StackAccess::new(registry, ctx.runtime.big_endian),
             );
             return;
         }
@@ -965,7 +960,7 @@ fn do_mem_store(
                     val_svalue,
                     val_uvalue,
                     opt_val_reg,
-                    &mut StackAccess::new(registry, big_endian, array_map),
+                    &mut StackAccess::new(registry, big_endian),
                 );
             }
             // do nothing for any other type
@@ -1310,7 +1305,6 @@ fn transform_exit(
     a: &Exit,
     ctx: &DomainContext,
     registry: &mut VariableRegistry,
-    array_map: &mut ArrayMap,
 ) {
     if dom.is_bottom() {
         return;
@@ -1325,7 +1319,6 @@ fn transform_exit(
         registry,
         ctx.runtime.big_endian,
         ctx.runtime.subprogram_stack_size,
-        array_map,
     );
     restore_callee_saved_registers(dom, prefix, registry);
 
@@ -1362,7 +1355,6 @@ fn transform_mem(
     b: &Mem,
     ctx: &DomainContext,
     registry: &mut VariableRegistry,
-    array_map: &mut ArrayMap,
 ) -> Result<(), VerificationError> {
     if dom.is_bottom() {
         return Ok(());
@@ -1370,7 +1362,7 @@ fn transform_mem(
     match &b.value {
         Value::Reg(preg) => {
             if b.is_load {
-                do_load(dom, b, preg, ctx, registry, array_map);
+                do_load(dom, b, preg, ctx, registry);
                 if b.is_signed {
                     let op = match b.access.width {
                         AccessSize::Byte => BinOp::MOVSX8,
@@ -1404,14 +1396,14 @@ fn transform_mem(
                 let svalue: LinearExpression = data_reg.svalue.into();
                 let uvalue: LinearExpression = data_reg.uvalue.into();
                 let opt = Some(*preg);
-                do_mem_store(dom, b, &svalue, &uvalue, &opt, ctx, registry, array_map);
+                do_mem_store(dom, b, &svalue, &uvalue, &opt, ctx, registry);
             }
         }
         Value::Imm(imm) => {
             let v = imm.v;
             let svalue: LinearExpression = (v as i64).into();
             let uvalue: LinearExpression = (v as i64).into();
-            do_mem_store(dom, b, &svalue, &uvalue, &None, ctx, registry, array_map);
+            do_mem_store(dom, b, &svalue, &uvalue, &None, ctx, registry);
         }
     }
     Ok(())
@@ -1422,7 +1414,6 @@ fn transform_atomic(
     a: &Atomic,
     ctx: &DomainContext,
     registry: &mut VariableRegistry,
-    array_map: &mut ArrayMap,
 ) -> Result<(), VerificationError> {
     if dom.is_bottom() {
         return Ok(());
@@ -1459,7 +1450,7 @@ fn transform_atomic(
         is_load: true,
         is_signed: false,
     };
-    transform_mem(dom, &load_mem, ctx, registry, array_map)?;
+    transform_mem(dom, &load_mem, ctx, registry)?;
 
     // Compute the new value in R11.
     let bin = atomic_to_bin(a);
@@ -1473,7 +1464,7 @@ fn transform_atomic(
             is_load: true,
             is_signed: false,
         };
-        transform_mem(dom, &load_r0, ctx, registry, array_map)?;
+        transform_mem(dom, &load_r0, ctx, registry)?;
 
         // For now we just havoc the value of R11.
         dom.state.havoc_register_except_type(&r11, registry);
@@ -1485,7 +1476,7 @@ fn transform_atomic(
             is_load: true,
             is_signed: false,
         };
-        transform_mem(dom, &load_valreg, ctx, registry, array_map)?;
+        transform_mem(dom, &load_valreg, ctx, registry)?;
     }
 
     // Store the new value back in the original shared memory location.
@@ -1495,7 +1486,7 @@ fn transform_atomic(
         is_load: false,
         is_signed: false,
     };
-    transform_mem(dom, &store_mem, ctx, registry, array_map)?;
+    transform_mem(dom, &store_mem, ctx, registry)?;
 
     // Clear the R11 pseudo-register.
     dom.state.havoc_register(&r11, registry);
@@ -1507,7 +1498,6 @@ fn transform_call(
     call: &Call,
     ctx: &DomainContext,
     registry: &mut VariableRegistry,
-    array_map: &mut ArrayMap,
 ) -> Result<(), VerificationError> {
     if dom.is_bottom() {
         return Ok(());
@@ -1560,7 +1550,7 @@ fn transform_call(
                                 kind,
                                 &addr,
                                 &width,
-                                &mut StackAccess::new(registry, big_endian, array_map),
+                                &mut StackAccess::new(registry, big_endian),
                             );
                         }
                         // Keep numeric stack initialization scoped to stack-typed pointers only.
@@ -1605,7 +1595,7 @@ fn transform_call(
                                     kind,
                                     &addr,
                                     &width,
-                                    &mut StackAccess::new(registry, big_endian, array_map),
+                                    &mut StackAccess::new(registry, big_endian),
                                 );
                             }
                         } else {
@@ -1733,7 +1723,6 @@ fn transform_callx(
     callx: &Callx,
     ctx: &DomainContext,
     registry: &mut VariableRegistry,
-    array_map: &mut ArrayMap,
 ) -> Result<(), VerificationError> {
     if dom.is_bottom() {
         return Ok(());
@@ -1752,7 +1741,7 @@ fn transform_callx(
             return Ok(());
         }
         let call = make_call(imm, ctx.platform);
-        transform_call(dom, &call, ctx, registry, array_map)?;
+        transform_call(dom, &call, ctx, registry)?;
     }
     Ok(())
 }
