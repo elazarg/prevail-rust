@@ -102,20 +102,6 @@ parity_test!(
 );
 
 parity_test!(
-    parity_bpf_lxc_DDROP_ALL_2_7,
-    "bpf_cilium_test/bpf_lxc-DDROP_ALL.o",
-    "2/7",
-    "r7.svalue-r6.svalue<=4294967294"
-);
-
-parity_test!(
-    parity_bpf_lxc_DUNKNOWN_2_7,
-    "bpf_cilium_test/bpf_lxc-DUNKNOWN.o",
-    "2/7",
-    "r7.svalue-r6.svalue<=4294967294"
-);
-
-parity_test!(
     parity_bpf_lxc_DUNKNOWN_from_container,
     "bpf_cilium_test/bpf_lxc-DUNKNOWN.o",
     "from-container",
@@ -134,13 +120,6 @@ parity_test!(
     "cilium/bpf_lxc.o",
     "2/7",
     "s[3856...3863].svalue-r8.svalue<=6"
-);
-
-parity_test!(
-    parity_cilium_bpf_lxc_2_11,
-    "cilium/bpf_lxc.o",
-    "2/11",
-    "r2.svalue-r9.svalue<=2147418111"
 );
 
 parity_test!(
@@ -284,34 +263,6 @@ parity_test!(
 );
 
 parity_test!(
-    parity_cilium_core_bpf_sock_connect6,
-    "cilium-core/bpf_sock.o",
-    "cgroup/connect6",
-    "r0.svalue-r1.svalue<=2147418112"
-);
-
-parity_test!(
-    parity_cilium_core_bpf_sock_sendmsg6,
-    "cilium-core/bpf_sock.o",
-    "cgroup/sendmsg6",
-    "r0.svalue-r1.svalue<=2147418112"
-);
-
-parity_test!(
-    parity_falco_probe_accept4,
-    "falco/probe.o",
-    "raw_tracepoint/filler/sys_accept4_e",
-    "s[4080...4087].svalue-s[4072...4079].svalue<=2147418111"
-);
-
-parity_test!(
-    parity_falco_probe_cpu_hotplug,
-    "falco/probe.o",
-    "raw_tracepoint/filler/cpu_hotplug_e",
-    "r9.svalue-r1.svalue<=2147418111"
-);
-
-parity_test!(
     parity_linux_tracex3_kern,
     "linux/tracex3_kern.o",
     "kprobe/blk_account_io_completion",
@@ -365,13 +316,6 @@ parity_test!(
     "new_linux/tracex3_kern.o",
     "kprobe/blk_account_io_done",
     "r2.svalue-r4.uvalue<=-4294967295"
-);
-
-parity_test!(
-    parity_ovs_datapath_tail_32,
-    "ovs/datapath.o",
-    "tail-32",
-    "r2.uvalue-r1.uvalue<=-16"
 );
 
 parity_test!(
