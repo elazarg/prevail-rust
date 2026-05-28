@@ -90,13 +90,13 @@ impl BitsetDomain {
     /// Inclusion: self <= other iff every non-numerical bit in self is
     /// also set in other (i.e. `self ⊆ other` as sets of non-numerical bytes).
     pub fn is_included_in(&self, other: &BitsetDomain) -> bool {
-        debug_assert_eq!(self.bits.len(), other.bits.len());
+        assert_eq!(self.bits.len(), other.bits.len());
         self.bits.is_subset(&other.bits)
     }
 
     /// Join: bitwise OR (union of non-numerical bytes).
     pub fn join(&self, other: &BitsetDomain) -> BitsetDomain {
-        debug_assert_eq!(self.bits.len(), other.bits.len());
+        assert_eq!(self.bits.len(), other.bits.len());
         BitsetDomain {
             bits: &self.bits | &other.bits,
         }
@@ -104,13 +104,13 @@ impl BitsetDomain {
 
     /// Join in place.
     pub fn join_assign(&mut self, other: &BitsetDomain) {
-        debug_assert_eq!(self.bits.len(), other.bits.len());
+        assert_eq!(self.bits.len(), other.bits.len());
         self.bits.union_with(&other.bits);
     }
 
     /// Meet: bitwise AND (intersection of non-numerical bytes).
     pub fn meet(&self, other: &BitsetDomain) -> BitsetDomain {
-        debug_assert_eq!(self.bits.len(), other.bits.len());
+        assert_eq!(self.bits.len(), other.bits.len());
         BitsetDomain {
             bits: &self.bits & &other.bits,
         }
