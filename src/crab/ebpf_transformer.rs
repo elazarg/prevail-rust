@@ -16,6 +16,7 @@ use crate::arith::variable::Variable;
 use crate::cfg::label::Label;
 use crate::crab::array_domain::{ArrayDomain, ArrayMap, StackAccess};
 use crate::crab::ebpf_domain::{DomainContext, EbpfDomain, VerificationError};
+use crate::crab::finite_domain::FiniteBinOp;
 use crate::crab::interval::Interval;
 use crate::crab::type_domain::reg_type;
 use crate::crab::type_encoding::*;
@@ -23,6 +24,7 @@ use crate::crab::type_to_number::{
     TypeToNumDomain, get_type_offset_variable, reg_pack, type_to_kinds,
 };
 use crate::crab::var_registry::VariableRegistry;
+use crate::crab::zone_domain::ArithBinOp;
 use crate::ir::syntax::*;
 use crate::platform::EbpfPlatform;
 use crate::spec::type_descriptors::EbpfMapValueType;
@@ -187,11 +189,37 @@ fn scratch_caller_saved_registers(dom: &mut EbpfDomain, registry: &mut VariableR
     }
 }
 
+/// Build the (reg_var, frame_var) pairs covering every DataKind (types + values)
+/// for callee-saved registers r6..=r9. Used by both save (copy) and restore
+/// (bulk rename) so the two paths agree on exactly which variables they move.
+fn callee_saved_renaming(
+    prefix: &str,
+    registry: &mut VariableRegistry,
+) -> Vec<(Variable, Variable)> {
+    let mut pairs = Vec::new();
+    for r in R6.v..=R9.v {
+        for kind in crate::crab::type_encoding::iterate_kinds(KIND_MIN, KIND_MAX) {
+            let reg_var = if kind == DataKind::Types {
+                registry.type_reg(r as i32)
+            } else {
+                registry.reg(kind, r as i32)
+            };
+            let frame_var = registry.stack_frame_var(kind, r as i32, prefix);
+            pairs.push((reg_var, frame_var));
+        }
+    }
+    pairs
+}
+
 fn save_callee_saved_registers(
     dom: &mut EbpfDomain,
     prefix: &str,
     registry: &mut VariableRegistry,
 ) {
+    // Save is a copy (not a rename): the callee must still read the caller's
+    // r6-r9 per the BPF calling convention. Copy every kind unconditionally —
+    // a variable can carry useful zone edges (relational constraints) even
+    // when its interval is top.
     for r in R6.v..=R9.v {
         let reg = Reg { v: r };
         if dom.state.types.is_initialized_reg(&reg, registry) {
@@ -203,18 +231,10 @@ fn save_callee_saved_registers(
             for te in dom.state.types.iterate_types(&reg, registry) {
                 let mut kinds: Vec<DataKind> = type_to_kinds(te).to_vec();
                 kinds.push(DataKind::Uvalues);
-                kinds.push(DataKind::Svalues);
                 for kind in &kinds {
                     let src_var = registry.reg(*kind, r as i32);
                     let dst_var = registry.stack_frame_var(*kind, r as i32, prefix);
-                    if !dom
-                        .state
-                        .values
-                        .eval_interval_var(src_var, registry)
-                        .is_top()
-                    {
-                        dom.state.values.assign_var(dst_var, src_var, registry);
-                    }
+                    dom.state.values.assign_var(dst_var, src_var, registry);
                 }
             }
         }
@@ -226,34 +246,24 @@ fn restore_callee_saved_registers(
     prefix: &str,
     registry: &mut VariableRegistry,
 ) {
+    // Restore is a bulk rename: relabel the frame variables back to register
+    // names in both ZoneDomain (vert_map/rev_map swap) and TypeDomain (VarIdMap
+    // swap). The SplitDBM graph is untouched, so all zone edges survive —
+    // including any relational constraints between a saved register and a loop
+    // counter. A per-variable assign+havoc path would lose those edges via the
+    // singleton shortcut in ZoneDomain::assign.
+
+    // Clear any callee-created r6..=r9 values first, so the rename re-labels
+    // onto fresh slots and never collides with stale callee state.
     for r in R6.v..=R9.v {
-        let reg = Reg { v: r };
-        let type_var = registry.stack_frame_var(DataKind::Types, r as i32, prefix);
-        if dom.state.types.is_initialized_var(type_var, registry) {
-            dom.state.assign_type_from_var(&reg, type_var, registry);
-            for te in dom.state.types.iterate_types(&reg, registry) {
-                let mut kinds: Vec<DataKind> = type_to_kinds(te).to_vec();
-                kinds.push(DataKind::Uvalues);
-                kinds.push(DataKind::Svalues);
-                for kind in &kinds {
-                    let src_var = registry.stack_frame_var(*kind, r as i32, prefix);
-                    let dst_var = registry.reg(*kind, r as i32);
-                    if !dom
-                        .state
-                        .values
-                        .eval_interval_var(src_var, registry)
-                        .is_top()
-                    {
-                        dom.state.values.assign_var(dst_var, src_var, registry);
-                    } else {
-                        dom.state.values.havoc(dst_var);
-                    }
-                    dom.state.values.havoc(src_var);
-                }
-            }
-        }
-        dom.state.types.havoc_type_var(type_var);
+        dom.state.havoc_register(&Reg { v: r }, registry);
     }
+    let pairs = callee_saved_renaming(prefix, registry);
+    let reverse_pairs: Vec<(Variable, Variable)> = pairs
+        .into_iter()
+        .map(|(reg_var, frame_var)| (frame_var, reg_var))
+        .collect();
+    dom.state.rename(&reverse_pairs);
 }
 
 fn havoc_subprogram_stack(
@@ -381,9 +391,6 @@ fn transform_load_pseudo(
             let imm64 = merge_imm32_to_u64(pseudo.addr.imm, pseudo.addr.next_imm);
             dom.state
                 .values
-                .assign_i64(dst.svalue, imm64 as i64, registry);
-            dom.state
-                .values
                 .assign_i64(dst.uvalue, imm64 as i64, registry);
             dom.state
                 .values
@@ -409,22 +416,20 @@ fn assign_valid_ptr(
     registry: &mut VariableRegistry,
 ) {
     let r = reg_pack(dst_reg, registry);
-    dom.state.values.havoc(r.svalue);
     dom.state.values.havoc(r.uvalue);
     if maybe_null {
         dom.state
             .values
-            .add_constraint(&leq(0i64.into(), r.svalue.into()), registry);
+            .add_constraint(&leq(0i64.into(), r.uvalue.into()), registry);
     } else {
         dom.state
             .values
-            .add_constraint(&lt(0i64.into(), r.svalue.into()), registry);
+            .add_constraint(&lt(0i64.into(), r.uvalue.into()), registry);
     }
     dom.state.values.add_constraint(
-        &leq(r.svalue.into(), ctx.runtime.ptr_max().into()),
+        &leq(r.uvalue.into(), ctx.runtime.ptr_max().into()),
         registry,
     );
-    dom.state.values.assign_var(r.uvalue, r.svalue, registry);
 }
 
 fn recompute_stack_numeric_size_var(
@@ -602,9 +607,9 @@ fn do_load_ctx(
         state.assign_type_encoding(target_reg, T_PACKET, registry);
         state
             .values
-            .add_constraint(&leq(4098i64.into(), target.svalue.into()), registry);
+            .add_constraint(&leq(4098i64.into(), target.uvalue.into()), registry);
         state.values.add_constraint(
-            &leq(target.svalue.into(), ctx.runtime.ptr_max().into()),
+            &leq(target.uvalue.into(), ctx.runtime.ptr_max().into()),
             registry,
         );
     }
@@ -979,24 +984,43 @@ fn add_to_reg(
     registry: &mut VariableRegistry,
 ) {
     let dst = reg_pack(dst_reg, registry);
-    dom.state.values.inner_mut().add_overflow_num(
-        dst.svalue,
-        dst.uvalue,
-        &Number::from(imm as i64),
-        finite_width,
-        registry,
-    );
-    if let Some(offset) = dom.state.get_type_offset_variable(dst_reg, registry) {
-        dom.state
-            .values
-            .inner_mut()
-            .add_num(offset, &Number::from(imm as i64), registry);
+    let n = Number::from(imm as i64);
+    if dom.state.types.may_have_type_reg(dst_reg, T_NUM, registry) {
+        // T_NUM: the standard coupled signed/unsigned overflow on both halves.
+        dom.state.values.inner_mut().add_overflow_num(
+            dst.svalue,
+            dst.uvalue,
+            &n,
+            finite_width,
+            registry,
+        );
+    } else {
+        // Pointer-only: advance the pointer's offset (e.g. packet_offset) and
+        // drive svalue from uvalue+imm. svalue must not be touched as a signed
+        // value here — it carries no meaning for non-T_NUM registers.
+        if let Some(offset) = dom.state.get_type_offset_variable(dst_reg, registry) {
+            dom.state.values.inner_mut().add_num(offset, &n, registry);
+        }
+        dom.state.values.inner_mut().apply_unsigned_var_num(
+            FiniteBinOp::Arith(ArithBinOp::ADD),
+            dst.svalue,
+            dst.uvalue,
+            dst.uvalue,
+            &n,
+            finite_width,
+            registry,
+        );
+    }
+    if dom
+        .state
+        .types
+        .may_have_type_reg(dst_reg, T_STACK, registry)
+    {
         if imm > 0 {
-            dom.state.values.inner_mut().sub_num(
-                dst.stack_numeric_size,
-                &Number::from(imm as i64),
-                registry,
-            );
+            dom.state
+                .values
+                .inner_mut()
+                .sub_num(dst.stack_numeric_size, &n, registry);
         } else if imm < 0 {
             dom.state.values.havoc(dst.stack_numeric_size);
         }
@@ -1995,103 +2019,77 @@ fn transform_bin(
                                     registry,
                                     |state, src_type, registry| {
                                         if dst_type == T_NUM && src_type != T_NUM {
-                                            // num += ptr
+                                            // num += ptr — dst takes pointer's type
                                             state.assign_type_encoding(
                                                 &dst_reg_copy,
                                                 src_type,
                                                 registry,
                                             );
-                                            if let Some(dst_offset) =
-                                                get_type_offset_variable(
-                                                    &dst_reg_copy,
-                                                    src_type,
-                                                    registry,
+                                            let dst_p = reg_pack(&dst_reg_copy, registry);
+                                            let src_p = reg_pack(&src_reg, registry);
+                                            if let Some(dst_offset) = get_type_offset_variable(
+                                                &dst_reg_copy,
+                                                src_type,
+                                                registry,
+                                            ) {
+                                                let src_offset = get_type_offset_variable(
+                                                    &src_reg, src_type, registry,
                                                 )
-                                            {
-                                                let src_offset =
-                                                    get_type_offset_variable(
-                                                        &src_reg, src_type,
-                                                        registry,
-                                                    )
-                                                    .unwrap();
-                                                let dst_p = reg_pack(
-                                                    &dst_reg_copy,
+                                                .unwrap();
+                                                state.values.apply_binop_var_var(
+                                                    FiniteBinOp::Arith(ArithBinOp::ADD),
+                                                    dst_offset,
+                                                    dst_p.svalue,
+                                                    src_offset,
+                                                    0,
                                                     registry,
                                                 );
-                                                state.values
-                                                    .apply_binop_var_var(
-                                                        crate::crab::finite_domain::FiniteBinOp::Arith(
-                                                            crate::crab::zone_domain::ArithBinOp::ADD,
-                                                        ),
-                                                        dst_offset,
-                                                        dst_p.svalue,
-                                                        src_offset,
-                                                        0,
-                                                        registry,
-                                                    );
                                             }
+                                            state.values.inner_mut().apply_unsigned_var_var(
+                                                FiniteBinOp::Arith(ArithBinOp::ADD),
+                                                dst_p.svalue,
+                                                dst_p.uvalue,
+                                                dst_p.uvalue,
+                                                src_p.uvalue,
+                                                finite_width,
+                                                registry,
+                                            );
                                             if src_type == T_SHARED {
-                                                let dst_p = reg_pack(
-                                                    &dst_reg_copy,
-                                                    registry,
-                                                );
-                                                let src_p =
-                                                    reg_pack(&src_reg, registry);
                                                 state.values.assign_var(
                                                     dst_p.shared_region_size,
                                                     src_p.shared_region_size,
                                                     registry,
                                                 );
                                             }
-                                        } else if dst_type != T_NUM
-                                            && src_type == T_NUM
-                                        {
+                                        } else if dst_type != T_NUM && src_type == T_NUM {
                                             // ptr += num
                                             state.assign_type_encoding(
                                                 &dst_reg_copy,
                                                 dst_type,
                                                 registry,
                                             );
-                                            if let Some(dst_offset) =
-                                                get_type_offset_variable(
-                                                    &dst_reg_copy,
-                                                    dst_type,
+                                            let dst_p = reg_pack(&dst_reg_copy, registry);
+                                            let src_p = reg_pack(&src_reg, registry);
+                                            if let Some(dst_offset) = get_type_offset_variable(
+                                                &dst_reg_copy,
+                                                dst_type,
+                                                registry,
+                                            ) {
+                                                state.values.apply_binop_var_var(
+                                                    FiniteBinOp::Arith(ArithBinOp::ADD),
+                                                    dst_offset,
+                                                    dst_offset,
+                                                    src_p.svalue,
+                                                    0,
                                                     registry,
-                                                )
-                                            {
-                                                let src_p =
-                                                    reg_pack(&src_reg, registry);
-                                                state.values
-                                                    .apply_binop_var_var(
-                                                        crate::crab::finite_domain::FiniteBinOp::Arith(
-                                                            crate::crab::zone_domain::ArithBinOp::ADD,
-                                                        ),
-                                                        dst_offset,
-                                                        dst_offset,
-                                                        src_p.svalue,
-                                                        0,
-                                                        registry,
-                                                    );
+                                                );
                                                 if dst_type == T_STACK {
-                                                    let dst_p = reg_pack(
-                                                        &dst_reg_copy,
-                                                        registry,
-                                                    );
-                                                    let src_p = reg_pack(
-                                                        &src_reg, registry,
-                                                    );
-                                                    let neg_cst = lt(
-                                                        src_p.svalue.into(),
-                                                        0i64.into(),
-                                                    );
-                                                    if state
-                                                        .values
-                                                        .intersect(&neg_cst, registry)
-                                                    {
-                                                        state.values.havoc(
-                                                            dst_p
-                                                                .stack_numeric_size,
-                                                        );
+                                                    let neg_cst =
+                                                        lt(src_p.svalue.into(), 0i64.into());
+                                                    if state.values.intersect(&neg_cst, registry) {
+                                                        state
+                                                            .values
+                                                            .havoc(dst_p.stack_numeric_size);
                                                         recompute_stack_numeric_size_reg(
                                                             state,
                                                             stack,
@@ -2099,62 +2097,48 @@ fn transform_bin(
                                                             registry,
                                                         );
                                                     } else {
-                                                        state.values.inner_mut().apply_signed_var_var(
-                                                            crate::crab::finite_domain::FiniteBinOp::Arith(
-                                                                crate::crab::zone_domain::ArithBinOp::SUB,
-                                                            ),
-                                                            dst_p
-                                                                .stack_numeric_size,
-                                                            dst_p
-                                                                .stack_numeric_size,
-                                                            dst_p
-                                                                .stack_numeric_size,
-                                                            src_p.svalue,
-                                                            0,
-                                                            registry,
-                                                        );
+                                                        state
+                                                            .values
+                                                            .inner_mut()
+                                                            .apply_signed_var_var(
+                                                                FiniteBinOp::Arith(ArithBinOp::SUB),
+                                                                dst_p.stack_numeric_size,
+                                                                dst_p.stack_numeric_size,
+                                                                dst_p.stack_numeric_size,
+                                                                src_p.svalue,
+                                                                0,
+                                                                registry,
+                                                            );
                                                     }
                                                 }
                                             }
-                                        } else if dst_type == T_NUM
-                                            && src_type == T_NUM
-                                        {
-                                            let dst_p = reg_pack(
-                                                &dst_reg_copy,
+                                            state.values.inner_mut().apply_unsigned_var_var(
+                                                FiniteBinOp::Arith(ArithBinOp::ADD),
+                                                dst_p.svalue,
+                                                dst_p.uvalue,
+                                                dst_p.uvalue,
+                                                src_p.uvalue,
+                                                finite_width,
                                                 registry,
                                             );
-                                            let src_p =
-                                                reg_pack(&src_reg, registry);
-                                            state.values.inner_mut()
-                                                .apply_signed_var_var(
-                                                    crate::crab::finite_domain::FiniteBinOp::Arith(
-                                                        crate::crab::zone_domain::ArithBinOp::ADD,
-                                                    ),
-                                                    dst_p.svalue,
-                                                    dst_p.uvalue,
-                                                    dst_p.svalue,
-                                                    src_p.svalue,
-                                                    finite_width,
-                                                    registry,
-                                                );
+                                        } else if dst_type == T_NUM && src_type == T_NUM {
+                                            let dst_p = reg_pack(&dst_reg_copy, registry);
+                                            let src_p = reg_pack(&src_reg, registry);
+                                            state.values.inner_mut().apply_signed_var_var(
+                                                FiniteBinOp::Arith(ArithBinOp::ADD),
+                                                dst_p.svalue,
+                                                dst_p.uvalue,
+                                                dst_p.svalue,
+                                                src_p.svalue,
+                                                finite_width,
+                                                registry,
+                                            );
                                         } else {
                                             state.values.set_to_bottom();
                                         }
                                     },
                                 );
                             },
-                        );
-                        // careful: change dst.value only after dealing with offset
-                        dom.state.values.inner_mut().apply_signed_var_var(
-                            crate::crab::finite_domain::FiniteBinOp::Arith(
-                                crate::crab::zone_domain::ArithBinOp::ADD,
-                            ),
-                            dst.svalue,
-                            dst.uvalue,
-                            dst.svalue,
-                            src.svalue,
-                            finite_width,
-                            registry,
                         );
                     }
                 }
@@ -2215,46 +2199,56 @@ fn transform_bin(
                     } else {
                         // We're not sure that lhs and rhs are the same type.
                         if dom.state.types.is_in_group(&src_reg, TS_NUM, registry) {
-                            dom.state.values.inner_mut().sub_overflow_var(
-                                dst.svalue,
-                                dst.uvalue,
-                                src.svalue,
-                                finite_width,
-                                registry,
-                            );
-                            if let Some(dst_offset) =
-                                dom.state.get_type_offset_variable(&bin.dst, registry)
-                            {
-                                dom.state
-                                    .values
-                                    .inner_mut()
-                                    .sub_var(dst_offset, src.svalue, registry);
-                                if dom
-                                    .state
-                                    .types
-                                    .may_have_type_reg(&bin.dst, T_STACK, registry)
+                            if dom.state.types.may_have_type_reg(&bin.dst, T_NUM, registry) {
+                                dom.state.values.inner_mut().sub_overflow_var(
+                                    dst.svalue,
+                                    dst.uvalue,
+                                    src.svalue,
+                                    finite_width,
+                                    registry,
+                                );
+                            } else {
+                                if let Some(dst_offset) =
+                                    dom.state.get_type_offset_variable(&bin.dst, registry)
                                 {
-                                    let pos_cst = gt(src.svalue.into(), 0i64.into());
-                                    if dom.state.values.intersect(&pos_cst, registry) {
-                                        dom.state.values.havoc(dst.stack_numeric_size);
-                                        recompute_stack_numeric_size_reg(
-                                            &mut dom.state,
-                                            &dom.stack,
-                                            &bin.dst,
-                                            registry,
-                                        );
-                                    } else {
-                                        dom.state.values.apply_binop_var_var(
-                                            crate::crab::finite_domain::FiniteBinOp::Arith(
-                                                crate::crab::zone_domain::ArithBinOp::ADD,
-                                            ),
-                                            dst.stack_numeric_size,
-                                            dst.stack_numeric_size,
-                                            src.svalue,
-                                            0,
-                                            registry,
-                                        );
-                                    }
+                                    dom.state
+                                        .values
+                                        .inner_mut()
+                                        .sub_var(dst_offset, src.svalue, registry);
+                                }
+                                dom.state.values.inner_mut().apply_unsigned_var_var(
+                                    FiniteBinOp::Arith(ArithBinOp::SUB),
+                                    dst.svalue,
+                                    dst.uvalue,
+                                    dst.uvalue,
+                                    src.uvalue,
+                                    finite_width,
+                                    registry,
+                                );
+                            }
+                            if dom
+                                .state
+                                .types
+                                .may_have_type_reg(&bin.dst, T_STACK, registry)
+                            {
+                                let pos_cst = gt(src.svalue.into(), 0i64.into());
+                                if dom.state.values.intersect(&pos_cst, registry) {
+                                    dom.state.values.havoc(dst.stack_numeric_size);
+                                    recompute_stack_numeric_size_reg(
+                                        &mut dom.state,
+                                        &dom.stack,
+                                        &bin.dst,
+                                        registry,
+                                    );
+                                } else {
+                                    dom.state.values.apply_binop_var_var(
+                                        FiniteBinOp::Arith(ArithBinOp::ADD),
+                                        dst.stack_numeric_size,
+                                        dst.stack_numeric_size,
+                                        src.svalue,
+                                        0,
+                                        registry,
+                                    );
                                 }
                             }
                         } else {

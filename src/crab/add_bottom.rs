@@ -167,6 +167,12 @@ impl AddBottom {
         }
     }
 
+    pub fn rename(&mut self, renaming: &[(Variable, Variable)]) {
+        if let Some(d) = &mut self.dom {
+            d.rename(renaming);
+        }
+    }
+
     pub fn add_constraint(&mut self, cst: &LinearConstraint, reg: &VariableRegistry) {
         if let Some(d) = &mut self.dom
             && !d.add_constraint(cst, reg)

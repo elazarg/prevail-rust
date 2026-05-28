@@ -705,6 +705,32 @@ impl ZoneDomain {
         self.normalize();
     }
 
+    /// Relabel variables in-place. The DBM graph and its edges are unchanged —
+    /// only the Variable labels attached to vertices are swapped. Used by the
+    /// callee-saved register restore so that zone relationships (e.g. between
+    /// a loop counter and a saved register) survive the local-call return.
+    ///
+    /// Precondition: no destination is also a source in the same batch (caller
+    /// builds disjoint frame-var → register pairs).
+    pub fn rename(&mut self, renaming: &[(Variable, Variable)]) {
+        let mut forgot_destination = false;
+        for &(from, to) in renaming {
+            if let Some(vert) = self.vert_map.remove(&from) {
+                // If `to` already had a vertex, forget it so the bijection holds.
+                if let Some(dest) = self.vert_map.remove(&to) {
+                    self.core.forget(dest);
+                    self.rev_map[dest as usize] = None;
+                    forgot_destination = true;
+                }
+                self.vert_map.insert(to, vert);
+                self.rev_map[vert as usize] = Some(to);
+            }
+        }
+        if forgot_destination {
+            self.normalize();
+        }
+    }
+
     // ========================================================================
     // Entailment and intersection checks
     // ========================================================================

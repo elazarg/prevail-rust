@@ -75,4 +75,20 @@ impl VarIdMap {
     pub fn id_is_live(&self, id: usize) -> bool {
         self.id_to_var.get(id).is_some_and(|v| v.is_some())
     }
+
+    /// Rename variables in-place. The underlying IDs and their relationships
+    /// are unchanged — only the Variable labels are swapped.
+    /// Precondition: no destination is also a source in the same batch.
+    pub fn rename(&mut self, renaming: &[(Variable, Variable)]) {
+        for &(from, to) in renaming {
+            if let Some(id) = self.var_to_id.remove(&from) {
+                // Orphan any existing mapping for `to` to preserve the bijection.
+                if let Some(dest_id) = self.var_to_id.remove(&to) {
+                    self.id_to_var[dest_id] = None;
+                }
+                self.var_to_id.insert(to, id);
+                self.id_to_var[id] = Some(to);
+            }
+        }
+    }
 }

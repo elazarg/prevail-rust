@@ -568,6 +568,15 @@ impl TypeDomain {
         s.detach(v);
     }
 
+    /// Relabel variables in-place. Only the Variable labels are swapped;
+    /// the underlying DSU IDs and their type classes are unchanged. Used to
+    /// preserve type-class membership across callee-saved register restore.
+    pub fn rename(&mut self, renaming: &[(Variable, Variable)]) {
+        if let Some(s) = &mut self.state {
+            s.vars.rename(renaming);
+        }
+    }
+
     // ========================================================================
     // Query operations
     // ========================================================================

@@ -561,11 +561,11 @@ impl EbpfDomain {
 
         let r10 = reg_pack(&R10_STACK_POINTER, registry);
         inv.add_value_constraint(
-            &leq((total_stack as i64).into(), r10.svalue.into()),
+            &leq((total_stack as i64).into(), r10.uvalue.into()),
             registry,
         );
         inv.add_value_constraint(
-            &leq(r10.svalue.into(), ctx.runtime.ptr_max().into()),
+            &leq(r10.uvalue.into(), ctx.runtime.ptr_max().into()),
             registry,
         );
         inv.state
@@ -576,9 +576,9 @@ impl EbpfDomain {
 
         if init_r1 {
             let r1 = reg_pack(&R1_ARG, registry);
-            inv.add_value_constraint(&leq(1i64.into(), r1.svalue.into()), registry);
+            inv.add_value_constraint(&leq(1i64.into(), r1.uvalue.into()), registry);
             inv.add_value_constraint(
-                &leq(r1.svalue.into(), ctx.runtime.ptr_max().into()),
+                &leq(r1.uvalue.into(), ctx.runtime.ptr_max().into()),
                 registry,
             );
             inv.state.values.assign_i64(r1.ctx_offset, 0, registry);

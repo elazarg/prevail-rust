@@ -1360,8 +1360,8 @@ verify_section_expected_fail!(
     "xdp_ddos01_blacklist_kern.o",
     ".text"
 );
-verify_section_expected_fail!(
-    fail_prototype_kernel_xdp_ddos01_blacklist_kern_xdp_prog,
+verify_section_pass!(
+    pass_prototype_kernel_xdp_ddos01_blacklist_kern_xdp_prog,
     "prototype-kernel",
     "xdp_ddos01_blacklist_kern.o",
     "xdp_prog"
@@ -2983,8 +2983,8 @@ verify_section_expected_fail!(
     "bpf_loop_helper.o",
     ".text"
 );
-verify_section_expected_fail!(
-    fail_build_correlated_branch,
+verify_section_pass!(
+    pass_build_correlated_branch,
     "build",
     "correlated_branch.o",
     "xdp"

@@ -95,6 +95,11 @@ pub fn reg_pack(r: &Reg, registry: &VariableRegistry) -> RegPack {
 // ============================================================================
 
 /// For each TypeEncoding, the data kinds that are meaningful.
+///
+/// `Svalues` is T_NUM-only: at a join where one branch is T_NUM and another is a
+/// pointer, the pointer branch contributes bottom for svalue, so the T_NUM
+/// branch's svalue survives instead of being widened by the zone join.
+/// Pointer types carry their runtime address through the universal `Uvalues`.
 pub fn type_to_kinds(te: TypeEncoding) -> &'static [DataKind] {
     match te {
         TypeEncoding::TCtx => &[DataKind::CtxOffsets],
@@ -107,13 +112,13 @@ pub fn type_to_kinds(te: TypeEncoding) -> &'static [DataKind] {
         TypeEncoding::TBtfId => &[DataKind::BtfIdOffsets],
         TypeEncoding::TAllocMem => &[DataKind::AllocMemOffsets, DataKind::AllocMemSizes],
         TypeEncoding::TFunc => &[],
-        TypeEncoding::TNum => &[],
+        TypeEncoding::TNum => &[DataKind::Svalues],
         TypeEncoding::TUninit => &[],
     }
 }
 
 /// All type encodings that have associated kinds.
-const TYPES_WITH_KINDS: [TypeEncoding; 9] = [
+const TYPES_WITH_KINDS: [TypeEncoding; 10] = [
     TypeEncoding::TCtx,
     TypeEncoding::TMap,
     TypeEncoding::TMapPrograms,
@@ -123,9 +128,10 @@ const TYPES_WITH_KINDS: [TypeEncoding; 9] = [
     TypeEncoding::TSocket,
     TypeEncoding::TBtfId,
     TypeEncoding::TAllocMem,
+    TypeEncoding::TNum,
 ];
 
-/// Map a type encoding to its primary offset DataKind, if any.
+/// Map a type encoding to its primary kind variable, if any.
 pub fn type_to_offset_kind(te: TypeEncoding) -> Option<DataKind> {
     match te {
         TypeEncoding::TCtx => Some(DataKind::CtxOffsets),
@@ -137,6 +143,7 @@ pub fn type_to_offset_kind(te: TypeEncoding) -> Option<DataKind> {
         TypeEncoding::TSocket => Some(DataKind::SocketOffsets),
         TypeEncoding::TBtfId => Some(DataKind::BtfIdOffsets),
         TypeEncoding::TAllocMem => Some(DataKind::AllocMemOffsets),
+        TypeEncoding::TNum => Some(DataKind::Svalues),
         _ => None,
     }
 }
@@ -416,8 +423,6 @@ impl TypeToNumDomain {
         for type_variable in &type_vars {
             if self.types.may_have_type_var(*type_variable, te, registry) {
                 self.types.havoc_type_var(*type_variable);
-                let sv = registry.kind_var(DataKind::Svalues, *type_variable);
-                self.values.havoc(sv);
                 let uv = registry.kind_var(DataKind::Uvalues, *type_variable);
                 self.values.havoc(uv);
                 for &kind in type_to_kinds(te) {
@@ -437,8 +442,6 @@ impl TypeToNumDomain {
 
         let lhs_pack = reg_pack(lhs, registry);
         let rhs_pack = reg_pack(rhs, registry);
-        self.values
-            .assign_var(lhs_pack.svalue, rhs_pack.svalue, registry);
         self.values
             .assign_var(lhs_pack.uvalue, rhs_pack.uvalue, registry);
 
@@ -525,16 +528,27 @@ impl TypeToNumDomain {
 
     /// Havoc all register values except the type.
     pub fn havoc_register_except_type(&mut self, reg: &Reg, registry: &mut VariableRegistry) {
-        let r = reg_pack(reg, registry);
-        self.havoc_offsets(reg, registry);
-        self.values.havoc(r.svalue);
-        self.values.havoc(r.uvalue);
+        for kind in crate::crab::type_encoding::iterate_kinds(
+            crate::crab::type_encoding::KIND_VALUE_MIN,
+            crate::crab::type_encoding::KIND_MAX,
+        ) {
+            let v = registry.reg(kind, reg.v as i32);
+            self.values.havoc(v);
+        }
     }
 
     /// Havoc everything about a register including type.
     pub fn havoc_register(&mut self, reg: &Reg, registry: &mut VariableRegistry) {
         self.types.havoc_type_reg(reg, registry);
         self.havoc_register_except_type(reg, registry);
+    }
+
+    /// Relabel variables in-place in both sub-domains. Used by the local-call
+    /// return path to restore callee-saved registers without losing zone
+    /// relationships (the underlying DBM graph is untouched).
+    pub fn rename(&mut self, renaming: &[(Variable, Variable)]) {
+        self.types.rename(renaming);
+        self.values.rename(renaming);
     }
 
     pub fn to_set(&self, reg: &VariableRegistry) -> StringInvariant {

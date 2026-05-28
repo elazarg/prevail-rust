@@ -2347,6 +2347,10 @@ impl FiniteDomain {
         self.dom.havoc(v);
     }
 
+    pub fn rename(&mut self, renaming: &[(Variable, Variable)]) {
+        self.dom.rename(renaming);
+    }
+
     pub fn size(&self) -> (usize, usize) {
         self.dom.size()
     }
