@@ -77,6 +77,7 @@ const GROUP_NAMES: [&str; 8] = {
 #[command(
     name = "prevail",
     about = "PREVAIL is a new eBPF verifier based on abstract interpretation.",
+    version,
     disable_help_flag = true
 )]
 struct Cli {
@@ -444,8 +445,8 @@ fn main() -> ExitCode {
         }
         for p in elf.list_programs(&mut rust_platform) {
             print!("section={} function={}", p.section_name, p.function_name);
-            if p.invalid {
-                print!(" [invalid: {}]", p.invalid_reason);
+            if p.reject_load {
+                print!(" [reject_load: {}]", p.reject_load_reason);
             }
             println!();
         }

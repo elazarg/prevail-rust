@@ -45,6 +45,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
 criterion = { version = "0.5", features = ["html_reports"] }
+# Synthetic ELF construction for hardening tests (e.g. malformed FUNC symbols).
+object = { version = "0.36", features = ["write_std"] }
 # Benchmark candidates for OffsetMap
 patricia_tree = "0.10"
 interavl = "0.5"

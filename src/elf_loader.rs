@@ -845,7 +845,7 @@ fn get_program_name_and_size(
     start: u64,
     symbols: &SymbolTable<'_>,
     sym_count: usize,
-) -> (String, u64) {
+) -> Result<(String, u64), UnmarshalError> {
     let mut program_name = sec_name.to_string();
     let mut size = sec_size - start;
 
@@ -861,13 +861,19 @@ fn get_program_name_and_size(
             continue;
         }
         let relocation_offset = sd.value;
+        if !relocation_offset.is_multiple_of(size_of::<EbpfInst>() as u64) {
+            return Err(UnmarshalError(format!(
+                "Non-instruction-aligned FUNC symbol '{}' at offset {relocation_offset} in section {sec_name}",
+                sd.name
+            )));
+        }
         if relocation_offset == start {
             program_name = sd.name;
         } else if relocation_offset > start && relocation_offset < start + size {
             size = relocation_offset - start;
         }
     }
-    (program_name, size)
+    Ok((program_name, size))
 }
 
 struct UnresolvedSymbolError {
@@ -1747,7 +1753,7 @@ impl<'a> ProgramReader<'a> {
                     offset,
                     self.symbols,
                     self.sym_count,
-                );
+                )?;
 
                 // Expand the program span to cover all reachable instructions.
                 let extracted_size =
@@ -2294,8 +2300,8 @@ pub struct ElfProgramInfo {
     pub section_name: String,
     pub function_name: String,
     pub section_offset: u32,
-    pub invalid: bool,
-    pub invalid_reason: String,
+    pub reject_load: bool,
+    pub reject_load_reason: String,
 }
 
 /// Cached result of loading a single ELF section.
@@ -2392,14 +2398,14 @@ impl ElfObject {
             while offset < sec_size {
                 let (name, initial_size) = get_program_name_and_size(
                     sec_idx, &sec_name, sec_size, offset, &symbols, sym_count,
-                );
+                )?;
                 let prog_idx = self.programs.len();
                 self.programs.push(ElfProgramInfo {
                     section_name: sec_name.clone(),
                     function_name: name,
                     section_offset: offset as u32,
-                    invalid: false,
-                    invalid_reason: String::new(),
+                    reject_load: false,
+                    reject_load_reason: String::new(),
                 });
                 self.section_program_indices
                     .entry(sec_name.clone())
@@ -2413,13 +2419,13 @@ impl ElfObject {
         Ok(())
     }
 
-    /// Mark all programs in a section as valid or invalid.
+    /// Mark all programs in a section as valid or rejected for loading.
     fn mark_section_validity(&mut self, section_name: &str, valid: bool, reason: &str) {
         if let Some(indices) = self.section_program_indices.get(section_name) {
             for &idx in indices {
-                self.programs[idx].invalid = !valid;
+                self.programs[idx].reject_load = !valid;
                 if !valid {
-                    self.programs[idx].invalid_reason = reason.to_string();
+                    self.programs[idx].reject_load_reason = reason.to_string();
                 }
             }
         }
@@ -2944,5 +2950,69 @@ mod tests {
             has_inner_map,
             "Expected at least one map with inner_map_fd set"
         );
+    }
+
+    fn build_elf_with_func_symbol(symbol_offset: u64) -> Vec<u8> {
+        use object::write::{Object, StandardSection, Symbol, SymbolSection};
+        use object::{BinaryFormat, Endianness, SymbolFlags, SymbolKind, SymbolScope, elf::EM_BPF};
+
+        // Use X86_64 only to satisfy object's writer; we patch the e_machine field
+        // to EM_BPF below.
+        let mut obj = Object::new(
+            BinaryFormat::Elf,
+            object::Architecture::X86_64,
+            Endianness::Little,
+        );
+        obj.set_mangling(object::write::Mangling::None);
+        let text_id = obj.section_id(StandardSection::Text);
+        // 32 BPF "exit" instructions (256 bytes) — large enough that an unaligned
+        // FUNC symbol would otherwise expose the compute_reachable_program_span hazard.
+        let mut text_data = Vec::new();
+        for _ in 0..32 {
+            text_data.extend_from_slice(&[0x95, 0, 0, 0, 0, 0, 0, 0]);
+        }
+        obj.set_section_data(text_id, text_data, 8);
+        obj.add_symbol(Symbol {
+            name: b"prog_at_offset".to_vec(),
+            value: symbol_offset,
+            size: 8,
+            kind: SymbolKind::Text,
+            scope: SymbolScope::Linkage,
+            weak: false,
+            section: SymbolSection::Section(text_id),
+            flags: SymbolFlags::None,
+        });
+
+        let mut bytes = obj.write().unwrap();
+        // object's high-level builder writes e_machine = EM_NONE for Architecture::Unknown.
+        // Patch to EM_BPF so the BPF code path in read_elf picks it up. ELF64 e_machine
+        // is at file offset 0x12.
+        bytes[0x12..0x14].copy_from_slice(&(EM_BPF).to_le_bytes());
+        bytes
+    }
+
+    #[test]
+    fn read_elf_rejects_non_aligned_func_symbol() {
+        // Symbol at offset 7 (not a multiple of 8) — should be rejected before
+        // it can cause a non-aligned program boundary in compute_reachable_program_span.
+        let data = build_elf_with_func_symbol(7);
+        let mut platform = TestPlatform;
+        let options = default_options();
+        let err = read_elf(&data, "synthetic.o", "", "", &options, &mut platform).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Non-instruction-aligned FUNC symbol"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn read_elf_accepts_aligned_func_symbol() {
+        // Symbol at offset 8 — aligned. Should parse successfully.
+        let data = build_elf_with_func_symbol(8);
+        let mut platform = TestPlatform;
+        let options = default_options();
+        let programs = read_elf(&data, "synthetic.o", "", "", &options, &mut platform).unwrap();
+        assert!(!programs.is_empty());
     }
 }
