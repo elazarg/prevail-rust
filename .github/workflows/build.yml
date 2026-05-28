@@ -17,7 +17,7 @@ jobs:
   smoke_no_submodules:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - run: rustup show
 
@@ -35,7 +35,7 @@ jobs:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: recursive
 
@@ -49,7 +49,7 @@ jobs:
   upstream_parity:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: recursive
 
@@ -66,7 +66,7 @@ jobs:
 
       - name: Cache upstream C++ binary
         id: cpp-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: tests/upstream/bin/check
           key: upstream-cpp-${{ steps.upstream.outputs.hash }}
@@ -85,7 +85,7 @@ jobs:
   coverage:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: recursive
 
@@ -99,7 +99,7 @@ jobs:
         run: cargo llvm-cov --lcov --output-path lcov.info
 
       - name: Upload coverage artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage
           path: lcov.info
