@@ -236,6 +236,7 @@ fn print_help() {
     println!();
     println!("OPTIONS:");
     println!("  -h,     --help              Print this help message and exit ");
+    println!("          --version           Display program version information and exit ");
     println!("          --section SECTION   Section to analyze ");
     println!("          --function FUNCTION Function to analyze ");
     println!("  -l                          List programs ");
