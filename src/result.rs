@@ -1000,6 +1000,8 @@ pub fn extract_assertion_registers(assertion: &Assertion) -> BTreeSet<Reg> {
         Assertion::FuncConstraint(fc) => BTreeSet::from([fc.reg]),
         Assertion::ZeroCtxOffset(zco) => BTreeSet::from([zco.reg]),
         Assertion::BoundedLoopCount(_) => BTreeSet::new(),
+        Assertion::ValidArgZero(vaz) => BTreeSet::from([vaz.reg]),
+        Assertion::ValidMapType(vmt) => BTreeSet::from([vmt.map_fd_reg]),
     }
 }
 

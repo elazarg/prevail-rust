@@ -257,6 +257,7 @@ fn run_conformance_test_case(data_file: &Path) -> ConformanceTestResult {
         platform_specific_data: 0,
         section_prefixes: vec![],
         is_privileged: false,
+        is_sleepable: false,
     };
 
     let mut info = ProgramInfo {

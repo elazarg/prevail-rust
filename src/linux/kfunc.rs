@@ -18,6 +18,9 @@ const KFUNC_FLAG_SLEEPABLE: u32 = 1 << 4;
 
 struct KfuncPrototypeEntry {
     btf_id: i32,
+    /// Kernel module providing this kfunc (0 = vmlinux). BTF ids are not unique
+    /// across modules, so the key for resolution is the (btf_id, module) pair.
+    module: i16,
     proto: HelperPrototype,
     flags: u32,
     required_program_type: &'static str,
@@ -31,6 +34,7 @@ impl KfuncPrototypeEntry {
     const fn new(btf_id: i32, name: &'static str, return_type: EbpfReturnType) -> Self {
         Self {
             btf_id,
+            module: 0,
             proto: HelperPrototype {
                 name,
                 return_type,
@@ -38,6 +42,9 @@ impl KfuncPrototypeEntry {
                 reallocate_packet: false,
                 ctx_descriptor: None,
                 unsupported: false,
+                might_sleep: false,
+                zero_args_mask: 0,
+                allowed_map_types: 0,
             },
             flags: KFUNC_FLAG_NONE,
             required_program_type: "",
@@ -68,15 +75,31 @@ impl KfuncPrototypeEntry {
         self.requires_privileged = true;
         self
     }
+
+    /// Mark this entry as belonging to a specific kernel module (non-vmlinux).
+    const fn in_module(mut self, module: i16) -> Self {
+        self.module = module;
+        self
+    }
 }
 
-const KFUNC_PROTOTYPES: [KfuncPrototypeEntry; 12] = [
+const KFUNC_PROTOTYPES: [KfuncPrototypeEntry; 13] = [
     KfuncPrototypeEntry::new(
         12,
         "kfunc_test_id_overlap_tail_call",
         EbpfReturnType::Integer,
     ),
     KfuncPrototypeEntry::new(1000, "kfunc_test_ret_int", EbpfReturnType::Integer),
+    // Same BTF id as the prior entry, but provided by a different kernel module.
+    // Used to verify that (btf_id, module) is the disambiguating key for kfunc
+    // resolution — without this, two kfuncs sharing a BTF id across modules
+    // would alias to the same prototype. See upstream issue #1098.
+    KfuncPrototypeEntry::new(
+        1000,
+        "kfunc_test_ret_int_other_module",
+        EbpfReturnType::Integer,
+    )
+    .in_module(1),
     KfuncPrototypeEntry::new(1001, "kfunc_test_ctx_arg", EbpfReturnType::Integer)
         .with_args(&[EbpfArgumentType::PtrToCtx]),
     KfuncPrototypeEntry::new(1002, "kfunc_test_acquire_flag", EbpfReturnType::Integer)
@@ -118,16 +141,52 @@ const KFUNC_PROTOTYPES: [KfuncPrototypeEntry; 12] = [
     KfuncPrototypeEntry::new(1010, "bpf_cpumask_release", EbpfReturnType::Integer),
 ];
 
-fn lookup_kfunc_prototype(btf_id: i32) -> Option<&'static KfuncPrototypeEntry> {
-    KFUNC_PROTOTYPES
-        .binary_search_by_key(&btf_id, |entry| entry.btf_id)
-        .ok()
-        .map(|idx| &KFUNC_PROTOTYPES[idx])
+/// Strict ordering on the (btf_id, module) pair. Same btf_id is allowed
+/// across distinct modules, but no exact duplicates and no out-of-order pairs.
+/// This is what lets `lookup_kfunc_prototype` binary-search by btf_id and then
+/// linear-scan the (small) module run to disambiguate.
+const fn kfunc_prototypes_are_sorted_by_key() -> bool {
+    let mut i = 1;
+    while i < KFUNC_PROTOTYPES.len() {
+        let a = &KFUNC_PROTOTYPES[i - 1];
+        let b = &KFUNC_PROTOTYPES[i];
+        if a.btf_id > b.btf_id {
+            return false;
+        }
+        if a.btf_id == b.btf_id && a.module >= b.module {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+const _: () = assert!(
+    kfunc_prototypes_are_sorted_by_key(),
+    "KFUNC_PROTOTYPES must be strictly sorted by (btf_id, module)"
+);
+
+fn lookup_kfunc_prototype(btf_id: i32, module: i16) -> Option<&'static KfuncPrototypeEntry> {
+    // Binary search to the first entry with `entry.btf_id >= btf_id`, then
+    // linearly scan the (small) run sharing `btf_id` to find the module match.
+    let start = KFUNC_PROTOTYPES.partition_point(|entry| entry.btf_id < btf_id);
+    KFUNC_PROTOTYPES[start..]
+        .iter()
+        .take_while(|entry| entry.btf_id == btf_id)
+        .find(|entry| entry.module == module)
 }
 
-pub fn make_kfunc_call_result(btf_id: i32, info: Option<&ProgramInfo>) -> Result<Call, String> {
-    let entry = lookup_kfunc_prototype(btf_id)
-        .ok_or_else(|| format!("kfunc prototype lookup failed for BTF id {btf_id}"))?;
+pub fn make_kfunc_call_result(
+    btf_id: i32,
+    module: i16,
+    info: Option<&ProgramInfo>,
+) -> Result<Call, String> {
+    let entry = lookup_kfunc_prototype(btf_id, module).ok_or_else(|| {
+        if module != 0 {
+            format!("kfunc prototype lookup failed for BTF id {btf_id} in module {module}")
+        } else {
+            format!("kfunc prototype lookup failed for BTF id {btf_id}")
+        }
+    })?;
     let proto = &entry.proto;
 
     let accepted_flags = KFUNC_FLAG_ACQUIRE
@@ -167,12 +226,15 @@ pub fn make_kfunc_call_result(btf_id: i32, info: Option<&ProgramInfo>) -> Result
     let mut res = Call {
         func: btf_id,
         kind: CallKind::Kfunc,
+        module,
         name: Rc::from(proto.name),
         is_supported: true,
         unsupported_reason: Rc::from(""),
         contract: crate::ir::syntax::CallContract {
             is_map_lookup: proto.return_type == EbpfReturnType::PtrToMapValueOrNull,
             reallocate_packet: proto.reallocate_packet,
+            zero_args_mask: proto.zero_args_mask,
+            allowed_map_types: proto.allowed_map_types,
             ..Default::default()
         },
         stack_frame_prefix: Rc::from(""),
@@ -220,27 +282,28 @@ mod tests {
 
     #[test]
     fn unknown_kfunc_btf_id_is_rejected() {
-        let err = make_kfunc_call_result(1, None).expect_err("unknown id must fail");
+        let err = make_kfunc_call_result(1, 0, None).expect_err("unknown id must fail");
         assert!(err.contains("kfunc prototype lookup failed for BTF id 1"));
     }
 
     #[test]
     fn known_kfunc_map_lookup_return_is_mapped() {
-        let call = make_kfunc_call_result(1005, None).expect("known id should resolve");
+        let call = make_kfunc_call_result(1005, 0, None).expect("known id should resolve");
         assert_eq!(call.kind, CallKind::Kfunc);
         assert_eq!(call.func, 1005);
+        assert_eq!(call.module, 0);
         assert!(call.contract.is_map_lookup);
     }
 
     #[test]
     fn kfunc_acquire_flag_is_accepted() {
-        make_kfunc_call_result(1002, None).expect("acquire-flagged kfunc should be accepted");
+        make_kfunc_call_result(1002, 0, None).expect("acquire-flagged kfunc should be accepted");
     }
 
     #[test]
     fn kfunc_release_flag_is_rejected() {
-        let err =
-            make_kfunc_call_result(1008, None).expect_err("release-flagged kfunc must be rejected");
+        let err = make_kfunc_call_result(1008, 0, None)
+            .expect_err("release-flagged kfunc must be rejected");
         assert!(err.contains("kfunc has unsupported flags (release requires lifecycle tracking)"));
     }
 
@@ -248,26 +311,26 @@ mod tests {
     fn kfunc_program_type_and_privilege_gating() {
         let mut info = ProgramInfo::default();
 
-        let err = make_kfunc_call_result(1003, Some(&info)).expect_err("xdp-only must reject");
+        let err = make_kfunc_call_result(1003, 0, Some(&info)).expect_err("xdp-only must reject");
         assert!(err.contains("kfunc is unavailable for program type"));
 
         info.program_type = EbpfProgramType {
             name: "xdp".to_string(),
             ..EbpfProgramType::default()
         };
-        make_kfunc_call_result(1003, Some(&info)).expect("xdp program type should pass");
+        make_kfunc_call_result(1003, 0, Some(&info)).expect("xdp program type should pass");
 
         let err =
-            make_kfunc_call_result(1004, Some(&info)).expect_err("privileged-only must reject");
+            make_kfunc_call_result(1004, 0, Some(&info)).expect_err("privileged-only must reject");
         assert!(err.contains("kfunc requires privileged program type"));
 
         info.program_type.is_privileged = true;
-        make_kfunc_call_result(1004, Some(&info)).expect("privileged program type should pass");
+        make_kfunc_call_result(1004, 0, Some(&info)).expect("privileged program type should pass");
     }
 
     #[test]
     fn kfunc_pointer_size_pairs_are_encoded() {
-        let readable = make_kfunc_call_result(1006, None).expect("1006 should resolve");
+        let readable = make_kfunc_call_result(1006, 0, None).expect("1006 should resolve");
         assert_eq!(readable.contract.pairs.len(), 1);
         assert_eq!(
             readable.contract.pairs[0].kind,
@@ -276,7 +339,7 @@ mod tests {
         assert!(readable.contract.pairs[0].or_null);
         assert!(readable.contract.pairs[0].can_be_zero);
 
-        let writable = make_kfunc_call_result(1007, None).expect("1007 should resolve");
+        let writable = make_kfunc_call_result(1007, 0, None).expect("1007 should resolve");
         assert_eq!(writable.contract.pairs.len(), 1);
         assert_eq!(
             writable.contract.pairs[0].kind,
@@ -284,5 +347,26 @@ mod tests {
         );
         assert!(!writable.contract.pairs[0].or_null);
         assert!(!writable.contract.pairs[0].can_be_zero);
+    }
+
+    #[test]
+    fn kfunc_same_btf_id_disambiguates_by_module() {
+        // BTF id 1000 has prototypes in two distinct modules; resolution must
+        // pick the entry matching the requested module rather than aliasing.
+        let vmlinux = make_kfunc_call_result(1000, 0, None).expect("vmlinux entry must resolve");
+        assert_eq!(vmlinux.name.as_ref(), "kfunc_test_ret_int");
+        assert_eq!(vmlinux.module, 0);
+
+        let other = make_kfunc_call_result(1000, 1, None).expect("module-1 entry must resolve");
+        assert_eq!(other.name.as_ref(), "kfunc_test_ret_int_other_module");
+        assert_eq!(other.module, 1);
+
+        // An unknown module surfaces a module-qualified diagnostic.
+        let err = make_kfunc_call_result(1000, 99, None)
+            .expect_err("missing (btf_id, module) pair must fail");
+        assert!(
+            err.contains("in module 99"),
+            "expected module-qualified diagnostic: {err}"
+        );
     }
 }

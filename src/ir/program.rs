@@ -448,11 +448,18 @@ fn pass_resolve_kfunc_calls(
     let mut resolved = ResolvedKfuncCalls::new();
     for (label, inst, _) in insts {
         if let Instruction::CallBtf(call_btf) = inst {
-            let call = platform
-                .resolve_kfunc_call(call_btf.btf_id, info)
+            let mut call = platform
+                .resolve_kfunc_call(call_btf.btf_id, call_btf.module, info)
                 .map_err(|why_not| InvalidControlFlow {
                     message: format!("not implemented: {} (at {})", why_not, label),
                 })?;
+            // The lowered Call's identity is the pre-resolution (btf_id, module)
+            // pair plus the fixed CallKind::Kfunc tag; stamp those from the source
+            // CallBtf rather than trusting the resolver, so two kfuncs sharing a
+            // BTF id across modules remain distinguishable in the lowered IR.
+            call.func = call_btf.btf_id;
+            call.kind = CallKind::Kfunc;
+            call.module = call_btf.module;
             resolved.insert(label.clone(), call);
         }
     }
@@ -1581,6 +1588,7 @@ mod tests {
                 Instruction::Call(Call {
                     func: 12,
                     kind: CallKind::Helper,
+                    module: 0,
                     name: Rc::from("tail_call"),
                     is_supported: true,
                     unsupported_reason: Rc::from(""),
@@ -1617,6 +1625,7 @@ mod tests {
                 Instruction::Call(Call {
                     func: 12,
                     kind: CallKind::Helper,
+                    module: 0,
                     name: Rc::from("tail_call"),
                     is_supported: true,
                     unsupported_reason: Rc::from(""),

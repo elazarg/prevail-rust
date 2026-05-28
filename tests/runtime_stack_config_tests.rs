@@ -37,6 +37,7 @@ fn verify(asm: &str, options: &EbpfVerifierOptions) -> Result<(), String> {
         platform_specific_data: 0,
         section_prefixes: vec![],
         is_privileged: false,
+        is_sleepable: false,
     };
     let mut info = ProgramInfo {
         program_type,

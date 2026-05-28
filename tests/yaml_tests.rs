@@ -80,9 +80,10 @@ impl EbpfPlatform for TestPlatform {
     fn resolve_kfunc_call(
         &self,
         btf_id: i32,
+        module: i16,
         info: &ProgramInfo,
     ) -> Result<prevail::ir::syntax::Call, String> {
-        self.linux.resolve_kfunc_call(btf_id, info)
+        self.linux.resolve_kfunc_call(btf_id, module, info)
     }
     fn map_record_size(&self) -> usize {
         0
@@ -464,6 +465,7 @@ fn run_test_case(test_case: &TestCase, platform: &TestPlatform) -> Option<Failur
         platform_specific_data: 0,
         section_prefixes: vec![],
         is_privileged: false,
+        is_sleepable: false,
     };
     let mut info = ProgramInfo {
         program_type,

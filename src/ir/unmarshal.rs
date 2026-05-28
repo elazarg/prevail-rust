@@ -785,6 +785,7 @@ impl<'a> Unmarshaller<'a> {
                     return Ok(Instruction::Call(Call {
                         func: inst.imm,
                         kind: CallKind::Helper,
+                        module: 0,
                         name: Rc::from(inst.imm.to_string()),
                         is_supported: false,
                         unsupported_reason: Rc::from(
@@ -804,6 +805,7 @@ impl<'a> Unmarshaller<'a> {
                     return Ok(Instruction::Call(Call {
                         func: inst.imm,
                         kind: CallKind::Helper,
+                        module: 0,
                         name: Rc::from(name),
                         is_supported: false,
                         unsupported_reason: Rc::from(
@@ -1130,12 +1132,15 @@ pub fn make_call_result(imm: i32, platform: &dyn EbpfPlatform) -> Result<Call, S
     let mut res = Call {
         func: imm,
         kind: CallKind::Helper,
+        module: 0,
         name: Rc::from(proto.name),
         is_supported: true,
         unsupported_reason: Rc::from(""),
         contract: crate::ir::syntax::CallContract {
             is_map_lookup: proto.return_type == EbpfReturnType::PtrToMapValueOrNull,
             reallocate_packet: proto.reallocate_packet,
+            zero_args_mask: proto.zero_args_mask,
+            allowed_map_types: proto.allowed_map_types,
             ..Default::default()
         },
         stack_frame_prefix: Rc::from(""),

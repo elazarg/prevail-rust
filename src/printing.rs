@@ -17,8 +17,8 @@ use crate::ir::syntax::{
     AtomicOp, Bin, BinOp, BoundedLoopCount, BtfLineInfo, Call, CallBtf, CallLocal, Callx,
     Comparable, Condition, ConditionOp, Deref, Exit, FuncConstraint, Imm, IncrementLoopCounter,
     Instruction, InstructionSeq, Jmp, LoadMapAddress, LoadMapFd, LoadPseudo, Mem, Packet, Reg,
-    TypeConstraint, Un, UnOp, Undefined, ValidAccess, ValidCallbackTarget, ValidDivisor,
-    ValidMapKeyValue, ValidSize, ValidStore, Value, ZeroCtxOffset,
+    TypeConstraint, Un, UnOp, Undefined, ValidAccess, ValidArgZero, ValidCallbackTarget,
+    ValidDivisor, ValidMapKeyValue, ValidMapType, ValidSize, ValidStore, Value, ZeroCtxOffset,
 };
 use crate::spec::type_descriptors::EbpfMapDescriptor;
 use crate::spec::vm_isa::AccessSize;
@@ -586,6 +586,22 @@ impl fmt::Display for ValidSize {
     }
 }
 
+impl fmt::Display for ValidArgZero {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} == 0", self.reg)
+    }
+}
+
+impl fmt::Display for ValidMapType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "valid_map_type({}, {})",
+            self.map_fd_reg, self.helper_name
+        )
+    }
+}
+
 impl fmt::Display for ValidMapKeyValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let field = if self.key { "key_size" } else { "value_size" };
@@ -679,6 +695,8 @@ impl fmt::Display for Assertion {
             Assertion::FuncConstraint(x) => write!(f, "{x}"),
             Assertion::ZeroCtxOffset(x) => write!(f, "{x}"),
             Assertion::BoundedLoopCount(x) => write!(f, "{x}"),
+            Assertion::ValidArgZero(x) => write!(f, "{x}"),
+            Assertion::ValidMapType(x) => write!(f, "{x}"),
         }
     }
 }
@@ -1963,6 +1981,7 @@ mod tests {
         let call = Call {
             func: 1,
             kind: crate::ir::syntax::CallKind::Helper,
+            module: 0,
             name: Rc::from("bpf_map_lookup_elem"),
             is_supported: true,
             unsupported_reason: Rc::from(""),
@@ -1984,6 +2003,8 @@ mod tests {
                     can_be_zero: false,
                 }],
                 alloc_size_reg: None,
+                zero_args_mask: 0,
+                allowed_map_types: 0,
             },
             stack_frame_prefix: Rc::from(""),
         };

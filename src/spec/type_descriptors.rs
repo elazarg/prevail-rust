@@ -56,6 +56,7 @@ pub struct EbpfProgramType {
     pub platform_specific_data: u64,
     pub section_prefixes: Vec<String>,
     pub is_privileged: bool,
+    pub is_sleepable: bool,
 }
 
 /// Key characteristics that determine equivalence between eBPF maps.

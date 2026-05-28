@@ -247,18 +247,29 @@ pub struct CallContract {
     pub reallocate_packet: bool,
     /// Register holding allocation size (for T_ALLOC_MEM returns).
     pub alloc_size_reg: Option<Reg>,
+    /// Bitmask of argument positions (bit i covers R(i+1), for i in 0..=4) that must be provably zero.
+    pub zero_args_mask: u8,
+    /// Bitmask of platform-specific map types accepted by this helper (bit N set ⇒ map type N allowed).
+    /// Zero means "any map type is accepted" — used for backwards compatibility with helpers that don't restrict.
+    pub allowed_map_types: u64,
 }
 
-/// Static call to a helper / kfunc. The pair `(func, kind)` is the call's
-/// identity (used for `PartialEq`); `name` and support flags are resolved
-/// metadata; `contract` collects the argument requirements, return contract,
-/// and side-effects consumed by the verifier. Mirrors upstream
+/// Static call to a helper / kfunc. The triple `(func, kind, module)` is the
+/// call's identity (used for `PartialEq`); `name` and support flags are
+/// resolved metadata; `contract` collects the argument requirements, return
+/// contract, and side-effects consumed by the verifier. Mirrors upstream
 /// `Call`/`ResolvedCall` (we keep one shape because the Rust port resolves
 /// at IR-build time and stores the resolved form).
+///
+/// `module` is only meaningful when `kind == CallKind::Kfunc`: it carries the
+/// `CallBtf::module` from which this call was lowered so that two kfuncs
+/// sharing the same BTF id across distinct kernel modules remain
+/// distinguishable. For helper and builtin calls the field is unused (0).
 #[derive(Clone, Debug)]
 pub struct Call {
     pub func: i32,
     pub kind: CallKind,
+    pub module: i16,
     pub name: Rc<str>,
     pub is_supported: bool,
     pub unsupported_reason: Rc<str>,
@@ -268,11 +279,11 @@ pub struct Call {
 }
 
 impl PartialEq for Call {
-    // Equality intentionally matches only functional identity (func, kind);
+    // Equality intentionally matches only functional identity (func, kind, module);
     // metadata like is_supported/unsupported_reason and the contract are
     // diagnostic / derivable.
     fn eq(&self, other: &Self) -> bool {
-        self.func == other.func && self.kind == other.kind
+        self.func == other.func && self.kind == other.kind && self.module == other.module
     }
 }
 
@@ -499,6 +510,22 @@ impl BoundedLoopCount {
     pub const LIMIT: i32 = 100000;
 }
 
+/// Check that a register value is provably zero (used to enforce kernel-required
+/// "flags must be 0" arguments on helpers such as `bpf_get_local_storage`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ValidArgZero {
+    pub reg: Reg,
+}
+
+/// Check that the map type backing a MAP_FD argument is in the helper's allowed set.
+/// Encodes the function→map direction of the kernel's `check_map_func_compatibility`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ValidMapType {
+    pub map_fd_reg: Reg,
+    pub allowed_map_types: u64,
+    pub helper_name: Rc<str>,
+}
+
 /// Sum type of all assertion checks.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Assertion {
@@ -514,4 +541,6 @@ pub enum Assertion {
     FuncConstraint(FuncConstraint),
     ZeroCtxOffset(ZeroCtxOffset),
     BoundedLoopCount(BoundedLoopCount),
+    ValidArgZero(ValidArgZero),
+    ValidMapType(ValidMapType),
 }

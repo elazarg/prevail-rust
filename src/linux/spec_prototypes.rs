@@ -46,11 +46,32 @@ pub struct HelperPrototype {
     pub reallocate_packet: bool,
     pub ctx_descriptor: Option<&'static EbpfCtxDescriptor>,
     pub unsupported: bool,
+    /// Whether this helper may sleep — forbidden in non-sleepable programs.
+    pub might_sleep: bool,
+    /// Bitmask of argument positions (bit i covers R(i+1), for i in 0..=4) that must be provably zero.
+    pub zero_args_mask: u8,
+    /// Bitmask of platform-specific map types accepted by this helper. Zero means any.
+    pub allowed_map_types: u64,
+}
+
+/// Returns a single-bit mask for the given map type (or 0 if out of range). Mirrors
+/// upstream `map_type_bit`. Use bitwise-OR to combine when a helper accepts multiple types.
+pub const fn map_type_bit(map_type: u32) -> u64 {
+    if map_type < 64 { 1u64 << map_type } else { 0 }
 }
 
 // ── Helper macros ──────────────────────────────────────────────────
 
 /// Shorthand for a prototype with only `name` and `return_type` (no args, no side-effects).
+impl HelperPrototype {
+    /// Set the set of platform-specific map types accepted by this helper.
+    /// Bit N corresponds to map type N. Zero means any map type is accepted.
+    pub const fn with_allowed_map_types(mut self, mask: u64) -> Self {
+        self.allowed_map_types = mask;
+        self
+    }
+}
+
 macro_rules! proto {
     ($name:expr, $ret:expr) => {
         HelperPrototype {
@@ -60,24 +81,36 @@ macro_rules! proto {
             reallocate_packet: false,
             ctx_descriptor: None,
             unsupported: false,
+            might_sleep: false,
+            zero_args_mask: 0,
+            allowed_map_types: 0,
         }
     };
     ($name:expr, $ret:expr, [$($arg:expr),*]) => {
-        proto!($name, $ret, [$($arg),*], false, None, false)
+        proto!($name, $ret, [$($arg),*], false, None, false, false, 0)
     };
     ($name:expr, $ret:expr, [$($arg:expr),*], realloc) => {
-        proto!($name, $ret, [$($arg),*], true, None, false)
+        proto!($name, $ret, [$($arg),*], true, None, false, false, 0)
     };
     ($name:expr, $ret:expr, [$($arg:expr),*], ctx = $ctx:expr) => {
-        proto!($name, $ret, [$($arg),*], false, Some($ctx), false)
+        proto!($name, $ret, [$($arg),*], false, Some($ctx), false, false, 0)
     };
     ($name:expr, $ret:expr, [$($arg:expr),*], realloc, ctx = $ctx:expr) => {
-        proto!($name, $ret, [$($arg),*], true, Some($ctx), false)
+        proto!($name, $ret, [$($arg),*], true, Some($ctx), false, false, 0)
     };
     ($name:expr, $ret:expr, [$($arg:expr),*], unsupported) => {
-        proto!($name, $ret, [$($arg),*], false, None, true)
+        proto!($name, $ret, [$($arg),*], false, None, true, false, 0)
     };
-    ($name:expr, $ret:expr, [$($arg:expr),*], $realloc:expr, $ctx:expr, $unsup:expr) => {{
+    ($name:expr, $ret:expr, [$($arg:expr),*], might_sleep) => {
+        proto!($name, $ret, [$($arg),*], false, None, false, true, 0)
+    };
+    ($name:expr, $ret:expr, [$($arg:expr),*], zero_args = $mask:expr) => {
+        proto!($name, $ret, [$($arg),*], false, None, false, false, $mask)
+    };
+    ($name:expr, $ret:expr, [$($arg:expr),*], zero_args = $mask:expr, ctx = $ctx:expr) => {
+        proto!($name, $ret, [$($arg),*], false, Some($ctx), false, false, $mask)
+    };
+    ($name:expr, $ret:expr, [$($arg:expr),*], $realloc:expr, $ctx:expr, $unsup:expr, $might_sleep:expr, $zero_mask:expr) => {{
         // Pad the argument list to exactly 5 entries with DontCare.
         const ARGS: &[EbpfArgumentType] = &[$($arg),*];
         HelperPrototype {
@@ -93,9 +126,39 @@ macro_rules! proto {
             reallocate_packet: $realloc,
             ctx_descriptor: $ctx,
             unsupported: $unsup,
+            might_sleep: $might_sleep,
+            zero_args_mask: $zero_mask,
+            allowed_map_types: 0,
         }
     }};
 }
+
+// Map-type bitmask constants for HelperPrototype::allowed_map_types.
+// Values match the BPF_MAP_TYPE_* enum in the kernel UAPI.
+const MT_PERCPU_HASH: u64 = map_type_bit(5);
+const MT_PERCPU_ARRAY: u64 = map_type_bit(6);
+const MT_PERF_EVENT_ARRAY: u64 = map_type_bit(4);
+const MT_STACK_TRACE: u64 = map_type_bit(7);
+const MT_CGROUP_ARRAY: u64 = map_type_bit(8);
+const MT_LRU_PERCPU_HASH: u64 = map_type_bit(10);
+const MT_DEVMAP: u64 = map_type_bit(14);
+const MT_SOCKMAP: u64 = map_type_bit(15);
+const MT_CPUMAP: u64 = map_type_bit(16);
+const MT_XSKMAP: u64 = map_type_bit(17);
+const MT_SOCKHASH: u64 = map_type_bit(18);
+const MT_CGROUP_STORAGE: u64 = map_type_bit(19);
+const MT_REUSEPORT_SOCKARRAY: u64 = map_type_bit(20);
+const MT_PERCPU_CGROUP_STORAGE: u64 = map_type_bit(21);
+const MT_QUEUE: u64 = map_type_bit(22);
+const MT_STACK: u64 = map_type_bit(23);
+const MT_SK_STORAGE: u64 = map_type_bit(24);
+const MT_DEVMAP_HASH: u64 = map_type_bit(25);
+const MT_RINGBUF: u64 = map_type_bit(27);
+const MT_INODE_STORAGE: u64 = map_type_bit(28);
+const MT_TASK_STORAGE: u64 = map_type_bit(29);
+const MT_BLOOM_FILTER: u64 = map_type_bit(30);
+const MT_USER_RINGBUF: u64 = map_type_bit(31);
+const MT_CGRP_STORAGE: u64 = map_type_bit(32);
 
 // ── Prototype table ────────────────────────────────────────────────
 //
@@ -150,6 +213,7 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
         "l3_csum_replace",
         Integer,
         [PtrToCtx, Anything, Anything, Anything, Anything],
+        realloc,
         ctx = &SK_BUFF
     ),
     // 11: l4_csum_replace
@@ -157,6 +221,7 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
         "l4_csum_replace",
         Integer,
         [PtrToCtx, Anything, Anything, Anything, Anything],
+        realloc,
         ctx = &SK_BUFF
     ),
     // 12: tail_call
@@ -170,6 +235,7 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
         "clone_redirect",
         Integer,
         [PtrToCtx, Anything, Anything],
+        realloc,
         ctx = &SK_BUFF
     ),
     // 14: get_current_pid_tgid
@@ -205,7 +271,8 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
         ctx = &SK_BUFF
     ),
     // 22: perf_event_read
-    proto!("perf_event_read", Integer, [PtrToMap, Anything]),
+    proto!("perf_event_read", Integer, [PtrToMap, Anything])
+        .with_allowed_map_types(MT_PERF_EVENT_ARRAY),
     // 23: redirect
     proto!("redirect", Integer, [Anything, Anything]),
     // 24: get_route_realm
@@ -221,7 +288,8 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
             PtrToReadableMem,
             ConstSizeOrZero
         ]
-    ),
+    )
+    .with_allowed_map_types(MT_PERF_EVENT_ARRAY),
     // 26: skb_load_bytes
     proto!(
         "skb_load_bytes",
@@ -230,7 +298,8 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
         ctx = &SK_BUFF
     ),
     // 27: get_stackid
-    proto!("get_stackid", Integer, [PtrToCtx, PtrToMap, Anything]),
+    proto!("get_stackid", Integer, [PtrToCtx, PtrToMap, Anything])
+        .with_allowed_map_types(MT_STACK_TRACE),
     // 28: csum_diff
     proto!(
         "csum_diff",
@@ -278,7 +347,8 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
         Integer,
         [PtrToCtx, PtrToMap, Anything],
         ctx = &SK_BUFF
-    ),
+    )
+    .with_allowed_map_types(MT_CGROUP_ARRAY),
     // 34: get_hash_recalc
     proto!("get_hash_recalc", Integer, [PtrToCtx], ctx = &SK_BUFF),
     // 35: get_current_task
@@ -290,7 +360,8 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
         [Anything, PtrToReadableMem, ConstSize]
     ),
     // 37: current_task_under_cgroup
-    proto!("current_task_under_cgroup", Integer, [PtrToMap, Anything]),
+    proto!("current_task_under_cgroup", Integer, [PtrToMap, Anything])
+        .with_allowed_map_types(MT_CGROUP_ARRAY),
     // 38: skb_change_tail
     proto!(
         "skb_change_tail",
@@ -356,21 +427,24 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
         ctx = &SK_BUFF
     ),
     // 51: redirect_map
-    proto!("redirect_map", Integer, [PtrToMap, Anything, Anything]),
+    proto!("redirect_map", Integer, [PtrToMap, Anything, Anything])
+        .with_allowed_map_types(MT_DEVMAP | MT_DEVMAP_HASH | MT_CPUMAP | MT_XSKMAP),
     // 52: sk_redirect_map
     proto!(
         "sk_redirect_map",
         Integer,
         [PtrToCtx, PtrToMap, Anything, Anything],
         ctx = &SK_BUFF
-    ),
+    )
+    .with_allowed_map_types(MT_SOCKMAP),
     // 53: sock_map_update
     proto!(
         "sock_map_update",
         Integer,
         [PtrToCtx, PtrToMap, PtrToMapKey, Anything, DontCare],
         ctx = &SOCK_OPS_DESCR
-    ),
+    )
+    .with_allowed_map_types(MT_SOCKMAP),
     // 54: xdp_adjust_meta
     proto!(
         "xdp_adjust_meta",
@@ -384,7 +458,8 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
         "perf_event_read_value",
         Integer,
         [PtrToMap, Anything, PtrToWritableMem, ConstSize]
-    ),
+    )
+    .with_allowed_map_types(MT_PERF_EVENT_ARRAY),
     // 56: perf_prog_read_value
     proto!(
         "perf_prog_read_value",
@@ -413,7 +488,8 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
         Integer,
         [PtrToCtx, PtrToMap, Anything, Anything],
         ctx = &SK_MSG_MD
-    ),
+    )
+    .with_allowed_map_types(MT_SOCKMAP),
     // 61: msg_apply_bytes
     proto!(
         "msg_apply_bytes",
@@ -433,6 +509,7 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
         "msg_pull_data",
         Integer,
         [PtrToCtx, Anything, Anything, Anything],
+        realloc,
         ctx = &SK_MSG_MD
     ),
     // 64: bind
@@ -477,26 +554,30 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
         Integer,
         [PtrToCtx, PtrToMap, PtrToMapKey, Anything, DontCare],
         ctx = &SOCK_OPS_DESCR
-    ),
+    )
+    .with_allowed_map_types(MT_SOCKHASH),
     // 71: msg_redirect_hash
     proto!(
         "msg_redirect_hash",
         Integer,
         [PtrToCtx, PtrToMap, PtrToMapKey, Anything],
         ctx = &SK_MSG_MD
-    ),
+    )
+    .with_allowed_map_types(MT_SOCKHASH),
     // 72: sk_redirect_hash
     proto!(
         "sk_redirect_hash",
         Integer,
         [PtrToCtx, PtrToMap, PtrToMapKey, Anything],
         ctx = &SK_BUFF
-    ),
+    )
+    .with_allowed_map_types(MT_SOCKHASH),
     // 73: lwt_push_encap
     proto!(
         "lwt_push_encap",
         Integer,
         [PtrToCtx, Anything, PtrToReadableMem, ConstSize],
+        realloc,
         ctx = &SK_BUFF
     ),
     // 74: lwt_seg6_store_bytes
@@ -504,6 +585,7 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
         "lwt_seg6_store_bytes",
         Integer,
         [PtrToCtx, Anything, PtrToReadableMem, ConstSize],
+        realloc,
         ctx = &SK_BUFF
     ),
     // 75: lwt_seg6_adjust_srh
@@ -519,6 +601,7 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
         "lwt_seg6_action",
         Integer,
         [PtrToCtx, Anything, PtrToReadableMem, ConstSize],
+        realloc,
         ctx = &SK_BUFF
     ),
     // 77: rc_repeat
@@ -535,17 +618,21 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
     proto!("get_current_cgroup_id", Integer),
     // 81: get_local_storage
     // C++ return type: EBPF_RETURN_TYPE_PTR_TO_MAP_VALUE -> alias for PTR_TO_MAP_VALUE_OR_NULL
+    // Kernel requires the flags argument (R2) to be provably zero.
     proto!(
         "get_local_storage",
         PtrToMapValueOrNull,
-        [PtrToMap, Anything]
-    ),
+        [PtrToMap, Anything],
+        zero_args = 1 << 1
+    )
+    .with_allowed_map_types(MT_CGROUP_STORAGE | MT_PERCPU_CGROUP_STORAGE),
     // 82: sk_select_reuseport
     proto!(
         "sk_select_reuseport",
         Integer,
         [PtrToCtx, PtrToMap, PtrToMapKey, Anything]
-    ),
+    )
+    .with_allowed_map_types(MT_REUSEPORT_SOCKARRAY | MT_SOCKMAP | MT_SOCKHASH),
     // 83: skb_ancestor_cgroup_id
     proto!(
         "skb_ancestor_cgroup_id",
@@ -575,13 +662,16 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
         "map_push_elem",
         Integer,
         [PtrToMap, PtrToMapValue, Anything]
-    ),
+    )
+    .with_allowed_map_types(MT_QUEUE | MT_STACK | MT_BLOOM_FILTER),
     // 88: map_pop_elem
     // C++ arg: EBPF_ARGUMENT_TYPE_PTR_TO_UNINIT_MAP_VALUE -> alias for PtrToMapValue
-    proto!("map_pop_elem", Integer, [PtrToMap, PtrToMapValue]),
+    proto!("map_pop_elem", Integer, [PtrToMap, PtrToMapValue])
+        .with_allowed_map_types(MT_QUEUE | MT_STACK),
     // 89: map_peek_elem
     // C++ args: CONST_PTR_TO_MAP -> PtrToMap, PTR_TO_UNINIT_MAP_VALUE -> PtrToMapValue
-    proto!("map_peek_elem", Integer, [PtrToMap, PtrToMapValue]),
+    proto!("map_peek_elem", Integer, [PtrToMap, PtrToMapValue])
+        .with_allowed_map_types(MT_QUEUE | MT_STACK | MT_BLOOM_FILTER),
     // 90: msg_push_data
     proto!(
         "msg_push_data",
@@ -682,14 +772,16 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
         "sk_storage_get",
         PtrToMapValueOrNull,
         [PtrToMap, PtrToBtfIdSockCommon, PtrToMapValue, Anything]
-    ),
+    )
+    .with_allowed_map_types(MT_SK_STORAGE),
     // 108: sk_storage_delete
     // C++ arg: PTR_TO_BTF_ID_SOCK_COMMON
     proto!(
         "sk_storage_delete",
         Integer,
         [PtrToMap, PtrToBtfIdSockCommon]
-    ),
+    )
+    .with_allowed_map_types(MT_SK_STORAGE),
     // 109: send_signal
     proto!("send_signal", Integer, [Anything]),
     // 110: tcp_gen_syncookie
@@ -717,7 +809,8 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
             PtrToReadableMem,
             ConstSizeOrZero
         ]
-    ),
+    )
+    .with_allowed_map_types(MT_PERF_EVENT_ARRAY),
     // 112: probe_read_user
     proto!(
         "probe_read_user",
@@ -773,7 +866,8 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
             PtrToReadableMem,
             ConstSizeOrZero
         ]
-    ),
+    )
+    .with_allowed_map_types(MT_PERF_EVENT_ARRAY),
     // 122: get_netns_cookie
     proto!("get_netns_cookie", Integer, [PtrToCtxOrNull]),
     // 123: get_current_ancestor_cgroup_id
@@ -822,14 +916,16 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
         "ringbuf_output",
         Integer,
         [PtrToMap, PtrToReadableMem, ConstSizeOrZero, Anything]
-    ),
+    )
+    .with_allowed_map_types(MT_RINGBUF),
     // 131: ringbuf_reserve
     // C++ return: PTR_TO_ALLOC_MEM_OR_NULL; arg2: CONST_ALLOC_SIZE_OR_ZERO
     proto!(
         "ringbuf_reserve",
         PtrToAllocMemOrNull,
         [PtrToMap, ConstAllocSizeOrZero, Anything]
-    ),
+    )
+    .with_allowed_map_types(MT_RINGBUF),
     // 132: ringbuf_submit
     // C++ arg1: PTR_TO_ALLOC_MEM
     proto!("ringbuf_submit", Integer, [PtrToAllocMem, Anything]),
@@ -838,7 +934,7 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
     proto!("ringbuf_discard", Integer, [PtrToAllocMem, Anything]),
     // 134: ringbuf_query
     // C++ arg: CONST_PTR_TO_MAP -> PtrToMap
-    proto!("ringbuf_query", Integer, [PtrToMap, Anything]),
+    proto!("ringbuf_query", Integer, [PtrToMap, Anything]).with_allowed_map_types(MT_RINGBUF),
     // 135: csum_level
     proto!("csum_level", Integer, [PtrToCtx, Anything]),
     // 136: skc_to_tcp6_sock
@@ -883,6 +979,7 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
         "store_hdr_opt",
         Integer,
         [PtrToCtx, PtrToReadableMem, ConstSize, Anything],
+        realloc,
         ctx = &SOCK_OPS_DESCR
     ),
     // 144: reserve_hdr_opt
@@ -898,22 +995,26 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
         "inode_storage_get",
         PtrToMapValueOrNull,
         [PtrToMap, PtrToBtfId, PtrToMapValue, Anything]
-    ),
+    )
+    .with_allowed_map_types(MT_INODE_STORAGE),
     // 146: inode_storage_delete
     // C++ arg2: PTR_TO_BTF_ID
-    proto!("inode_storage_delete", Integer, [PtrToMap, PtrToBtfId]),
+    proto!("inode_storage_delete", Integer, [PtrToMap, PtrToBtfId])
+        .with_allowed_map_types(MT_INODE_STORAGE),
     // 147: d_path
     // C++ arg1: PTR_TO_BTF_ID
     proto!(
         "d_path",
         Integer,
-        [PtrToBtfId, PtrToReadableMem, ConstSizeOrZero]
+        [PtrToBtfId, PtrToReadableMem, ConstSizeOrZero],
+        might_sleep
     ),
     // 148: copy_from_user
     proto!(
         "copy_from_user",
         Integer,
-        [PtrToWritableMem, ConstSizeOrZero, Anything]
+        [PtrToWritableMem, ConstSizeOrZero, Anything],
+        might_sleep
     ),
     // 149: snprintf_btf
     proto!(
@@ -960,10 +1061,12 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
         "task_storage_get",
         PtrToMapValueOrNull,
         [PtrToMap, PtrToBtfId, PtrToMapValue, Anything]
-    ),
+    )
+    .with_allowed_map_types(MT_TASK_STORAGE),
     // 157: task_storage_delete
     // C++ arg2: PTR_TO_BTF_ID
-    proto!("task_storage_delete", Integer, [PtrToMap, PtrToBtfId]),
+    proto!("task_storage_delete", Integer, [PtrToMap, PtrToBtfId])
+        .with_allowed_map_types(MT_TASK_STORAGE),
     // 158: get_current_task_btf
     // C++ return: PTR_TO_BTF_ID
     proto!("get_current_task_btf", EbpfReturnType::PtrToBtfId),
@@ -977,7 +1080,8 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
     proto!(
         "ima_inode_hash",
         Integer,
-        [PtrToBtfId, PtrToWritableMem, ConstSize]
+        [PtrToBtfId, PtrToWritableMem, ConstSize],
+        might_sleep
     ),
     // 162: sock_from_file
     // C++ return: PTR_TO_BTF_ID_OR_NULL; arg: PTR_TO_BTF_ID
@@ -1126,7 +1230,8 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
             Anything,
             PtrToBtfId,
             Anything
-        ]
+        ],
+        might_sleep
     ),
     // 192: skb_set_tstamp
     proto!(
@@ -1140,7 +1245,8 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
     proto!(
         "ima_file_hash",
         Integer,
-        [PtrToBtfId, PtrToWritableMem, ConstSize]
+        [PtrToBtfId, PtrToWritableMem, ConstSize],
+        might_sleep
     ),
     // 194: kptr_xchg
     // C++ return: PTR_TO_BTF_ID_OR_NULL; arg2: PTR_TO_BTF_ID
@@ -1150,7 +1256,8 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
         "map_lookup_percpu_elem",
         PtrToMapValueOrNull,
         [PtrToMap, PtrToMapKey, Anything, DontCare, DontCare]
-    ),
+    )
+    .with_allowed_map_types(MT_PERCPU_ARRAY | MT_PERCPU_HASH | MT_LRU_PERCPU_HASH),
     // 196: skc_to_mptcp_sock
     // C++ return: PTR_TO_BTF_ID_OR_NULL; arg: PTR_TO_BTF_ID_SOCK_COMMON
     proto!(
@@ -1172,7 +1279,8 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
         PtrToAllocMemOrNull,
         [PtrToMap, Anything, Anything, Anything],
         unsupported
-    ),
+    )
+    .with_allowed_map_types(MT_RINGBUF),
     // 199: ringbuf_submit_dynptr (unsupported = true)
     proto!(
         "ringbuf_submit_dynptr",
@@ -1253,17 +1361,20 @@ pub static PROTOTYPES: [HelperPrototype; 212] = [
         Integer,
         [PtrToMap, PtrToFunc, PtrToStackOrNull, Anything],
         unsupported
-    ),
+    )
+    .with_allowed_map_types(MT_USER_RINGBUF),
     // 210: cgrp_storage_get
     // C++ arg2: PTR_TO_BTF_ID
     proto!(
         "cgrp_storage_get",
         PtrToMapValueOrNull,
         [PtrToMap, PtrToBtfId, PtrToMapValue, Anything]
-    ),
+    )
+    .with_allowed_map_types(MT_CGRP_STORAGE),
     // 211: cgrp_storage_delete
     // C++ arg2: PTR_TO_BTF_ID
-    proto!("cgrp_storage_delete", Integer, [PtrToMap, PtrToBtfId]),
+    proto!("cgrp_storage_delete", Integer, [PtrToMap, PtrToBtfId])
+        .with_allowed_map_types(MT_CGRP_STORAGE),
 ];
 
 // ── Lookup functions ───────────────────────────────────────────────
@@ -1327,6 +1438,7 @@ pub fn is_helper_usable(
     n: i32,
     program_context: Option<&EbpfCtxDescriptor>,
     program_type_name: Option<&str>,
+    is_sleepable: bool,
 ) -> bool {
     if n < 0 || n >= PROTOTYPES.len() as i32 {
         return false;
@@ -1335,6 +1447,11 @@ pub fn is_helper_usable(
 
     // Explicitly unsupported.
     if proto.unsupported {
+        return false;
+    }
+
+    // Sleepable helpers are only usable in sleepable programs.
+    if proto.might_sleep && !is_sleepable {
         return false;
     }
 
@@ -1463,31 +1580,31 @@ mod tests {
 
     #[test]
     fn test_is_helper_usable_out_of_range() {
-        assert!(!is_helper_usable(-1, None, None));
-        assert!(!is_helper_usable(212, None, None));
-        assert!(!is_helper_usable(i32::MAX, None, None));
+        assert!(!is_helper_usable(-1, None, None, false));
+        assert!(!is_helper_usable(212, None, None, false));
+        assert!(!is_helper_usable(i32::MAX, None, None, false));
     }
 
     #[test]
     fn test_is_helper_usable_unsupported() {
         // dynptr_from_mem (197) is explicitly unsupported
-        assert!(!is_helper_usable(197, None, None));
+        assert!(!is_helper_usable(197, None, None, false));
     }
 
     #[test]
     fn test_is_helper_usable_no_context_required() {
         // get_prandom_u32 (7) has no context requirement, should be usable
-        assert!(is_helper_usable(7, None, None));
+        assert!(is_helper_usable(7, None, None, false));
     }
 
     #[test]
     fn test_is_helper_usable_context_match() {
         // skb_store_bytes (9) requires SK_BUFF context
-        assert!(is_helper_usable(9, Some(&SK_BUFF), None));
+        assert!(is_helper_usable(9, Some(&SK_BUFF), None, false));
         // Should fail with XDP context
-        assert!(!is_helper_usable(9, Some(&XDP_MD), None));
+        assert!(!is_helper_usable(9, Some(&XDP_MD), None, false));
         // Should fail with null context
-        assert!(!is_helper_usable(9, None, None));
+        assert!(!is_helper_usable(9, None, None, false));
     }
 
     #[test]
@@ -1499,24 +1616,51 @@ mod tests {
             end: 20 * 4,
             meta: 35 * 4,
         };
-        assert!(is_helper_usable(9, Some(&matching_ctx), None));
+        assert!(is_helper_usable(9, Some(&matching_ctx), None, false));
     }
 
     #[test]
     fn test_socket_cookie_program_type_gating() {
-        assert!(is_helper_usable(46, Some(&SK_BUFF), Some("socket_filter")));
+        assert!(is_helper_usable(
+            46,
+            Some(&SK_BUFF),
+            Some("socket_filter"),
+            false
+        ));
         assert!(is_helper_usable(
             46,
             Some(&SOCK_ADDR_DESCR),
-            Some("cgroup_sock_addr")
+            Some("cgroup_sock_addr"),
+            false
         ));
-        assert!(!is_helper_usable(46, Some(&XDP_MD), Some("xdp")));
-        assert!(!is_helper_usable(46, Some(&SK_BUFF), None));
+        assert!(!is_helper_usable(46, Some(&XDP_MD), Some("xdp"), false));
+        assert!(!is_helper_usable(46, Some(&SK_BUFF), None, false));
         assert!(!is_helper_usable(
             47,
             Some(&SOCK_ADDR_DESCR),
-            Some("cgroup_sock_addr")
+            Some("cgroup_sock_addr"),
+            false
         ));
+    }
+
+    #[test]
+    fn test_might_sleep_helpers_require_sleepable_program() {
+        // d_path (147), copy_from_user (148), ima_inode_hash (161),
+        // copy_from_user_task (191), ima_file_hash (193) all sleep.
+        for &id in &[147, 148, 161, 191, 193] {
+            assert!(
+                PROTOTYPES[id as usize].might_sleep,
+                "helper {id} should be marked might_sleep"
+            );
+            assert!(
+                !is_helper_usable(id, None, Some("tracing"), false),
+                "might_sleep helper {id} must be rejected in non-sleepable program"
+            );
+            assert!(
+                is_helper_usable(id, None, Some("tracing"), true),
+                "might_sleep helper {id} must be allowed in sleepable program"
+            );
+        }
     }
 
     #[test]

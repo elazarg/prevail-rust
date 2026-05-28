@@ -189,6 +189,8 @@ fn ptype_with_privilege(
         platform_specific_data: native_type,
         section_prefixes: prefixes.iter().map(|s| (*s).to_owned()).collect(),
         is_privileged,
+        // Set later by get_program_type_linux from the matched section prefix.
+        is_sleepable: false,
     }
 }
 
@@ -374,14 +376,25 @@ fn linux_program_types() -> Vec<EbpfProgramType> {
             "tracing",
             Some(&TRACING_DESCR),
             bpf_prog_type::TRACING,
-            &["fentry/", "fexit/", "fmod_ret/", "iter/", "tp_btf/"],
+            &[
+                "fentry/",
+                "fentry.s/",
+                "fexit/",
+                "fexit.s/",
+                "fmod_ret/",
+                "fmod_ret.s/",
+                "iter/",
+                "iter.s/",
+                "tp_btf/",
+                "tp_btf.s/",
+            ],
         ),
         // struct_ops callbacks receive function arguments as u64 array, same as fentry/fexit.
         ptype(
             "struct_ops",
             Some(&TRACING_DESCR),
             bpf_prog_type::STRUCT_OPS,
-            &["struct_ops/"],
+            &["struct_ops/", "struct_ops.s/"],
         ),
         ptype(
             "lsm",
@@ -420,6 +433,7 @@ fn builtin_call(name: &'static str, id: i32, singles: Vec<ArgSingle>, pairs: Vec
     Call {
         func: id,
         kind: CallKind::Builtin,
+        module: 0,
         name: Rc::from(name),
         is_supported: true,
         unsupported_reason: Rc::from(""),
@@ -453,7 +467,11 @@ fn get_program_type_linux(section: &str, path: &str) -> EbpfProgramType {
     for t in &types {
         for prefix in &t.section_prefixes {
             if section.starts_with(prefix.as_str()) {
-                return t.clone();
+                let mut result = t.clone();
+                // A program is sleepable if its matching prefix uses the .s/ marker
+                // (e.g. fentry.s/, lsm.s/) or it is a syscall program (always sleepable).
+                result.is_sleepable = prefix.contains(".s/") || result.name == "syscall";
+                return result;
             }
         }
     }
@@ -773,6 +791,8 @@ pub struct LinuxPlatform {
     pub ctx_descriptor: Option<&'static EbpfCtxDescriptor>,
     /// Program type name for helper availability gating when context alone is ambiguous.
     pub program_type_name: Option<String>,
+    /// Whether the current program runs in sleepable context (gates `might_sleep` helpers).
+    pub is_sleepable: bool,
 }
 
 impl LinuxPlatform {
@@ -782,12 +802,14 @@ impl LinuxPlatform {
             conformance_groups: conformance_groups::DEFAULT_GROUPS | conformance_groups::PACKET,
             ctx_descriptor: None,
             program_type_name: None,
+            is_sleepable: false,
         }
     }
 
     pub fn set_program_type(&mut self, program_type: &EbpfProgramType) {
         self.ctx_descriptor = program_type.ctx_descriptor;
         self.program_type_name = Some(program_type.name.clone());
+        self.is_sleepable = program_type.is_sleepable;
     }
 }
 
@@ -811,7 +833,12 @@ impl EbpfPlatform for LinuxPlatform {
     }
 
     fn is_helper_usable(&self, n: i32) -> bool {
-        spec_prototypes::is_helper_usable(n, self.ctx_descriptor, self.program_type_name.as_deref())
+        spec_prototypes::is_helper_usable(
+            n,
+            self.ctx_descriptor,
+            self.program_type_name.as_deref(),
+            self.is_sleepable,
+        )
     }
 
     fn resolve_ksym_btf_id(&self, name: &str) -> Option<KsymBtfId> {
@@ -961,6 +988,7 @@ impl EbpfPlatform for LinuxPlatform {
             LINUX_BUILTIN_CALL_EXTERN_UNSPEC => Some(Call {
                 func: id,
                 kind: CallKind::Builtin,
+                module: 0,
                 name: Rc::from("extern_unspecified"),
                 is_supported: true,
                 unsupported_reason: Rc::from(""),
@@ -1001,8 +1029,13 @@ impl EbpfPlatform for LinuxPlatform {
         }
     }
 
-    fn resolve_kfunc_call(&self, btf_id: i32, info: &ProgramInfo) -> Result<Call, String> {
-        kfunc::make_kfunc_call_result(btf_id, Some(info))
+    fn resolve_kfunc_call(
+        &self,
+        btf_id: i32,
+        module: i16,
+        info: &ProgramInfo,
+    ) -> Result<Call, String> {
+        kfunc::make_kfunc_call_result(btf_id, module, Some(info))
     }
 
     fn map_record_size(&self) -> usize {

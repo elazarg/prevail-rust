@@ -21,8 +21,8 @@ use crate::crab::var_registry::VariableRegistry;
 use crate::ir::assertions::get_assertions;
 use crate::ir::syntax::{
     AccessType, Addable, Assertion, BoundedLoopCount, Comparable, FuncConstraint, Imm, Instruction,
-    TypeConstraint, ValidAccess, ValidCallbackTarget, ValidDivisor, ValidMapKeyValue, ValidSize,
-    ValidStore, Value, ZeroCtxOffset,
+    TypeConstraint, ValidAccess, ValidArgZero, ValidCallbackTarget, ValidDivisor, ValidMapKeyValue,
+    ValidMapType, ValidSize, ValidStore, Value, ZeroCtxOffset,
 };
 use crate::ir::unmarshal::make_call;
 use crate::spec::vm_isa::R10_STACK_POINTER;
@@ -72,6 +72,8 @@ impl<'a> EbpfChecker<'a> {
             Assertion::ValidCallbackTarget(a) => self.check_valid_callback_target(a),
             Assertion::ValidMapKeyValue(a) => self.check_valid_map_key_value(a),
             Assertion::ValidSize(a) => self.check_valid_size(a),
+            Assertion::ValidArgZero(a) => self.check_valid_arg_zero(a),
+            Assertion::ValidMapType(a) => self.check_valid_map_type(a),
             Assertion::ValidStore(a) => self.check_valid_store(a),
             Assertion::ZeroCtxOffset(a) => self.check_zero_ctx_offset(a),
         }
@@ -419,7 +421,7 @@ impl<'a> EbpfChecker<'a> {
                     self.check_access_shared(lb, ub, r.shared_region_size)?;
                     if !is_comparison_check && !s.or_null {
                         self.require_value(
-                            lt(LinearExpression::from(0), LinearExpression::from(r.svalue)),
+                            lt(LinearExpression::from(0), LinearExpression::from(r.uvalue)),
                             "Possible null access",
                         )?;
                     }
@@ -473,7 +475,7 @@ impl<'a> EbpfChecker<'a> {
                     self.check_access_shared(lb, ub, r.alloc_mem_size)?;
                     if !is_comparison_check && !s.or_null {
                         self.require_value(
-                            lt(LinearExpression::from(0), LinearExpression::from(r.svalue)),
+                            lt(LinearExpression::from(0), LinearExpression::from(r.uvalue)),
                             "Possible null access",
                         )?;
                     }
@@ -619,7 +621,7 @@ impl<'a> EbpfChecker<'a> {
                     self.require_value(
                         lt(
                             LinearExpression::from(0),
-                            LinearExpression::from(access_reg.svalue),
+                            LinearExpression::from(access_reg.uvalue),
                         ),
                         "Possible null access",
                     )?;
@@ -629,6 +631,42 @@ impl<'a> EbpfChecker<'a> {
                         .throw_fail("Only stack, packet, or shared can be used as a parameter");
                 }
             }
+        }
+        Ok(())
+    }
+
+    fn check_valid_arg_zero(&mut self, s: &ValidArgZero) -> Result<(), VerificationError> {
+        let r = reg_pack(&s.reg, self.registry);
+        self.require_value(
+            expr_eq(LinearExpression::from(r.svalue), LinearExpression::from(0)),
+            "Argument must be zero",
+        )
+    }
+
+    fn check_valid_map_type(&mut self, s: &ValidMapType) -> Result<(), VerificationError> {
+        if self.dom.state.is_bottom() {
+            return Ok(());
+        }
+        let map_type = match self
+            .dom
+            .get_map_type(&s.map_fd_reg, self.ctx, self.registry)
+        {
+            // Map type 0 (UNSPEC) is treated as "unknown" — accept silently to avoid
+            // false positives from incomplete ELF metadata.
+            Some(t) if t != 0 => t,
+            _ => return Ok(()),
+        };
+        if map_type >= 64 {
+            return self.throw_fail(&format!(
+                "map type {map_type} is out of supported range for {}",
+                s.helper_name
+            ));
+        }
+        if s.allowed_map_types & (1u64 << map_type) == 0 {
+            return self.throw_fail(&format!(
+                "map type {map_type} is not allowed for {}",
+                s.helper_name
+            ));
         }
         Ok(())
     }
@@ -656,7 +694,7 @@ impl<'a> EbpfChecker<'a> {
             .dom
             .state
             .values
-            .eval_interval_var(reg_pack(&s.reg, self.registry).svalue, self.registry);
+            .eval_interval_var(reg_pack(&s.reg, self.registry).uvalue, self.registry);
         let callback_target = callback_interval.singleton().and_then(|n| n.to_i64());
         if callback_target.is_none() {
             return self.throw_fail("callback function pointer must be a singleton code address");

@@ -17,8 +17,9 @@ use super::syntax::{
     AccessType, Addable, ArgPairKind, ArgSingleKind, Assertion, Assume, Atomic, Bin, BinOp,
     BoundedLoopCount, Call, CallBtf, CallLocal, Callx, Comparable, Condition, ConditionOp, Exit,
     FuncConstraint, Imm, IncrementLoopCounter, Instruction, Jmp, LoadMapAddress, LoadMapFd,
-    LoadPseudo, Mem, Packet, Reg, TypeConstraint, Un, Undefined, ValidAccess, ValidCallbackTarget,
-    ValidDivisor, ValidMapKeyValue, ValidSize, ValidStore, Value, ZeroCtxOffset,
+    LoadPseudo, Mem, Packet, Reg, TypeConstraint, Un, Undefined, ValidAccess, ValidArgZero,
+    ValidCallbackTarget, ValidDivisor, ValidMapKeyValue, ValidMapType, ValidSize, ValidStore,
+    Value, ZeroCtxOffset,
 };
 
 // ---------------------------------------------------------------------------
@@ -268,6 +269,19 @@ fn assertions_call(ins: &Call, info: &ProgramInfo, label: &Option<Label>) -> Vec
         }
     }
 
+    // If the helper restricts which map types may be passed to its MAP_FD argument,
+    // emit a ValidMapType assertion that the checker resolves against the concrete
+    // map type at verification time.
+    if let Some(map_fd_reg) = map_fd_reg
+        && ins.contract.allowed_map_types != 0
+    {
+        res.push(Assertion::ValidMapType(ValidMapType {
+            map_fd_reg,
+            allowed_map_types: ins.contract.allowed_map_types,
+            helper_name: ins.name.clone(),
+        }));
+    }
+
     for arg in &ins.contract.pairs {
         let group = if arg.or_null {
             TypeGroup::MemOrNum
@@ -300,6 +314,19 @@ fn assertions_call(ins: &Call, info: &ProgramInfo, label: &Option<Label>) -> Vec
             access_type,
         )));
         // (CPP) TODO: reg is constant
+    }
+
+    // Per-argument zero-value constraints (e.g. kernel-required flags=0 helpers).
+    // Bit i of zero_args_mask covers register R(i+1).
+    for i in 0..5u8 {
+        if ins.contract.zero_args_mask & (1 << i) != 0 {
+            let arg_reg = Reg { v: i + 1 };
+            res.push(Assertion::TypeConstraint(TypeConstraint {
+                reg: arg_reg,
+                types: TypeGroup::Number,
+            }));
+            res.push(Assertion::ValidArgZero(ValidArgZero { reg: arg_reg }));
+        }
     }
 
     res

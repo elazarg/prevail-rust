@@ -64,10 +64,19 @@ pub trait EbpfPlatform {
         None
     }
 
-    /// Resolve a kfunc BTF id into a call contract.
+    /// Resolve a kfunc identified by (`btf_id`, `module`) into a call contract.
+    ///
+    /// `module` is the kernel module identifier (0 == vmlinux), matching
+    /// `CallBtf::module`. BTF ids are not unique across modules, so two modules
+    /// may legitimately use the same id for different kfuncs.
     ///
     /// Platforms that do not model kfuncs should return an error explaining why.
-    fn resolve_kfunc_call(&self, _btf_id: i32, _info: &ProgramInfo) -> Result<Call, String> {
+    fn resolve_kfunc_call(
+        &self,
+        _btf_id: i32,
+        _module: i16,
+        _info: &ProgramInfo,
+    ) -> Result<Call, String> {
         Err("kfunc resolution is unavailable on this platform".to_string())
     }
 
