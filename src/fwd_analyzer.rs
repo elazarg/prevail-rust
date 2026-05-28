@@ -489,14 +489,20 @@ impl<'a, P: Program> FwdFixpointIterator<'a, P> {
 
 /// Run the forward fixpoint analysis on a program using the default entry state.
 ///
-/// The entry state is initialized with `EbpfDomain::setup_entry`, using
-/// `ctx.runtime.setup_constraints` to decide whether R1 is initialized.
+/// The entry state is initialized with `EbpfDomain::setup_entry`. Whether R1 is
+/// pre-initialised to the context pointer is derived from the program's type
+/// (it has a non-empty context descriptor), not from the verifier run options.
 pub fn analyze<P: Program>(
     prog: &P,
     ctx: &DomainContext,
     registry: &mut VariableRegistry,
 ) -> AnalysisResult {
-    let entry_inv = EbpfDomain::setup_entry(ctx.runtime.setup_constraints, ctx, registry);
+    let init_r1 = ctx
+        .program_info
+        .program_type
+        .ctx_descriptor
+        .is_some_and(|d| d.size > 0);
+    let entry_inv = EbpfDomain::setup_entry(init_r1, ctx, registry);
     FwdFixpointIterator::run(prog, entry_inv, ctx, registry)
 }
 
