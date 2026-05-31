@@ -13,7 +13,7 @@
 //! to all methods that need it. The map is shared across all domain instances
 //! during a single analysis run.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
 use crate::arith::linear_expression::LinearExpression;
@@ -59,61 +59,71 @@ impl Cell {
 }
 
 // ============================================================================
-// OffsetMap: cell tracking with pluggable backing store
+// OffsetMap: sparse cell tracking
 // ============================================================================
-//
-// The backing store is selected at compile time via feature flags (see Cargo.toml).
-// Default: bucket array. Alternatives: om-btreemap, om-sorted-vec, etc.
-//
-// Empirically chosen via trace-driven micro-benchmarks (see benches/offset_map_bench.rs)
-// and macro-benchmarks (cargo xtask bench before-after).
 
-/// Maps stack offsets to sets of cell sizes.
+/// Maps stack byte offsets to the set of cell sizes starting at each offset.
 ///
-/// Uses a bucket array (`Vec<Vec<u32>>`) indexed by byte offset. Each bucket
-/// stores the set of cell sizes active at that offset. Empirically chosen via
-/// trace-driven micro-benchmarks (see `benches/offset_map_bench.rs`) and
-/// macro-benchmarks (`cargo xtask bench before-after`). All 8 candidates
-/// (BTreeMap, sorted vec, unsorted vec, bucket array, FxHashSet, interavl,
-/// lapper, patricia) showed equivalent macro-level performance — OffsetMap
-/// operations are <1% of total verifier runtime. Bucket array was selected
-/// for its micro-benchmark advantage (1.6-8.5x over BTreeMap) and simplicity.
+/// Backed by a sparse `BTreeMap<offset, sizes>`: only occupied offsets are
+/// stored, so memory is proportional to the number of live cells (~3 median)
+/// rather than to the stack arena size.
+///
+/// This matters because the cell registry is per-`ArrayDomain` (see
+/// [`ArrayDomain`]) and is therefore cloned and stored at every program point
+/// and on every join/widen. The previous dense `Vec<Vec<u32>>` sized to
+/// `total_stack_size` allocated one bucket header per stack byte regardless of
+/// occupancy; with the default 4096-byte arena
+/// (`max_call_stack_frames * subprogram_stack_size`) that is ~98 KB of mostly
+/// empty buckets per `OffsetMap`, which on a large program multiplied across
+/// thousands of stored invariants into multi-GB OOMs. The sparse map keeps each
+/// clone proportional to the handful of cells actually present.
+///
+/// The `BTreeMap`'s ordered keys give the backward and forward overlap scans
+/// their iteration order directly. Trace-driven micro-benchmarks found all
+/// candidate representations macro-equivalent (OffsetMap ops are <1% of verifier
+/// runtime), so the choice is governed by clone cost, not lookup speed.
 #[derive(Clone, Debug)]
 pub struct OffsetMap {
-    /// For each stack byte offset, the set of cell sizes starting there.
-    sizes: Vec<Vec<u32>>,
+    /// Stack arena size in bytes. Offsets at or beyond this are out of range
+    /// and never stored, mirroring the verifier's bounds-checked stack.
+    total_stack_size: usize,
+    /// Sparse map from stack byte offset to the set of cell sizes starting
+    /// there. A bucket is never retained empty (see `remove_cells`).
+    sizes: BTreeMap<u64, Vec<u32>>,
 }
 
 impl OffsetMap {
     pub fn new(total_stack_size: i32) -> Self {
-        let n = total_stack_size.max(0) as usize;
         OffsetMap {
-            sizes: vec![Vec::new(); n],
+            total_stack_size: total_stack_size.max(0) as usize,
+            sizes: BTreeMap::new(),
         }
     }
 }
 
 impl OffsetMap {
+    /// Size of the stack arena this map is scoped to (not the live-cell count).
     pub fn len(&self) -> usize {
-        self.sizes.len()
+        self.total_stack_size
     }
 
     pub fn is_empty(&self) -> bool {
-        self.sizes.is_empty()
+        self.total_stack_size == 0
     }
 
     fn remove_cells(&mut self, cells: &[Cell]) {
         for c in cells {
-            let off = c.offset as usize;
-            if off < self.sizes.len() {
-                self.sizes[off].retain(|&s| s != c.size);
+            if let Some(bucket) = self.sizes.get_mut(&c.offset) {
+                bucket.retain(|&s| s != c.size);
+                if bucket.is_empty() {
+                    self.sizes.remove(&c.offset);
+                }
             }
         }
     }
 
     fn get_cell(&self, offset: u64, size: u32) -> Option<Cell> {
-        let off = offset as usize;
-        if off < self.sizes.len() && self.sizes[off].contains(&size) {
+        if self.sizes.get(&offset).is_some_and(|b| b.contains(&size)) {
             Some(Cell::new(offset, size))
         } else {
             None
@@ -121,59 +131,55 @@ impl OffsetMap {
     }
 
     fn mk_cell(&mut self, offset: u64, size: u32) -> Cell {
-        let off = offset as usize;
-        if off < self.sizes.len() && !self.sizes[off].contains(&size) {
-            self.sizes[off].push(size);
-        }
+        self.insert_cell(Cell::new(offset, size));
         Cell::new(offset, size)
     }
 
     fn insert_cell(&mut self, cell: Cell) {
-        let off = cell.offset as usize;
-        if off < self.sizes.len() && !self.sizes[off].contains(&cell.size) {
-            self.sizes[off].push(cell.size);
+        if (cell.offset as usize) < self.total_stack_size {
+            let bucket = self.sizes.entry(cell.offset).or_default();
+            if !bucket.contains(&cell.size) {
+                bucket.push(cell.size);
+            }
         }
     }
 
     fn iter_cells(&self) -> impl Iterator<Item = Cell> + '_ {
         self.sizes
             .iter()
-            .enumerate()
-            .flat_map(|(off, sizes)| sizes.iter().map(move |&s| Cell::new(off as u64, s)))
+            .flat_map(|(&off, sizes)| sizes.iter().map(move |&s| Cell::new(off, s)))
     }
 
     /// Get all cells that overlap with `[offset, offset + size)`, excluding the
     /// exact cell `(offset, size)` itself.
     ///
-    /// Backward scan visits all non-empty buckets from `offset` down to 0
+    /// Backward scan visits all occupied offsets from `offset` down to 0
     /// without early termination — a bucket with small cells may not overlap
     /// while an earlier bucket with larger cells does (upstream PR #1008).
     /// The map is tiny (~3 entries median) so a full scan has negligible cost.
     ///
-    /// Forward scan covers `[offset + 1, offset + size)`. All offsets in this
-    /// range satisfy `off < offset + size`, so any cell starting there overlaps.
-    /// The scan cannot reach offsets `>= offset + size` (bounded by `limit`),
-    /// so early termination is unnecessary.
+    /// Forward scan covers `(offset, offset + size)`. All offsets in this range
+    /// satisfy `off < offset + size`, so any cell starting there overlaps.
     fn get_overlap_cells(&self, offset: u64, size: u32) -> Vec<Cell> {
         let mut out = Vec::new();
-        let len = self.sizes.len();
         let end = offset + size as u64;
 
-        // Backward scan: all non-empty buckets at offsets <= offset.
-        for off in (0..=(offset as usize).min(len - 1)).rev() {
-            for &s in &self.sizes[off] {
-                if off as u64 + s as u64 > offset && (off as u64 != offset || s != size) {
-                    out.push(Cell::new(off as u64, s));
+        // Backward scan: all occupied offsets <= offset, in descending order.
+        for (&off, bucket) in self.sizes.range(..=offset).rev() {
+            for &s in bucket {
+                if off + s as u64 > offset && (off != offset || s != size) {
+                    out.push(Cell::new(off, s));
                 }
             }
         }
 
-        // Forward scan: buckets at offsets in (offset, offset + size).
-        let start = (offset as usize).saturating_add(1);
-        let limit = (end as usize).min(len);
-        for off in start..limit {
-            for &s in &self.sizes[off] {
-                out.push(Cell::new(off as u64, s));
+        // Forward scan: occupied offsets in (offset, offset + size).
+        let fwd_start = offset + 1;
+        if fwd_start < end {
+            for (&off, bucket) in self.sizes.range(fwd_start..end) {
+                for &s in bucket {
+                    out.push(Cell::new(off, s));
+                }
             }
         }
 
@@ -183,15 +189,14 @@ impl OffsetMap {
     /// Get all cells that may overlap with the given interval range.
     fn get_overlap_cells_symbolic(&self, range: &Interval) -> Vec<Cell> {
         let mut out = Vec::new();
-        for (off, bucket) in self.sizes.iter().enumerate() {
-            if bucket.is_empty() {
+        for (&off, bucket) in &self.sizes {
+            let Some(&max_size) = bucket.iter().max() else {
                 continue;
-            }
-            let max_size = *bucket.iter().max().unwrap();
-            let probe = Cell::new(off as u64, max_size);
+            };
+            let probe = Cell::new(off, max_size);
             if probe.symbolic_overlap(range) {
                 for &s in bucket {
-                    out.push(Cell::new(off as u64, s));
+                    out.push(Cell::new(off, s));
                 }
             }
         }
