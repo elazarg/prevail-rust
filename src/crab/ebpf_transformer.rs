@@ -989,12 +989,24 @@ fn add_to_reg(
             finite_width,
             registry,
         );
+        if !dom.state.types.is_in_group(dst_reg, TS_NUM, registry) {
+            // The destination may also be a pointer (a {number, pointer} union). The numeric
+            // path above does not advance any pointer offset, so invalidate them rather than
+            // leaving a stale offset that a later bounds check would reason from.
+            dom.state.havoc_offsets(dst_reg, registry);
+        }
     } else {
         // Pointer-only: advance the pointer's offset (e.g. packet_offset) and
         // drive svalue from uvalue+imm. svalue must not be touched as a signed
         // value here — it carries no meaning for non-T_NUM registers.
         if let Some(offset) = dom.state.get_type_offset_variable(dst_reg, registry) {
             dom.state.values.inner_mut().add_num(offset, &n, registry);
+        } else {
+            // The register's typeset is non-singleton, so we cannot pick a single offset
+            // variable to update. Conservatively invalidate all offset variables rather than
+            // leaving them stale, which would make subsequent bounds checks use a pre-add
+            // offset and accept out-of-bounds accesses. Mirrors shl()/lshr()/ashr().
+            dom.state.havoc_offsets(dst_reg, registry);
         }
         dom.state.values.inner_mut().apply_unsigned_var_num(
             FiniteBinOp::Arith(ArithBinOp::ADD),
@@ -2196,6 +2208,12 @@ fn transform_bin(
                                     finite_width,
                                     registry,
                                 );
+                                if !dom.state.types.is_in_group(&bin.dst, TS_NUM, registry) {
+                                    // {number, pointer} union: the numeric path does not advance any
+                                    // pointer offset, so invalidate them rather than leaving a stale
+                                    // offset (see add()).
+                                    dom.state.havoc_offsets(&bin.dst, registry);
+                                }
                             } else {
                                 if let Some(dst_offset) =
                                     dom.state.get_type_offset_variable(&bin.dst, registry)
@@ -2204,6 +2222,10 @@ fn transform_bin(
                                         .values
                                         .inner_mut()
                                         .sub_var(dst_offset, src.svalue, registry);
+                                } else {
+                                    // Non-singleton typeset: no single offset variable to update.
+                                    // Invalidate all offsets rather than leaving them stale (see add()).
+                                    dom.state.havoc_offsets(&bin.dst, registry);
                                 }
                                 dom.state.values.inner_mut().apply_unsigned_var_var(
                                     FiniteBinOp::Arith(ArithBinOp::SUB),
@@ -2435,13 +2457,28 @@ fn transform_bin(
     }
 
     if !bin.is64 {
-        let dst = reg_pack(&bin.dst, registry);
-        dom.state.values.inner_mut().bitwise_and_num(
-            dst.svalue,
-            dst.uvalue,
-            &Number::from(u32::MAX as i64),
-            registry,
-        );
+        if dom.state.types.is_in_group(&bin.dst, TS_NUM, registry) {
+            // A genuine scalar: the 32-bit result is zero-extended, so masking off the upper
+            // half models it precisely.
+            let dst = reg_pack(&bin.dst, registry);
+            dom.state.values.inner_mut().bitwise_and_num(
+                dst.svalue,
+                dst.uvalue,
+                &Number::from(u32::MAX as i64),
+                registry,
+            );
+        } else {
+            // The input may be a pointer, so a 32-bit op yields the low 32 bits of a (possibly
+            // kernel) address. That value is neither a usable pointer (the upper half is gone)
+            // nor a safe-to-leak scalar (it carries pointer bits), and this type model has no
+            // "tainted scalar". Retyping it as T_NUM would launder the address into a number
+            // that could be stored or returned, leaking kernel addresses; keeping it a pointer
+            // would let a later dereference pass. So forget it entirely (unknown type): a later
+            // dereference then fails as a non-pointer and a later leak fails as a non-number,
+            // matching the kernel, which forbids the operation outright. Mirrors the immediate
+            // ADD/SUB and MOV paths.
+            dom.state.havoc_register(&bin.dst, registry);
+        }
     }
     Ok(())
 }

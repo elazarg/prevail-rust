@@ -521,6 +521,9 @@ fn assertions_atomic(ins: &Atomic, label: &Option<Label>) -> Vec<Assertion> {
             reg: ins.access.basereg,
             types: TypeGroup::Pointer,
         }),
+        // An atomic is a read-modify-write: model it as a write so that, like a plain
+        // store, it is rejected against read-only context pointer fields (a non-write
+        // access_type would let an atomic corrupt e.g. ctx->data unchecked).
         Assertion::ValidAccess(make_valid_access(
             label,
             ins.access.basereg,
@@ -529,7 +532,7 @@ fn assertions_atomic(ins: &Atomic, label: &Option<Label>) -> Vec<Assertion> {
                 v: ins.access.width.bytes() as u32 as u64,
             }),
             false,
-            AccessType::Compare,
+            AccessType::Write,
         )),
     ]
 }

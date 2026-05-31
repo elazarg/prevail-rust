@@ -5,7 +5,7 @@
 //!
 //! Ported from `src/crab/ebpf_checker.cpp`.
 
-use crate::arith::linear_constraint::{LinearConstraint, expr_eq, geq, leq, lt};
+use crate::arith::linear_constraint::{LinearConstraint, expr_eq, geq, gt, leq, lt};
 use crate::arith::linear_expression::LinearExpression;
 use crate::arith::number::Number;
 use crate::arith::variable::Variable;
@@ -155,6 +155,61 @@ impl<'a> EbpfChecker<'a> {
             leq(ub, LinearExpression::from(desc_size as i64)),
             &format!("Upper bound must be at most {}", desc_size),
         )
+    }
+
+    /// The data/data_end/meta fields are read-only pointer slots: a *load* of those
+    /// offsets synthesizes a typed packet pointer (see do_load_ctx). Writes are not
+    /// tracked by the abstract transformer (do_mem_store models only stack stores),
+    /// so an accepted write to e.g. ctx->data followed by a reload would hand out a
+    /// fresh "valid" packet pointer for a field the program corrupted at runtime,
+    /// a false PASS for an out-of-bounds dereference. Writes to other (scalar)
+    /// context fields are sound, since their loads are havoced to numbers, and real
+    /// programs do write them; so reject only writes that may overlap a pointer
+    /// slot. A write of [lb, ub) overlaps slot [f, f + field_width) unless we can
+    /// prove it lies entirely before (ub <= f) or entirely after (lb >= f + width).
+    ///
+    /// field_width is the size of a pointer slot, taken as end - data: this is the
+    /// data/data_end adjacency that do_load_ctx also relies on. If a descriptor ever
+    /// violated it (non-positive width), the overlap math would be meaningless, so
+    /// fall back to rejecting the write outright rather than reasoning from a bogus
+    /// slot width.
+    fn check_ctx_write_not_pointer_field(
+        &self,
+        lb: &LinearExpression,
+        ub: &LinearExpression,
+    ) -> Result<(), VerificationError> {
+        let desc = self
+            .ctx
+            .program_info
+            .program_type
+            .ctx_descriptor
+            .expect("missing program context descriptor");
+        if desc.end < 0 {
+            return Ok(());
+        }
+        let field_width = desc.end - desc.data;
+        if field_width <= 0 {
+            return self.throw_fail("Cannot write to context with unexpected pointer-field layout");
+        }
+        let may_overlap = |field_offset: i32| -> bool {
+            if field_offset < 0 {
+                return false;
+            }
+            self.dom.state.values.intersect(
+                &gt(ub.clone(), LinearExpression::from(field_offset as i64)),
+                self.registry,
+            ) && self.dom.state.values.intersect(
+                &lt(
+                    lb.clone(),
+                    LinearExpression::from((field_offset + field_width) as i64),
+                ),
+                self.registry,
+            )
+        };
+        if may_overlap(desc.data) || may_overlap(desc.end) || may_overlap(desc.meta) {
+            return self.throw_fail("Cannot write to context pointer field");
+        }
+        Ok(())
     }
 
     fn check_access_packet(
@@ -414,6 +469,9 @@ impl<'a> EbpfChecker<'a> {
                 }
                 TypeEncoding::TCtx => {
                     let (lb, ub) = self.lb_ub_access_pair(s, r.ctx_offset);
+                    if s.access_type == AccessType::Write {
+                        self.check_ctx_write_not_pointer_field(&lb, &ub)?;
+                    }
                     self.check_access_context(lb, ub)?;
                 }
                 TypeEncoding::TShared => {

@@ -673,6 +673,7 @@ yaml_test_suite!(yaml_add);
 yaml_test_suite!(yaml_assign);
 yaml_test_suite!(yaml_atomic);
 yaml_test_suite!(yaml_bitop);
+yaml_test_suite!(yaml_ctx);
 yaml_test_suite!(yaml_call);
 yaml_test_suite!(yaml_calllocal);
 yaml_test_suite!(yaml_callx);
