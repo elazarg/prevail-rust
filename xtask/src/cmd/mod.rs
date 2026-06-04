@@ -16,6 +16,7 @@ pub mod pre_push;
 pub mod profile;
 pub mod run_upstream;
 pub mod runperf;
+pub mod security;
 pub mod session_start;
 pub mod test_cert;
 pub mod upstream_diff;

@@ -11,6 +11,8 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 arbitrary = { version = "1", features = ["derive"] }
 prevail = { path = ".." }
+# Synthesizing structurally-valid eBPF ELFs for fuzz_elf_build.
+object = { version = "0.36", features = ["write"] }
 
 [workspace]
 members = ["."]
@@ -38,4 +40,14 @@ doc = false
 [[bin]]
 name = "fuzz_end_to_end"
 path = "fuzz_targets/fuzz_end_to_end.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_program"
+path = "fuzz_targets/fuzz_program.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_elf_build"
+path = "fuzz_targets/fuzz_elf_build.rs"
 doc = false

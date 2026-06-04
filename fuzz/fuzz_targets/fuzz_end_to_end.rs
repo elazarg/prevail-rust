@@ -23,30 +23,38 @@ fuzz_target!(|data: &[u8]| {
         ..EbpfVerifierOptions::default()
     };
 
-    let raw_progs = match read_elf(data, "fuzz.o", "", "", &opts, &mut platform) {
+    let mut raw_progs = match read_elf(data, "fuzz.o", "", "", &opts, &mut platform) {
         Ok(progs) => progs,
         Err(_) => return,
     };
 
-    for raw_prog in &raw_progs {
+    for raw_prog in &mut raw_progs {
         platform.map_descriptors = raw_prog.info.map_descriptors.clone();
-        platform.context_descriptor = raw_prog.info.program_type.context_descriptor;
 
-        let info = &raw_prog.info;
         let mut notes = Vec::new();
-        let inst_seq =
-            match unmarshal::unmarshal(&raw_prog.prog, &mut notes, info, &platform, &opts) {
-                Ok(seq) => seq,
-                Err(_) => continue,
-            };
-
-        let program = match Program::from_sequence(&inst_seq, info, &platform, &opts) {
-            Ok(prog) => prog,
+        let inst_seq = match unmarshal::unmarshal(
+            &raw_prog.prog,
+            &mut notes,
+            &raw_prog.info,
+            &platform,
+            &opts,
+        ) {
+            Ok(seq) => seq,
             Err(_) => continue,
         };
 
+        // `from_sequence` mutates `info` (callback-target sets); rebind read-only.
+        let program = match Program::from_sequence(&inst_seq, &mut raw_prog.info, &platform, &opts)
+        {
+            Ok(prog) => prog,
+            Err(_) => continue,
+        };
+        let info = &raw_prog.info;
+
         let ctx = DomainContext {
             program_info: info,
+            program: &program,
+            runtime: &opts.runtime,
             options: &opts,
             platform: &platform,
         };

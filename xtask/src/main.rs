@@ -79,6 +79,11 @@ enum Command {
     },
     /// Generate seed corpora for fuzz targets.
     GenCorpus,
+    /// White-hat security harness commands.
+    Security {
+        #[command(subcommand)]
+        action: SecurityAction,
+    },
     /// Run session-start initialization (for remote environments).
     SessionStart,
     /// Run a test suite with certification-aware caching.
@@ -204,6 +209,30 @@ enum SubmoduleAction {
     Update,
 }
 
+#[derive(Subcommand)]
+enum SecurityAction {
+    /// Differential mutation fuzzing: mutate real eBPF objects and compare the
+    /// Rust verifier against the C++ upstream, bucketing divergences by severity
+    /// (soundness, precision, termination, crash-rust, crash-cpp, loader).
+    DiffFuzz {
+        /// Maximum number of mutants to evaluate (0 = unbounded; bound by --time).
+        #[arg(long, default_value_t = 2000)]
+        iters: u64,
+        /// Wall-clock budget in seconds (0 = unbounded; bound by --iters).
+        #[arg(long, default_value_t = 0)]
+        time: u64,
+        /// Per-verifier timeout in seconds.
+        #[arg(long, default_value_t = 10)]
+        timeout: u64,
+        /// PRNG seed for a reproducible campaign.
+        #[arg(long, default_value_t = 0x9E3779B97F4A7C15)]
+        seed: u64,
+        /// Maximum reproducers saved per finding class.
+        #[arg(long = "max-per-class", default_value_t = 25)]
+        max_per_class: usize,
+    },
+}
+
 fn main() {
     let cli = Cli::parse();
     if let Err(e) = run(cli) {
@@ -280,6 +309,24 @@ fn run(cli: Cli) -> Result<()> {
             ),
         },
         Command::GenCorpus => cmd::gen_corpus::run(&root),
+        Command::Security { action } => match action {
+            SecurityAction::DiffFuzz {
+                iters,
+                time,
+                timeout,
+                seed,
+                max_per_class,
+            } => cmd::security::run_diff_fuzz(
+                &root,
+                cmd::security::DiffFuzzArgs {
+                    iters,
+                    time_secs: time,
+                    timeout_secs: timeout,
+                    seed,
+                    max_per_class,
+                },
+            ),
+        },
         Command::SessionStart => cmd::session_start::run(&root),
         Command::Test {
             suite,

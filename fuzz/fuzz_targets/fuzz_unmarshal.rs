@@ -7,9 +7,17 @@ use libfuzzer_sys::fuzz_target;
 use prevail::ir::unmarshal::unmarshal;
 use prevail::linux::linux_platform::LinuxPlatform;
 use prevail::spec::config::EbpfVerifierOptions;
-use prevail::spec::ebpf_base::EbpfContextDescriptor;
-use prevail::spec::type_descriptors::ProgramInfo;
+use prevail::spec::ebpf_base::EbpfCtxDescriptor;
+use prevail::spec::type_descriptors::{EbpfProgramType, ProgramInfo};
 use prevail::spec::vm_isa::EbpfInst;
+
+/// `'static` context descriptor borrowed by every iteration (no per-run leak).
+static CTX_DESC: EbpfCtxDescriptor = EbpfCtxDescriptor {
+    size: 0,
+    data: -1,
+    end: -1,
+    meta: -1,
+};
 
 #[derive(Debug, Arbitrary)]
 struct FuzzInput {
@@ -39,14 +47,17 @@ fuzz_target!(|input: FuzzInput| {
         })
         .collect();
 
-    let ctx_desc = EbpfContextDescriptor {
-        size: 0,
-        data: -1,
-        end: -1,
-        meta: -1,
+    let info = ProgramInfo {
+        program_type: EbpfProgramType {
+            name: "fuzz".to_string(),
+            ctx_descriptor: Some(&CTX_DESC),
+            platform_specific_data: 0,
+            section_prefixes: vec![],
+            is_privileged: false,
+            is_sleepable: false,
+        },
+        ..ProgramInfo::default()
     };
-    let mut info = ProgramInfo::default();
-    info.program_type.context_descriptor = &ctx_desc;
 
     let platform = LinuxPlatform::new();
     let opts = EbpfVerifierOptions::default();
