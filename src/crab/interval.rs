@@ -289,9 +289,17 @@ impl Interval {
             let c = Number::from(n.narrow_to_i64());
             return if c == 1i64 {
                 *self
-            } else if c != 0i64 {
+            } else if c > 0i64 {
                 Interval::new(self.lb / Bound::Finite(c), self.ub / Bound::Finite(c))
+            } else if c < 0i64 {
+                // Division by a negative constant reverses monotonicity, so the
+                // endpoints swap. This deliberately diverges from upstream, whose
+                // `sdiv` omits the swap and collapses a valid result to bottom; we
+                // keep the swap (as `div` above does) so the abstraction stays
+                // sound and never feeds an empty interval into the zone domain.
+                Interval::new(self.ub / Bound::Finite(c), self.lb / Bound::Finite(c))
             } else {
+                // Division by 0 yields 0 in eBPF.
                 Interval::from_i64(0)
             };
         }
@@ -1000,5 +1008,17 @@ mod tests {
             left.bitwise_and(&anomalous_right),
             Interval::from_i64_pair(0, 100)
         );
+    }
+
+    #[test]
+    fn sdiv_by_negative_constant_swaps_endpoints_not_bottom() {
+        // [5, 9] s/ -1 = [-9, -5]; the endpoints must swap rather than invert
+        // into the empty interval.
+        let r = Interval::from_i64_pair(5, 9).sdiv(&Interval::from_i64(-1));
+        assert!(!r.is_bottom(), "sdiv by -1 must not produce bottom");
+        assert_eq!(r, Interval::from_i64_pair(-9, -5));
+        // A wider negative divisor.
+        let r2 = Interval::from_i64_pair(10, 20).sdiv(&Interval::from_i64(-5));
+        assert_eq!(r2, Interval::from_i64_pair(-4, -2));
     }
 }

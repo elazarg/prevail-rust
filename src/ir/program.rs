@@ -383,6 +383,7 @@ impl Program {
             &resolved_kfunc_calls,
             &lowered_pseudo_loads,
         );
+        pass_validate_control_flow_targets(&builder, inst_seq)?;
         pass_connect_edges(&mut builder, inst_seq, options.must_have_exit)?;
         pass_inline_local_calls(
             &mut builder,
@@ -525,6 +526,36 @@ fn pass_populate_nodes(
         }
         builder.insert(label.clone(), inst.clone());
     }
+}
+
+/// Pass: ValidateControlFlowTargets.
+/// Reads    : instruction sequence and the populated CFG nodes.
+/// Throws   : `InvalidControlFlow` if a jump or local-call target does not
+///            resolve to a populated instruction node — for instance a target
+///            that lands on the second slot of a wide `lddw` instruction, which
+///            passes the unmarshal in-bounds check but is not an instruction
+///            boundary.
+/// Invariant: `pass_populate_nodes` has run, so every real instruction (and the
+///            entry/exit nodes) is present in the CFG.
+fn pass_validate_control_flow_targets(
+    builder: &CfgBuilder,
+    inst_seq: &InstructionSeq,
+) -> Result<(), InvalidControlFlow> {
+    for (label, inst, _) in inst_seq {
+        let target = match inst {
+            Instruction::Jmp(jmp) => &jmp.target,
+            Instruction::CallLocal(call) => &call.target,
+            _ => continue,
+        };
+        if !builder.prog.cfg.contains(target) {
+            return Err(InvalidControlFlow {
+                message: format!(
+                    "control-flow target {target} at {label} is not an instruction boundary"
+                ),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Pass: ConnectEdges (BuildInitialCfg, connect step; also performs
@@ -1443,6 +1474,37 @@ mod tests {
         // 1 -> Exit
         let children_1 = prog.cfg.children_of(&l1);
         assert!(children_1.contains(&exit));
+    }
+
+    /// A jump whose target is not an instruction boundary (e.g. the second slot
+    /// of a wide `lddw`, or any non-instruction offset) must be rejected as
+    /// invalid control flow rather than panicking in CFG construction.
+    #[test]
+    fn jump_to_non_instruction_target_is_rejected() {
+        let seq: InstructionSeq = vec![
+            (
+                Label::new(0),
+                Instruction::Jmp(Jmp {
+                    cond: None,
+                    target: Label::new(7), // no instruction at label 7
+                }),
+                None,
+            ),
+            (
+                Label::new(1),
+                Instruction::Exit(crate::ir::syntax::Exit {
+                    stack_frame_prefix: Rc::from(""),
+                }),
+                None,
+            ),
+        ];
+        let mut info = ProgramInfo::default();
+        let platform = LinuxPlatform::new();
+        let opts = EbpfVerifierOptions::default();
+        let err = Program::from_sequence(&seq, &mut info, &platform, &opts)
+            .err()
+            .expect("expected InvalidControlFlow rejection");
+        assert!(err.message.contains("instruction boundary"));
     }
 
     #[test]

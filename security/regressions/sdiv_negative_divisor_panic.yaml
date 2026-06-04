@@ -1,0 +1,9 @@
+test-case: sdiv interval by negative singleton
+
+pre: ["r1.type=number", "r1.svalue=[5, 9]", "r1.uvalue=[5, 9]"]
+
+code:
+  <start>: |
+    r1 s/= -1
+
+post: []
