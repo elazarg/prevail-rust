@@ -106,11 +106,13 @@ impl BpfAssembler {
             let value =
                 u64::from_str_radix(hex, 16).map_err(|e| format!("Bad hex offset '{s}': {e}"))?;
             if s.starts_with('-') {
-                let neg = -(value as i64);
-                if neg < i16::MIN as i64 {
+                // `value` is the magnitude; a 16-bit negative offset needs it to
+                // be at most 2^15. Range-check before negating so a huge
+                // magnitude does not overflow the negation itself.
+                if value > (i16::MIN as i64).unsigned_abs() {
                     return Err(format!("Offset out of 16-bit range: {s}"));
                 }
-                Ok(neg as i16)
+                Ok(-(value as i64) as i16)
             } else {
                 if value > u16::MAX as u64 {
                     return Err(format!("Offset out of 16-bit range: {s}"));
@@ -702,6 +704,14 @@ pub fn bpf_assemble(input: &str) -> Result<Vec<EbpfInst>, String> {
 mod tests {
     use super::*;
     use crate::ir::syntax::Reg;
+
+    /// A negative hex offset whose magnitude exceeds 16 bits must be reported as
+    /// an error, not negated into an overflow panic.
+    #[test]
+    fn negative_hex_offset_out_of_range_is_error_not_panic() {
+        let err = bpf_assemble("jsgt %r1 %r0 -0x8000000000000000\nexit\n");
+        assert!(err.is_err(), "expected an out-of-range error, got {err:?}");
+    }
 
     #[test]
     fn simple_mov_exit() {

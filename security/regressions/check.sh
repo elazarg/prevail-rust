@@ -39,7 +39,7 @@ done
 # A non-crashing input makes the harness exit 0; a crash exits non-zero and
 # prints "panicked". Requires the nightly fuzz build.
 if command -v cargo >/dev/null 2>&1 && [ -d fuzz ]; then
-  for target in fuzz_program fuzz_end_to_end; do
+  for target in fuzz_program fuzz_end_to_end fuzz_assembler; do
     dir="security/regressions/$target"
     [ -d "$dir" ] || continue
     FZ="$(find "${CARGO_TARGET_DIR:-fuzz/target}" -name "$target" -path '*release*' -type f 2>/dev/null | head -1)"
