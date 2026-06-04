@@ -39,14 +39,20 @@ done
 # A non-crashing input makes the harness exit 0; a crash exits non-zero and
 # prints "panicked". Requires the nightly fuzz build.
 if command -v cargo >/dev/null 2>&1 && [ -d fuzz ]; then
-  FZ="${CARGO_TARGET_DIR:-fuzz/target}/x86_64-unknown-linux-gnu/release/fuzz_program"
-  if [ ! -x "$FZ" ]; then
-    echo "building fuzz_program (one-off)…"
-    ( cd fuzz && cargo +nightly fuzz build fuzz_program >/dev/null 2>&1 )
-    FZ="$(find "${CARGO_TARGET_DIR:-fuzz/target}" -name fuzz_program -path '*release*' -type f 2>/dev/null | head -1)"
-  fi
-  if [ -x "$FZ" ]; then
-    for f in security/regressions/fuzz_program/*; do
+  for target in fuzz_program fuzz_end_to_end; do
+    dir="security/regressions/$target"
+    [ -d "$dir" ] || continue
+    FZ="$(find "${CARGO_TARGET_DIR:-fuzz/target}" -name "$target" -path '*release*' -type f 2>/dev/null | head -1)"
+    if [ ! -x "$FZ" ]; then
+      echo "building $target (one-off)…"
+      ( cd fuzz && cargo +nightly fuzz build "$target" >/dev/null 2>&1 )
+      FZ="$(find "${CARGO_TARGET_DIR:-fuzz/target}" -name "$target" -path '*release*' -type f 2>/dev/null | head -1)"
+    fi
+    if [ ! -x "$FZ" ]; then
+      echo "skip $target reproducers (could not build harness)"
+      continue
+    fi
+    for f in "$dir"/*; do
       [ -e "$f" ] || continue
       out="$("$FZ" "$f" 2>&1)"
       if echo "$out" | grep -q "panicked"; then
@@ -56,9 +62,7 @@ if command -v cargo >/dev/null 2>&1 && [ -d fuzz ]; then
         echo "ok (no panic): $f"
       fi
     done
-  else
-    echo "skip fuzz_program reproducers (could not build harness)"
-  fi
+  done
 fi
 
 if [ "$fail" -eq 0 ]; then
