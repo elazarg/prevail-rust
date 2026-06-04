@@ -13,7 +13,8 @@ use crate::linux::linux_platform::LinuxPlatform;
 use crate::spec::config::EbpfRuntimeConfig;
 use crate::spec::vm_isa::{
     AccessSize, EbpfInst, INST_LD_MODE_CODE_ADDR, INST_LD_MODE_MAP_BY_IDX, INST_LD_MODE_MAP_FD,
-    INST_LD_MODE_MAP_VALUE, INST_LD_MODE_VARIABLE_ADDR, INST_OP_EXIT, INST_OP_LDDW_IMM,
+    INST_LD_MODE_MAP_VALUE, INST_LD_MODE_VARIABLE_ADDR, INST_OP_EXIT, INST_OP_JA16,
+    INST_OP_LDDW_IMM,
 };
 
 fn get_test_options() -> EbpfVerifierOptions {
@@ -471,4 +472,37 @@ fn test_unmarshal_builtin_calls_only_when_relocation_gated() {
             access_type: AccessType::Write,
         })
     }));
+}
+
+/// An unconditional jump never uses a source register, so a `JA` whose src
+/// field is non-zero is malformed and must be rejected at unmarshal time.
+#[test]
+fn ja_with_nonzero_src_is_rejected() {
+    // JA +1 with src register = 4.
+    check_unmarshal_fail(EbpfInst::new(INST_OP_JA16, 0, 4, 1, 0), "bad instruction");
+}
+
+/// An out-of-range helper id must produce a structured error rather than abort
+/// the process. `make_call_result` is the fallible path that
+/// `parse_instruction_with_platform` (and other callers) rely on.
+#[test]
+fn make_call_result_rejects_out_of_range_helper_id() {
+    let platform = LinuxPlatform::new();
+    // Well past the prototype table.
+    assert!(make_call_result(99999, &platform).is_err());
+    assert!(make_call_result(-1, &platform).is_err());
+    // A valid helper id still resolves.
+    assert!(make_call_result(1, &platform).is_ok());
+}
+
+/// The textual parser must degrade an out-of-range `call <imm>` to `Undefined`
+/// (which the verifier rejects) rather than panic.
+#[test]
+fn parse_call_out_of_range_is_undefined_not_panic() {
+    use crate::ir::parse::parse_instruction_with_platform;
+    use std::collections::BTreeMap;
+    let platform = LinuxPlatform::new();
+    let labels = BTreeMap::new();
+    let inst = parse_instruction_with_platform("call 99999", &labels, Some(&platform));
+    assert!(matches!(inst, Instruction::Undefined(_)));
 }

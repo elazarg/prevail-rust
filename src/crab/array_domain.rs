@@ -581,7 +581,12 @@ impl ArrayDomain {
     /// Check whether all bytes in [index, index + width) are numerical.
     pub fn all_num_width(&self, index: &Interval, width: &Interval) -> bool {
         let (min_lb, max_ub) = as_numbytes_range(index, width, self.total_stack_size());
-        assert!(min_lb <= max_ub);
+        // A stack offset >= the stack size, or a negative width, drives the
+        // byte range inverted. As in `all_num_lb_ub` below, treat an
+        // empty/inverted range as "not all numerical".
+        if min_lb > max_ub {
+            return false;
+        }
         self.num_bytes.all_num(min_lb, max_ub)
     }
 
@@ -1031,6 +1036,18 @@ use crate::crab::type_encoding::TypeEncoding;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A stack access whose offset lies at/beyond the stack size drives
+    /// `as_numbytes_range` to an inverted byte range; `all_num_width` must
+    /// return `false` for it, not panic.
+    #[test]
+    fn all_num_width_inverted_range_does_not_panic() {
+        let dom = ArrayDomain::new(512);
+        // index (600) >= total_stack_size (512): clamped range inverts.
+        assert!(!dom.all_num_width(&Interval::from_i64(600), &Interval::from_i64(8)));
+        // Negative width also inverts the joined range.
+        assert!(!dom.all_num_width(&Interval::from_i64(8), &Interval::from_i64(-4)));
+    }
 
     /// Regression test for the backward scan early-termination bug.
     ///

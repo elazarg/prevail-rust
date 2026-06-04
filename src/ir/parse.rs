@@ -445,7 +445,12 @@ pub fn parse_instruction_with_platform(
     if let Some(m) = RE_CALL_IMM.captures(text) {
         let func = to_int(m.get(1).unwrap().as_str());
         if let Some(plat) = platform {
-            return Instruction::Call(crate::ir::unmarshal::make_call(func, plat));
+            // An out-of-range helper id falls back to an undefined instruction
+            // (which the verifier rejects) rather than aborting the parser.
+            return match crate::ir::unmarshal::make_call_result(func, plat) {
+                Ok(call) => Instruction::Call(call),
+                Err(_) => Instruction::Undefined(Undefined { opcode: 0 }),
+            };
         }
         return Instruction::Undefined(Undefined { opcode: 0 });
     }

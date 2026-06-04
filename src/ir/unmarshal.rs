@@ -898,6 +898,16 @@ impl<'a> Unmarshaller<'a> {
                         inst.opcode,
                     ));
                 }
+                // An unconditional jump never uses a source register, so the src
+                // field must be zero (the conditional-jump branch below validates
+                // its src field the same way).
+                if inst.src_raw() != 0 {
+                    return Err(UnmarshalError::invalid_opcode(
+                        pc,
+                        "bad instruction",
+                        inst.opcode,
+                    ));
+                }
 
                 let offset = if inst.opcode == INST_OP_JA32 {
                     inst.imm
@@ -1127,7 +1137,11 @@ pub fn make_call(imm: i32, platform: &dyn EbpfPlatform) -> Call {
 /// still allowing Rust callers to propagate a structured error instead of
 /// aborting.
 pub fn make_call_result(imm: i32, platform: &dyn EbpfPlatform) -> Result<Call, String> {
-    let proto = platform.get_helper_prototype(imm);
+    // Use the fallible lookup so an out-of-range helper id yields a structured
+    // error rather than aborting via the panicking `get_helper_prototype`.
+    let proto = platform
+        .try_get_helper_prototype(imm)
+        .ok_or_else(|| format!("bad helper function id {imm}"))?;
 
     let mut res = Call {
         func: imm,

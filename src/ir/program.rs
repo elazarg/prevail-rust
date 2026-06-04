@@ -1144,7 +1144,16 @@ fn add_cfg_nodes(
 
     let mut first = true;
 
-    // Get the label of the node to go to on returning from the macro.
+    // Get the label of the node to go to on returning from the macro. A
+    // well-formed local call has exactly one continuation (its fallthrough);
+    // a malformed one (e.g. a local call as the last instruction, or a block
+    // with multiple successors) does not. Reject those rather than letting
+    // `get_child`'s assertion fire.
+    if builder.prog.cfg.out_degree(caller_label) != 1 {
+        return Err(InvalidControlFlow {
+            message: format!("local call at {caller_label} must have exactly one continuation"),
+        });
+    }
     let exit_to_label = builder.prog.cfg.get_child(caller_label);
 
     // Construct the variable prefix to use for the new stack frame

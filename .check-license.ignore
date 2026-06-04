@@ -16,6 +16,9 @@ tests/upstream/
 
 # Non-source files
 tests/certs/
+# Binary crash reproducers (cannot embed a license header)
+security/regressions/elf/
+security/regressions/fuzz_program/
 \.check-license\.ignore
 \.gitattributes
 \.gitmodules
