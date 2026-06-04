@@ -56,6 +56,8 @@ pub struct DiffFuzzArgs {
     pub seed: u64,
     /// Maximum reproducers saved per finding class (counting continues regardless).
     pub max_per_class: usize,
+    /// Which sections the mutator may perturb.
+    pub section_target: SectionTarget,
 }
 
 impl Default for DiffFuzzArgs {
@@ -66,6 +68,7 @@ impl Default for DiffFuzzArgs {
             timeout_secs: 10,
             seed: 0x9E3779B97F4A7C15,
             max_per_class: 25,
+            section_target: SectionTarget::Exec,
         }
     }
 }
@@ -163,8 +166,20 @@ fn classify(rust: Outcome, cpp: Outcome) -> Option<&'static str> {
 
 // ── Section discovery ───────────────────────────────────────────────────────
 
-/// File-offset ranges of executable (instruction) sections, instruction-aligned.
-fn exec_ranges(data: &[u8]) -> Vec<(usize, usize)> {
+/// Which section data the mutator is allowed to perturb.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum SectionTarget {
+    /// Only executable (instruction) sections — keeps the program loadable and
+    /// concentrates mutation on the verifier's analysis.
+    Exec,
+    /// Every section with data — also corrupts BTF, maps, relocations, symbol
+    /// and string tables, exercising the loader / BTF parsers while the ELF
+    /// container itself stays structurally parseable.
+    All,
+}
+
+/// File-offset ranges of the sections the mutator may perturb.
+fn mutable_ranges(data: &[u8], target: SectionTarget) -> Vec<(usize, usize)> {
     let Ok(obj) = object::read::File::parse(data) else {
         return Vec::new();
     };
@@ -174,12 +189,14 @@ fn exec_ranges(data: &[u8]) -> Vec<(usize, usize)> {
             SectionFlags::Elf { sh_flags } => sh_flags & SHF_EXECINSTR != 0,
             _ => false,
         };
-        if !is_exec {
+        if target == SectionTarget::Exec && !is_exec {
             continue;
         }
         if let Some((off, size)) = section.file_range() {
-            // Need at least one full instruction and an in-bounds range.
-            if size >= INSN_SIZE && (off + size) as usize <= data.len() {
+            // Need a non-empty, in-bounds range; exec sections must hold at
+            // least one full instruction.
+            let min = if is_exec { INSN_SIZE } else { 1 };
+            if size >= min && (off + size) as usize <= data.len() {
                 ranges.push((off as usize, size as usize));
             }
         }
@@ -202,14 +219,21 @@ const OPCODE_PALETTE: &[u8] = &[
     0xa5, 0xb5, 0xc5, 0xd5, 0x85, 0x95, // ju/jslt/jsge/call/exit
 ];
 
-/// Apply 1–4 mutations to `buf`, all confined to executable section ranges.
+/// Apply 1–4 mutations to `buf`, all confined to the given section ranges.
 /// Returns a human-readable description of what was changed.
 fn mutate(buf: &mut [u8], ranges: &[(usize, usize)], rng: &mut Rng) -> String {
     let mut desc = Vec::new();
     let n = 1 + rng.below(4);
     for _ in 0..n {
         let &(off, size) = rng.pick(ranges);
-        match rng.below(4) {
+        // Instruction-aligned strategies (2, 3) write a full 8-byte block, so
+        // only use them on ranges at least that large.
+        let strategy = if (size as u64) < INSN_SIZE {
+            rng.below(2)
+        } else {
+            rng.below(4)
+        };
+        match strategy {
             0 => {
                 // Bit flip.
                 let pos = off + rng.below(size as u64) as usize;
@@ -307,13 +331,13 @@ pub fn run_diff_fuzz(root: &Path, args: DiffFuzzArgs) -> Result<()> {
         env.upstream_hash
     );
 
-    // Load seed corpus: every loadable .o with at least one executable section.
+    // Load seed corpus: every loadable .o with at least one mutable section.
     let samples = paths::samples_dir(root);
     let all_o = paths::find_o_files(&samples)?;
     let mut seeds: Vec<Seed> = Vec::new();
     for path in all_o {
         let Ok(data) = fs::read(&path) else { continue };
-        let ranges = exec_ranges(&data);
+        let ranges = mutable_ranges(&data, args.section_target);
         if !ranges.is_empty() {
             seeds.push((path, data, ranges));
         }
@@ -324,8 +348,12 @@ pub fn run_diff_fuzz(root: &Path, args: DiffFuzzArgs) -> Result<()> {
             samples.display()
         );
     }
+    let sections_label = match args.section_target {
+        SectionTarget::Exec => "executable",
+        SectionTarget::All => "all",
+    };
     println!(
-        "seeds: {} object files with executable sections",
+        "seeds: {} object files (mutating {sections_label} sections)",
         seeds.len()
     );
     println!(
@@ -375,7 +403,15 @@ pub fn run_diff_fuzz(root: &Path, args: DiffFuzzArgs) -> Result<()> {
             let class = if matches!(class, "soundness" | "precision") {
                 let (_, cpp_v) = run_verifier(&env.cpp_bin, &mutant_path, args.timeout_secs, true)?;
                 if cpp_v.contains("unmarshaling error") || cpp_v.contains("bad instruction") {
+                    // The reference rejected at instruction-decode time.
                     "unmarshal"
+                } else if cpp_v.contains("error:")
+                    || cpp_v.contains("No executable sections")
+                    || cpp_v.contains("No symbol section")
+                {
+                    // The reference rejected the ELF container before analysis;
+                    // a loader-leniency divergence, not a verifier-logic hole.
+                    "loader"
                 } else {
                     class
                 }

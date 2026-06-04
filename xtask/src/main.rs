@@ -230,6 +230,10 @@ enum SecurityAction {
         /// Maximum reproducers saved per finding class.
         #[arg(long = "max-per-class", default_value_t = 25)]
         max_per_class: usize,
+        /// Sections to mutate: `exec` (instruction sections only) or `all`
+        /// (also BTF, maps, relocations, symbol/string tables).
+        #[arg(long = "sections", default_value = "exec", value_parser = ["exec", "all"])]
+        sections: String,
     },
 }
 
@@ -316,6 +320,7 @@ fn run(cli: Cli) -> Result<()> {
                 timeout,
                 seed,
                 max_per_class,
+                sections,
             } => cmd::security::run_diff_fuzz(
                 &root,
                 cmd::security::DiffFuzzArgs {
@@ -324,6 +329,10 @@ fn run(cli: Cli) -> Result<()> {
                     timeout_secs: timeout,
                     seed,
                     max_per_class,
+                    section_target: match sections.as_str() {
+                        "all" => cmd::security::SectionTarget::All,
+                        _ => cmd::security::SectionTarget::Exec,
+                    },
                 },
             ),
         },
