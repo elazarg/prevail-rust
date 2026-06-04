@@ -103,22 +103,21 @@ impl BpfAssembler {
                 .trim_start_matches('-')
                 .trim_start_matches("0x")
                 .trim_start_matches("0X");
-            let value =
+            let magnitude =
                 u64::from_str_radix(hex, 16).map_err(|e| format!("Bad hex offset '{s}': {e}"))?;
-            if s.starts_with('-') {
-                // `value` is the magnitude; a 16-bit negative offset needs it to
-                // be at most 2^15. Range-check before negating so a huge
-                // magnitude does not overflow the negation itself.
-                if value > (i16::MIN as i64).unsigned_abs() {
-                    return Err(format!("Offset out of 16-bit range: {s}"));
-                }
-                Ok(-(value as i64) as i16)
+            // Match upstream `_decode_offset`, which parses the hex token with
+            // `std::stoull` and rejects anything outside the unsigned 16-bit
+            // range. A leading '-' wraps modulo 2^64 (as `stoull` does), so a
+            // negative hex offset becomes a large value and is rejected.
+            let value = if s.starts_with('-') {
+                0u64.wrapping_sub(magnitude)
             } else {
-                if value > u16::MAX as u64 {
-                    return Err(format!("Offset out of 16-bit range: {s}"));
-                }
-                Ok(value as u16 as i16)
+                magnitude
+            };
+            if value > u16::MAX as u64 {
+                return Err(format!("Offset out of 16-bit range: {s}"));
             }
+            Ok(value as u16 as i16)
         } else {
             let value: i64 = s.parse().map_err(|e| format!("Bad offset '{s}': {e}"))?;
             if value < i16::MIN as i64 || value > i16::MAX as i64 {
@@ -705,12 +704,16 @@ mod tests {
     use super::*;
     use crate::ir::syntax::Reg;
 
-    /// A negative hex offset whose magnitude exceeds 16 bits must be reported as
-    /// an error, not negated into an overflow panic.
+    /// Hex offsets are parsed as unsigned and rejected outside the 16-bit range,
+    /// matching upstream `std::stoull` semantics: a negative hex offset wraps to
+    /// a large value and is rejected (and never overflows a manual negation).
+    /// Decimal negative offsets remain accepted by both implementations.
     #[test]
-    fn negative_hex_offset_out_of_range_is_error_not_panic() {
-        let err = bpf_assemble("jsgt %r1 %r0 -0x8000000000000000\nexit\n");
-        assert!(err.is_err(), "expected an out-of-range error, got {err:?}");
+    fn negative_hex_offset_is_rejected() {
+        assert!(bpf_assemble("jsgt %r1 %r0 -0x10\nexit\n").is_err());
+        assert!(bpf_assemble("jsgt %r1 %r0 -0x8000000000000000\nexit\n").is_err());
+        // A positive in-range hex offset still assembles.
+        assert!(bpf_assemble("jsgt %r1 %r0 +0x1\nexit\n").is_ok());
     }
 
     #[test]
