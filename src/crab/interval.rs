@@ -15,6 +15,23 @@ use crate::arith::number::Number;
 /// Bound is an alias for ExtendedNumber, matching C++.
 pub type Bound = ExtendedNumber;
 
+/// Divide an interval endpoint by a negative singleton divisor.
+///
+/// Division by a negative constant reverses monotonicity, so the caller swaps
+/// the two endpoints. A finite endpoint is divided directly. An infinite
+/// endpoint must instead flip sign: the bound's own division leaves an infinity
+/// unchanged (it has no sign to divide), so dividing by a negative would keep
+/// the wrong sign and produce an inverted interval. Negating it mirrors the
+/// sign reversal a finite endpoint undergoes.
+fn divide_bound_by_negative_singleton(bound: &Bound, divisor: &Number) -> Bound {
+    debug_assert!(*divisor < Number::from(0i64));
+    if bound.is_infinite() {
+        -bound
+    } else {
+        *bound / Bound::Finite(*divisor)
+    }
+}
+
 /// An interval [lb, ub] over extended numbers.
 ///
 /// Bottom is represented by lb > ub (specifically lb=0, ub=-1).
@@ -269,7 +286,10 @@ impl Interval {
             } else if c > 0i64 {
                 Interval::new(self.lb / Bound::Finite(c), self.ub / Bound::Finite(c))
             } else if c < 0i64 {
-                Interval::new(self.ub / Bound::Finite(c), self.lb / Bound::Finite(c))
+                Interval::new(
+                    divide_bound_by_negative_singleton(&self.ub, &c),
+                    divide_bound_by_negative_singleton(&self.lb, &c),
+                )
             } else {
                 // Division by 0 yields 0 in eBPF
                 Interval::from_i64(0)
@@ -293,11 +313,12 @@ impl Interval {
                 Interval::new(self.lb / Bound::Finite(c), self.ub / Bound::Finite(c))
             } else if c < 0i64 {
                 // Division by a negative constant reverses monotonicity, so the
-                // endpoints swap. This deliberately diverges from upstream, whose
-                // `sdiv` omits the swap and collapses a valid result to bottom; we
-                // keep the swap (as `div` above does) so the abstraction stays
-                // sound and never feeds an empty interval into the zone domain.
-                Interval::new(self.ub / Bound::Finite(c), self.lb / Bound::Finite(c))
+                // endpoints swap (an infinite endpoint flips sign rather than
+                // being divided).
+                Interval::new(
+                    divide_bound_by_negative_singleton(&self.ub, &c),
+                    divide_bound_by_negative_singleton(&self.lb, &c),
+                )
             } else {
                 // Division by 0 yields 0 in eBPF.
                 Interval::from_i64(0)
@@ -1020,5 +1041,25 @@ mod tests {
         // A wider negative divisor.
         let r2 = Interval::from_i64_pair(10, 20).sdiv(&Interval::from_i64(-5));
         assert_eq!(r2, Interval::from_i64_pair(-4, -2));
+    }
+
+    #[test]
+    fn sdiv_by_negative_constant_flips_infinite_bound_sign() {
+        // [5, +oo] s/ -1 must become [-oo, -5], not the inverted [+oo, -5]
+        // that a plain bound division would yield from the swapped endpoints.
+        let unbounded_above = Interval::new(Bound::Finite(Number::from(5i64)), PLUS_INFINITY);
+        let r = unbounded_above.sdiv(&Interval::from_i64(-1));
+        assert_eq!(
+            r,
+            Interval::new(MINUS_INFINITY, Bound::Finite(Number::from(-5i64)))
+        );
+
+        // [-oo, 8] s/ -1 must become [-8, +oo].
+        let unbounded_below = Interval::new(MINUS_INFINITY, Bound::Finite(Number::from(8i64)));
+        let r2 = unbounded_below.div(&Interval::from_i64(-1));
+        assert_eq!(
+            r2,
+            Interval::new(Bound::Finite(Number::from(-8i64)), PLUS_INFINITY)
+        );
     }
 }

@@ -2737,6 +2737,35 @@ mod tests {
         assert!(result.is_err());
     }
 
+    /// A header whose section table offset/count point past the end of the file
+    /// must be rejected gracefully rather than triggering an out-of-bounds read
+    /// or panic when the section headers are walked.
+    #[test]
+    fn read_elf_rejects_out_of_range_section_table() {
+        // Minimal 64-byte ELF64 header (little-endian) with valid magic but a
+        // section header table that lies entirely beyond the 64-byte buffer.
+        let mut header = vec![0u8; 64];
+        header[0..4].copy_from_slice(&[0x7f, b'E', b'L', b'F']);
+        header[4] = 2; // EI_CLASS = ELFCLASS64
+        header[5] = 1; // EI_DATA = ELFDATA2LSB
+        header[6] = 1; // EI_VERSION
+        header[16..18].copy_from_slice(&1u16.to_le_bytes()); // e_type = ET_REL
+        header[18..20].copy_from_slice(&247u16.to_le_bytes()); // e_machine = EM_BPF
+        header[20..24].copy_from_slice(&1u32.to_le_bytes()); // e_version
+        header[40..48].copy_from_slice(&0xffff_ffffu64.to_le_bytes()); // e_shoff (out of range)
+        header[52..54].copy_from_slice(&64u16.to_le_bytes()); // e_ehsize
+        header[58..60].copy_from_slice(&64u16.to_le_bytes()); // e_shentsize
+        header[60..62].copy_from_slice(&5u16.to_le_bytes()); // e_shnum
+
+        let mut platform = TestPlatform;
+        let options = default_options();
+        let result = read_elf(&header, "oob.o", "", "", &options, &mut platform);
+        assert!(
+            result.is_err(),
+            "out-of-range section table must be rejected"
+        );
+    }
+
     #[test]
     fn load_simple_elf_from_samples() {
         let path = "tests/upstream/ebpf-samples/build/byteswap.o";

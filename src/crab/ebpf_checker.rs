@@ -562,7 +562,10 @@ impl<'a> EbpfChecker<'a> {
                 .dom
                 .get_map_key_size(&s.map_fd_reg, self.ctx, self.registry);
             match key_size_intv.singleton() {
-                Some(n) => n.to_i64().unwrap_or(0),
+                // The access width must fit a u32; a larger size would silently
+                // truncate and let an out-of-range access slip through.
+                Some(n) if n.fits_unsigned(32) => n.narrow_to_i64(),
+                Some(_) => return self.throw_fail("Map key size is out of supported range"),
                 None => return self.throw_fail("Map key size is not singleton"),
             }
         } else {
@@ -570,7 +573,8 @@ impl<'a> EbpfChecker<'a> {
                 self.dom
                     .get_map_value_size(&s.map_fd_reg, self.ctx, self.registry);
             match value_size_intv.singleton() {
-                Some(n) => n.to_i64().unwrap_or(0),
+                Some(n) if n.fits_unsigned(32) => n.narrow_to_i64(),
+                Some(_) => return self.throw_fail("Map value size is out of supported range"),
                 None => return self.throw_fail("Map value size is not singleton"),
             }
         };

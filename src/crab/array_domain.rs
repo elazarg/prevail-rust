@@ -582,9 +582,9 @@ impl ArrayDomain {
     pub fn all_num_width(&self, index: &Interval, width: &Interval) -> bool {
         let (min_lb, max_ub) = as_numbytes_range(index, width, self.total_stack_size());
         // A stack offset >= the stack size, or a negative width, drives the
-        // byte range inverted. As in `all_num_lb_ub` below, treat an
+        // byte range empty or inverted. As in `all_num_lb_ub` below, treat an
         // empty/inverted range as "not all numerical".
-        if min_lb > max_ub {
+        if min_lb >= max_ub {
             return false;
         }
         self.num_bytes.all_num(min_lb, max_ub)
@@ -593,7 +593,7 @@ impl ArrayDomain {
     /// Check whether all bytes in [lb, ub] are numerical.
     pub fn all_num_lb_ub(&self, lb: &Interval, ub: &Interval) -> bool {
         let (min_lb, max_ub) = clamped_bounds(&lb.join(ub), self.total_stack_size());
-        if min_lb > max_ub {
+        if min_lb >= max_ub {
             return false;
         }
         self.num_bytes.all_num(min_lb, max_ub)
@@ -878,9 +878,13 @@ impl ArrayDomain {
                 // A non-numeric value may overwrite previously numeric bytes,
                 // so conservatively mark the range as non-numeric. When is_num
                 // is true, written bytes stay numeric and unwritten bytes keep
-                // their existing status, so num_bytes is left unchanged.
+                // their existing status, so num_bytes is left unchanged. An
+                // empty/inverted range (offset past the stack or negative
+                // width) touches no bytes, so there is nothing to havoc.
                 let (lb, ub) = as_numbytes_range(idx, width, self.total_stack_size());
-                self.num_bytes.havoc(lb as usize, ub);
+                if lb < ub {
+                    self.num_bytes.havoc(lb as usize, ub);
+                }
             }
             None
         }

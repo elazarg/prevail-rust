@@ -33,12 +33,19 @@ pub enum EbpfArgumentType {
     PtrToMapOfPrograms = 6,
     PtrToMapKey = 7,
     PtrToMapValue = 8,
+    /// Memory must have been initialized.
     PtrToReadableMem = 9,
     PtrToReadableMemOrNull = 10,
+    /// The helper must initialize the full writable region described by the
+    /// paired size argument on every return path, including failure returns.
+    /// The verifier treats the whole region as initialized after the call, so a
+    /// helper that only conditionally writes it needs a different contract.
     PtrToWritableMem = 11,
     PtrToStack = 12,
     PtrToStackOrNull = 13,
     PtrToCtxOrNull = 14,
+    /// Same as [`PtrToWritableMem`], except the pointer may be null when the
+    /// paired size argument is zero.
     PtrToWritableMemOrNull = 15,
     PtrToBtfIdSockCommon = 17,
     PtrToSpinLock = 18,
