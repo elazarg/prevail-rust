@@ -110,6 +110,11 @@ impl EbpfPlatform for TestPlatform {
     fn get_map_type(&self, platform_specific_type: u32) -> EbpfMapType {
         self.linux.get_map_type(platform_specific_type)
     }
+    fn sock_common_layout(
+        &self,
+    ) -> Option<&'static prevail::spec::type_descriptors::EbpfStructDescriptor> {
+        self.linux.sock_common_layout()
+    }
     fn supported_conformance_groups(&self) -> u32 {
         self.linux.supported_conformance_groups() | 0x40 | 0x80
     }

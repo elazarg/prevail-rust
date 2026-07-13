@@ -382,6 +382,10 @@ pub const TS_POINTER: TypeSet = TypeSet::of(&[TCtx, TPacket, TStack, TShared]);
 pub const TS_SINGLETON_PTR: TypeSet = TypeSet::of(&[TCtx, TPacket, TStack]);
 /// `{packet, stack, shared}` — memory-accessible pointer types
 pub const TS_MEM: TypeSet = TypeSet::of(&[TPacket, TStack, TShared]);
+/// `{ctx, packet, stack, shared, socket, alloc_mem}` — types whose direct
+/// load/store access is modeled.
+pub const TS_DEREFERENCEABLE: TypeSet =
+    TypeSet::of(&[TCtx, TPacket, TStack, TShared, TSocket, TAllocMem]);
 #[cfg_attr(not(test), allow(dead_code))]
 pub const TS_SOCKET: TypeSet = TypeSet::singleton(TSocket);
 #[cfg_attr(not(test), allow(dead_code))]
@@ -407,6 +411,9 @@ pub enum TypeGroup {
     MapFdPrograms,
     Mem,
     MemOrNum,
+    /// Types whose direct load/store access is modeled.
+    Dereferenceable,
+    /// Region pointers with modeled arithmetic (ctx | packet | stack | shared).
     Pointer,
     PtrOrNum,
     StackOrPacket,
@@ -455,6 +462,7 @@ impl TypeGroup {
             TypeGroup::StackOrNum => TypeSet::of(&[TNum, TStack]),
             TypeGroup::Mem => TS_MEM,
             TypeGroup::MemOrNum => TS_MEM.union(TS_NUM),
+            TypeGroup::Dereferenceable => TS_DEREFERENCEABLE,
             TypeGroup::Pointer => TS_POINTER,
             TypeGroup::PtrOrNum => TS_POINTER.union(TS_NUM),
             TypeGroup::StackOrPacket => TypeSet::of(&[TStack, TPacket]),
@@ -486,6 +494,11 @@ impl fmt::Display for TypeGroup {
                 f,
                 "{}",
                 typeset_to_string(&[TNum, TStack, TPacket, TShared])
+            ),
+            TypeGroup::Dereferenceable => write!(
+                f,
+                "{}",
+                typeset_to_string(&[TCtx, TStack, TPacket, TShared, TSocket, TAllocMem])
             ),
             TypeGroup::Pointer => write!(
                 f,

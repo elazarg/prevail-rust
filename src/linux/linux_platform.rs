@@ -14,17 +14,18 @@ use crate::ir::syntax::{ArgPair, ArgPairKind, ArgSingle, ArgSingleKind, Call, Ca
 use crate::linux::kfunc;
 use crate::linux::spec_prototypes::{self, HelperPrototype};
 use crate::linux::spec_type_descriptors::{
-    CGROUP_DEV_DESCR, CGROUP_SOCK_DESCR, CGROUP_SYSCTL_DESCR, FLOW_DISSECTOR_DESCR, KPROBE_DESCR,
-    LIRC_MODE2_DESCR, LWT_INOUT_DESCR, LWT_XMIT_DESCR, NETFILTER_DESCR, PERF_EVENT_DESCR,
-    SCHED_DESCR, SK_LOOKUP_DESCR, SK_MSG_MD, SK_REUSEPORT_DESCR, SK_SKB_DESCR, SOCK_ADDR_DESCR,
-    SOCK_OPS_DESCR, SOCKET_FILTER_DESCR, SOCKOPT_DESCR, SYSCALL_DESCR, TRACEPOINT_DESCR,
-    TRACING_DESCR, UNSPEC_DESCR, XDP_DESCR,
+    self, CGROUP_DEV_DESCR, CGROUP_SOCK_DESCR, CGROUP_SYSCTL_DESCR, FLOW_DISSECTOR_DESCR,
+    KPROBE_DESCR, LIRC_MODE2_DESCR, LWT_INOUT_DESCR, LWT_XMIT_DESCR, NETFILTER_DESCR,
+    PERF_EVENT_DESCR, SCHED_DESCR, SK_LOOKUP_DESCR, SK_MSG_MD, SK_REUSEPORT_DESCR, SK_SKB_DESCR,
+    SOCK_ADDR_DESCR, SOCK_OPS_DESCR, SOCKET_FILTER_DESCR, SOCKOPT_DESCR, SYSCALL_DESCR,
+    TRACEPOINT_DESCR, TRACING_DESCR, UNSPEC_DESCR, XDP_DESCR,
 };
 use crate::platform::{EbpfPlatform, KsymBtfId};
 use crate::spec::config::EbpfVerifierOptions;
 use crate::spec::ebpf_base::EbpfCtxDescriptor;
 use crate::spec::type_descriptors::{
-    EbpfMapDescriptor, EbpfMapType, EbpfMapValueType, EbpfProgramType, EquivalenceKey, ProgramInfo,
+    EbpfMapDescriptor, EbpfMapType, EbpfMapValueType, EbpfProgramType, EbpfStructDescriptor,
+    EquivalenceKey, ProgramInfo,
 };
 
 // ── BPF program-type constants (from linux/bpf.h) ──────────────────
@@ -1066,6 +1067,10 @@ impl EbpfPlatform for LinuxPlatform {
 
     fn get_map_type(&self, platform_specific_type: u32) -> EbpfMapType {
         get_map_type_linux(platform_specific_type)
+    }
+
+    fn sock_common_layout(&self) -> Option<&'static EbpfStructDescriptor> {
+        Some(&spec_type_descriptors::BPF_SOCK_COMMON_LAYOUT)
     }
 
     fn supported_conformance_groups(&self) -> u32 {

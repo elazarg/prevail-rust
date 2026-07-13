@@ -476,7 +476,7 @@ fn assertions_mem(
     } else {
         res.push(Assertion::TypeConstraint(TypeConstraint {
             reg: basereg,
-            types: TypeGroup::Pointer,
+            types: TypeGroup::Dereferenceable,
         }));
         res.push(Assertion::ValidAccess(make_valid_access(
             label,
@@ -519,7 +519,7 @@ fn assertions_atomic(ins: &Atomic, label: &Option<Label>) -> Vec<Assertion> {
         }),
         Assertion::TypeConstraint(TypeConstraint {
             reg: ins.access.basereg,
-            types: TypeGroup::Pointer,
+            types: TypeGroup::Dereferenceable,
         }),
         // An atomic is a read-modify-write: model it as a write so that, like a plain
         // store, it is rejected against read-only context pointer fields (a non-write

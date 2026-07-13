@@ -8,7 +8,9 @@ use crate::elf_loader::UnmarshalError;
 use crate::ir::syntax::Call;
 use crate::linux::spec_prototypes::HelperPrototype;
 use crate::spec::config::EbpfVerifierOptions;
-use crate::spec::type_descriptors::{EbpfMapDescriptor, EbpfMapType, EbpfProgramType, ProgramInfo};
+use crate::spec::type_descriptors::{
+    EbpfMapDescriptor, EbpfMapType, EbpfProgramType, EbpfStructDescriptor, ProgramInfo,
+};
 
 /// Resolved ksym BTF identifier for a kfunc symbol.
 ///
@@ -104,6 +106,12 @@ pub trait EbpfPlatform {
 
     /// Convert a platform-specific map type number to an `EbpfMapType`.
     fn get_map_type(&self, platform_specific_type: u32) -> EbpfMapType;
+
+    /// Layout of the safe common socket field subset, used to check direct
+    /// T_SOCKET loads. Platforms that do not model socket access return `None`.
+    fn sock_common_layout(&self) -> Option<&'static EbpfStructDescriptor> {
+        None
+    }
 
     /// Bitmask of supported BPF conformance groups.
     fn supported_conformance_groups(&self) -> u32;

@@ -65,14 +65,20 @@ fn is_tail_call_site(ins: &Instruction, platform: &dyn EbpfPlatform) -> bool {
     }
 }
 
+/// Iterative (explicit work-stack) rather than recursive on cycle-nesting depth.
+/// This runs unconditionally for every program via `validate_tail_call_chain_depth`,
+/// so a crafted deeply-nested CFG must not be able to overflow the stack here.
 fn collect_wto_labels(component: &CycleOrLabel, labels: &mut BTreeSet<Label>) {
-    match component {
-        CycleOrLabel::Label(label) => {
-            labels.insert(label.clone());
-        }
-        CycleOrLabel::Cycle(cycle) => {
-            for nested in cycle.iter() {
-                collect_wto_labels(nested, labels);
+    let mut stack = vec![component];
+    while let Some(current) = stack.pop() {
+        match current {
+            CycleOrLabel::Label(label) => {
+                labels.insert(label.clone());
+            }
+            CycleOrLabel::Cycle(cycle) => {
+                for nested in cycle.iter() {
+                    stack.push(nested);
+                }
             }
         }
     }

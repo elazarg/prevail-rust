@@ -33,11 +33,6 @@ fn sign_extend(imm: i32) -> u64 {
     imm as i64 as u64
 }
 
-/// Zero-extend a 32-bit signed integer to a 64-bit unsigned integer.
-fn zero_extend(imm: i32) -> u64 {
-    imm as u32 as u64
-}
-
 /// Map a `JmpOp` to the corresponding `ConditionOp` for conditional jumps.
 ///
 /// JA, CALL, and EXIT are non-conditional and produce a default `ConditionOp::EQ`
@@ -443,7 +438,7 @@ impl<'a> Unmarshaller<'a> {
                         Value::Reg(inst.dst())
                     } else if is_imm {
                         Value::Imm(Imm {
-                            v: zero_extend(inst.imm),
+                            v: sign_extend(inst.imm),
                         })
                     } else {
                         Value::Reg(inst.src())

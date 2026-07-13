@@ -224,6 +224,11 @@ fn save_callee_saved_registers(
         if dom.state.types.is_initialized_reg(&reg, registry) {
             let type_var = registry.type_reg(r as i32);
             let dst_type_var = registry.stack_frame_var(DataKind::Types, r as i32, prefix);
+            // Forget the frame slot's previous type-dependent values before
+            // installing the new type: a prior save under the same prefix may
+            // have left kind values for a type the register no longer has.
+            dom.state
+                .forget_type_dependent_values(dst_type_var, registry);
             dom.state
                 .types
                 .assign_type_var(dst_type_var, type_var, registry);
@@ -328,6 +333,8 @@ fn do_load_mapfd(
         .ok_or_else(|| VerificationError::new(format!("map_fd {mapfd} not found")))?;
     let map_type = ctx.platform.get_map_type(desc.map_type);
     let dst = reg_pack(dst_reg, registry);
+    dom.state
+        .forget_type_dependent_values_reg(dst_reg, registry);
     if map_type.value_type == EbpfMapValueType::Program {
         dom.state
             .assign_type_encoding(dst_reg, T_MAP_PROGRAMS, registry);
@@ -362,6 +369,8 @@ fn do_load_map_address(
             "Cannot load address of program map type - only data maps are supported".to_string(),
         ));
     }
+    dom.state
+        .forget_type_dependent_values_reg(dst_reg, registry);
     dom.state.assign_type_encoding(dst_reg, T_SHARED, registry);
     let dst = reg_pack(dst_reg, registry);
     dom.state
@@ -388,6 +397,8 @@ fn transform_load_pseudo(
             let dst = reg_pack(&pseudo.dst, registry);
             let imm64 = merge_imm32_to_u64(pseudo.addr.imm, pseudo.addr.next_imm);
             dom.state
+                .forget_type_dependent_values_reg(&pseudo.dst, registry);
+            dom.state
                 .values
                 .assign_i64(dst.uvalue, imm64 as i64, registry);
             dom.state
@@ -396,7 +407,6 @@ fn transform_load_pseudo(
                 .overflow_bounds(dst.uvalue, 64, false, registry);
             dom.state
                 .assign_type_encoding(&pseudo.dst, T_FUNC, registry);
-            dom.state.havoc_offsets(&pseudo.dst, registry);
         }
         PseudoAddressKind::VariableAddr
         | PseudoAddressKind::MapByIdx
@@ -1433,7 +1443,7 @@ fn transform_atomic(
     if !dom
         .state
         .types
-        .is_in_group(&a.access.basereg, TS_POINTER, registry)
+        .is_in_group(&a.access.basereg, TS_DEREFERENCEABLE, registry)
         || !dom.state.types.is_in_group(&a.valreg, TS_NUM, registry)
     {
         return Ok(());
@@ -1443,8 +1453,8 @@ fn transform_atomic(
         .types
         .may_have_type_reg(&a.access.basereg, T_STACK, registry)
     {
-        // Shared memory regions are volatile so we can just havoc
-        // any register that will be updated.
+        // Non-stack memory contents are not tracked here. A fetch/CMPXCHG
+        // therefore reads an unknown old value into the result register.
         if a.op == AtomicOp::CMPXCHG {
             dom.state
                 .havoc_register_except_type(&R0_RETURN_VALUE, registry);
@@ -1578,16 +1588,15 @@ fn transform_call(
                 // Do nothing. No side effect allowed.
             }
             ArgPairKind::PtrToWritableMem => {
-                let mut store_numbers = true;
-                let variable = dom.state.get_type_offset_variable(&param.mem, registry);
-                if variable.is_none() {
-                    // checked by the checker
-                    continue;
-                }
-                let addr = dom
-                    .state
-                    .values
-                    .eval_interval_var(variable.unwrap(), registry);
+                // The called function may overwrite the pointed-to memory, so a
+                // stack-typed pointer requires havocing the covered stack cells.
+                // Compute the stack address per type inside join_over_types
+                // (mirroring PtrToWritableLong/Int above): the checker only
+                // requires mem in {stack, packet, shared}, so param.mem's type
+                // need not be a singleton. Havocing per type fixes the stale-value
+                // leak for a non-singleton type such as {stack, shared} (a no-type
+                // lookup bails on None and never havocs, leaving stale stack
+                // values a later load could read).
                 let size_pack = reg_pack(&param.size, registry);
                 let width = dom
                     .state
@@ -1597,10 +1606,19 @@ fn transform_call(
                 let mem_reg = param.mem;
                 let big_endian = ctx.runtime.big_endian;
                 let stack = &mut dom.stack;
+                let mut only_stack = true;
+                let mut stack_addr: Option<Interval> = None;
                 dom.state = dom
                     .state
                     .join_over_types(&mem_reg, registry, |state, te, registry| {
                         if te == T_STACK {
+                            let Some(offset) = get_type_offset_variable(&mem_reg, te, registry)
+                            else {
+                                only_stack = false;
+                                return;
+                            };
+                            let addr = state.values.eval_interval_var(offset, registry);
+                            stack_addr = Some(addr);
                             for kind in iterate_kinds() {
                                 stack.havoc(
                                     &mut state.values,
@@ -1611,10 +1629,16 @@ fn transform_call(
                                 );
                             }
                         } else {
-                            store_numbers = false;
+                            only_stack = false;
                         }
                     });
-                if store_numbers {
+                // store_numbers marks the covered stack cells initialized-numeric.
+                // Unlike the per-type havoc above, it mutates the shared stack
+                // domain that join_over_types does not re-join, so it must run
+                // only when mem is definitely stack -- otherwise a {stack, shared}
+                // pointer would mark the stack numeric even on the shared path,
+                // letting a later stack read wrongly pass ValidAccess.
+                if only_stack && let Some(addr) = stack_addr {
                     dom.stack.store_numbers(&addr, &width);
                 }
             }
@@ -1629,6 +1653,9 @@ fn transform_call(
     // If region_size is known, constrain it; otherwise havoc to prevent stale values.
     let assign_shared_map_value =
         |dom: &mut EbpfDomain, region_size: Option<&Interval>, registry: &mut VariableRegistry| {
+            dom.state
+                .forget_type_dependent_values_reg(&r0_reg, registry);
+            dom.state.assign_type_encoding(&r0_reg, T_SHARED, registry);
             assign_valid_ptr(dom, &r0_reg, true, ctx, registry);
             dom.state
                 .values
@@ -1640,7 +1667,6 @@ fn transform_call(
             } else {
                 dom.state.values.havoc(r0_pack.shared_region_size);
             }
-            dom.state.assign_type_encoding(&r0_reg, T_SHARED, registry);
         };
 
     if call.contract.is_map_lookup {
@@ -1677,9 +1703,11 @@ fn transform_call(
             assign_shared_map_value(dom, None, registry);
         }
     } else if let Some(return_ptr_type) = call.contract.return_ptr_type {
-        assign_valid_ptr(dom, &r0_reg, call.contract.return_nullable, ctx, registry);
+        dom.state
+            .forget_type_dependent_values_reg(&r0_reg, registry);
         dom.state
             .assign_type_encoding(&r0_reg, return_ptr_type, registry);
+        assign_valid_ptr(dom, &r0_reg, call.contract.return_nullable, ctx, registry);
         if return_ptr_type == T_ALLOC_MEM
             && let Some(alloc_size_reg) = &call.contract.alloc_size_reg
         {
@@ -1694,6 +1722,11 @@ fn transform_call(
             dom.state
                 .values
                 .set(r0_pack.alloc_mem_size, &size_value, registry);
+        } else if return_ptr_type == T_SOCKET {
+            let r0_pack = reg_pack(&r0_reg, registry);
+            dom.state
+                .values
+                .assign_i64(r0_pack.socket_offset, 0, registry);
         } else {
             dom.state.havoc_offsets(&r0_reg, registry);
         }
@@ -1740,9 +1773,10 @@ fn transform_callx(
         return Ok(());
     }
 
-    // Look up the helper function id.
+    // Look up the helper function id. Use uvalue (type-independent) so dispatch
+    // agrees with FuncConstraint's validation of the same register.
     let reg = reg_pack(&callx.func, registry);
-    let src_interval = dom.state.values.eval_interval_var(reg.svalue, registry);
+    let src_interval = dom.state.values.eval_interval_var(reg.uvalue, registry);
     if let Some(sn) = src_interval.singleton()
         && let Some(val) = sn.to_i64()
         && val >= i32::MIN as i64

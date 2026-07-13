@@ -25,7 +25,93 @@ use crate::ir::syntax::{
     ValidMapType, ValidSize, ValidStore, Value, ZeroCtxOffset,
 };
 use crate::ir::unmarshal::make_call;
+use crate::spec::type_descriptors::{
+    EbpfStructDescriptor, EbpfStructFieldDescriptor, EbpfStructFieldPermission,
+};
 use crate::spec::vm_isa::R10_STACK_POINTER;
+
+fn is_power_of_two(size: i32) -> bool {
+    size > 0 && (size & (size - 1)) == 0
+}
+
+fn field_is_present(field: &EbpfStructFieldDescriptor) -> bool {
+    field.offset >= 0 && field.span > 0
+}
+
+fn field_allows_access(
+    field: &EbpfStructFieldDescriptor,
+    offset: i32,
+    size: i32,
+    access_type: AccessType,
+) -> bool {
+    if !field_is_present(field) {
+        return false;
+    }
+    if access_type == AccessType::Write && field.permission == EbpfStructFieldPermission::ReadOnly {
+        return false;
+    }
+    if field.allow_narrow_access {
+        if size <= field.max_access_width
+            && is_power_of_two(size)
+            && offset >= field.offset
+            && offset + size <= field.offset + field.span
+        {
+            return true;
+        }
+    } else if offset == field.offset && size == field.max_access_width {
+        return true;
+    }
+    access_type == AccessType::Read
+        && field.extra_read_width_at_start > 0
+        && size == field.extra_read_width_at_start
+        && is_power_of_two(size)
+        && offset == field.offset
+}
+
+fn is_valid_struct_access(
+    descriptor: &EbpfStructDescriptor,
+    offset: i32,
+    size: i32,
+    access_type: AccessType,
+) -> bool {
+    if descriptor.fields.is_empty()
+        || size <= 0
+        || offset < 0
+        || offset >= descriptor.size
+        || offset + size > descriptor.size
+        || offset % size != 0
+    {
+        return false;
+    }
+    descriptor
+        .fields
+        .iter()
+        .any(|field| field_allows_access(field, offset, size, access_type))
+}
+
+fn write_may_touch_readonly_field(
+    values: &crate::crab::add_bottom::NumAbsDomain,
+    registry: &VariableRegistry,
+    lb: &LinearExpression,
+    ub: &LinearExpression,
+    fields: &[EbpfStructFieldDescriptor],
+) -> bool {
+    fields.iter().any(|field| {
+        field_is_present(field)
+            && field.permission == EbpfStructFieldPermission::ReadOnly
+            && values.intersect(
+                &gt(ub.clone(), LinearExpression::from(field.offset as i64)),
+                registry,
+            )
+            && values.intersect(
+                &lt(
+                    lb.clone(),
+                    LinearExpression::from((field.offset + field.span) as i64),
+                ),
+                registry,
+            )
+    })
+}
 
 pub fn ebpf_domain_check(
     dom: &EbpfDomain,
@@ -191,22 +277,39 @@ impl<'a> EbpfChecker<'a> {
         if field_width <= 0 {
             return self.throw_fail("Cannot write to context with unexpected pointer-field layout");
         }
-        let may_overlap = |field_offset: i32| -> bool {
-            if field_offset < 0 {
-                return false;
-            }
-            self.dom.state.values.intersect(
-                &gt(ub.clone(), LinearExpression::from(field_offset as i64)),
-                self.registry,
-            ) && self.dom.state.values.intersect(
-                &lt(
-                    lb.clone(),
-                    LinearExpression::from((field_offset + field_width) as i64),
-                ),
-                self.registry,
-            )
-        };
-        if may_overlap(desc.data) || may_overlap(desc.end) || may_overlap(desc.meta) {
+        let packet_pointer_fields = [
+            EbpfStructFieldDescriptor {
+                offset: desc.data,
+                span: field_width,
+                permission: EbpfStructFieldPermission::ReadOnly,
+                max_access_width: field_width,
+                allow_narrow_access: false,
+                extra_read_width_at_start: 0,
+            },
+            EbpfStructFieldDescriptor {
+                offset: desc.end,
+                span: field_width,
+                permission: EbpfStructFieldPermission::ReadOnly,
+                max_access_width: field_width,
+                allow_narrow_access: false,
+                extra_read_width_at_start: 0,
+            },
+            EbpfStructFieldDescriptor {
+                offset: desc.meta,
+                span: field_width,
+                permission: EbpfStructFieldPermission::ReadOnly,
+                max_access_width: field_width,
+                allow_narrow_access: false,
+                extra_read_width_at_start: 0,
+            },
+        ];
+        if write_may_touch_readonly_field(
+            &self.dom.state.values,
+            self.registry,
+            lb,
+            ub,
+            &packet_pointer_fields,
+        ) {
             return self.throw_fail("Cannot write to context pointer field");
         }
         Ok(())
@@ -340,7 +443,7 @@ impl<'a> EbpfChecker<'a> {
             .dom
             .state
             .values
-            .eval_interval_var(r.svalue, self.registry);
+            .eval_interval_var(r.uvalue, self.registry);
 
         if let Some(sn) = src_interval.singleton()
             && let Some(imm) = sn.to_i64()
@@ -523,7 +626,55 @@ impl<'a> EbpfChecker<'a> {
                         return self.throw_fail("FDs cannot be dereferenced directly");
                     }
                 }
-                TypeEncoding::TSocket | TypeEncoding::TBtfId => {
+                TypeEncoding::TSocket => {
+                    let Some(socket_layout) = self.ctx.platform.sock_common_layout() else {
+                        return self.throw_fail("Socket layout is unavailable");
+                    };
+                    let (lb, ub) = self.lb_ub_access_pair(s, r.socket_offset);
+                    self.require_value(
+                        geq(lb.clone(), LinearExpression::from(0)),
+                        "Lower bound must be at least 0",
+                    )?;
+                    self.require_value(
+                        leq(
+                            ub.clone(),
+                            LinearExpression::from(socket_layout.size as i64),
+                        ),
+                        &format!("Upper bound must be at most {}", socket_layout.size),
+                    )?;
+                    if !is_comparison_check {
+                        if s.access_type == AccessType::Write {
+                            return self.throw_fail("Socket memory is read-only");
+                        }
+                        let Value::Imm(width_imm) = s.width else {
+                            return self.throw_fail("Socket access size must be constant");
+                        };
+                        let offset = self.dom.state.values.eval_interval(&lb, self.registry);
+                        let Some(exact_offset) = offset
+                            .singleton()
+                            .and_then(|n| n.to_i64())
+                            .filter(|n| *n >= i32::MIN as i64 && *n <= i32::MAX as i64)
+                        else {
+                            return self.throw_fail("Socket access offset must be precise");
+                        };
+                        let width = width_imm.v as i32;
+                        if !is_valid_struct_access(
+                            socket_layout,
+                            exact_offset as i32,
+                            width,
+                            s.access_type,
+                        ) {
+                            return self.throw_fail("Invalid socket access");
+                        }
+                        if !s.or_null {
+                            self.require_value(
+                                lt(LinearExpression::from(0), LinearExpression::from(r.uvalue)),
+                                "Possible null access",
+                            )?;
+                        }
+                    }
+                }
+                TypeEncoding::TBtfId => {
                     if !is_comparison_check {
                         return self.throw_fail("Unsupported pointer type for memory access");
                     }

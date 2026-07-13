@@ -341,8 +341,17 @@ impl Interval {
         if let Some(r) = try_split_dividend_at_zero(self, x, op, zero_join) {
             return r;
         }
-        let a = make_dividend_when_both_nonzero(self, x);
-        let divs = [a.lb / x.lb, a.lb / x.ub, a.ub / x.lb, a.ub / x.ub];
+        // Neither the dividend nor the divisor contains 0. eBPF signed division
+        // truncates toward zero (matching Number's `/`), and truncated division is
+        // monotone in each argument on a sign-consistent box, so the extreme
+        // quotients are attained at the corners of the operand box directly (no
+        // dividend adjustment, unlike udiv below).
+        let divs = [
+            self.lb / x.lb,
+            self.lb / x.ub,
+            self.ub / x.lb,
+            self.ub / x.ub,
+        ];
         let clb = *divs.iter().min().unwrap();
         let cub = *divs.iter().max().unwrap();
         Interval::new(clb, cub)

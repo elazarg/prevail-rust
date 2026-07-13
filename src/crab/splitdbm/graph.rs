@@ -119,6 +119,12 @@ impl AdaptGraph {
             self.is_free[v as usize] = false;
             v
         } else {
+            // self.succs.len() as VertId wraps to 0 at 65536 vertices, aliasing the
+            // reserved zero vertex; and at len() == VertId::MAX the new vertex would
+            // make verts()'s one-past-end (65536) wrap to an empty range. An eBPF
+            // program's variable count is orders of magnitude below 65535, so this is
+            // a documented invariant, not a reachable path.
+            debug_assert!(self.succs.len() < VertId::MAX as usize);
             let v = self.succs.len() as VertId;
             self.is_free.push(false);
             self.succs.push(TreeSMap::default());
@@ -150,12 +156,18 @@ impl AdaptGraph {
         self.edge_count -= succ_entries.len();
         self.succs[vi].clear();
 
-        // Remove all incoming edges to v
-        let pred_keys: Vec<VertId> = self.preds[vi].keys().collect();
-        for k in &pred_keys {
-            self.succs[*k as usize].remove(v);
+        // Remove all incoming edges to v. Each edge k -> v owns one `ws` slot
+        // referenced from both succs[k] and preds[v]; recycle it here too (mirroring
+        // the out-edge loop above), or `ws` grows monotonically across the many
+        // havoc/assign/forget operations a verification performs. Self-loops are
+        // recycled once via the out-edge loop, which already removed v from
+        // preds[v], so no double-free.
+        let pred_entries: Vec<(VertId, usize)> = self.preds[vi].entries().collect();
+        for (key, widx) in &pred_entries {
+            self.free_widx.push(*widx);
+            self.succs[*key as usize].remove(v);
         }
-        self.edge_count -= pred_keys.len();
+        self.edge_count -= pred_entries.len();
         self.preds[vi].clear();
 
         self.is_free[vi] = true;
@@ -239,6 +251,9 @@ impl AdaptGraph {
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn clear_edges(&mut self) {
         self.ws.clear();
+        // free_widx indexes into ws; leaving stale indices after clearing ws would
+        // make the next add_edge write ws[idx] out of bounds.
+        self.free_widx.clear();
         for v in 0..self.is_free.len() {
             if !self.is_free[v] {
                 self.succs[v].clear();
@@ -263,6 +278,9 @@ impl AdaptGraph {
 
     /// Iterate over live (non-free) vertex ids.
     pub fn verts(&self) -> VertIter<'_> {
+        // A vertex count of 65536 wraps to 0 through VertId (u16), yielding an empty
+        // range; far beyond any eBPF program's variable count, but guard it.
+        debug_assert!(self.is_free.len() <= VertId::MAX as usize);
         VertIter {
             pos: 0,
             is_free: &self.is_free,

@@ -883,7 +883,8 @@ impl ArrayDomain {
                 // width) touches no bytes, so there is nothing to havoc.
                 let (lb, ub) = as_numbytes_range(idx, width, self.total_stack_size());
                 if lb < ub {
-                    self.num_bytes.havoc(lb as usize, ub);
+                    // havoc's second argument is a width, not an upper bound.
+                    self.num_bytes.havoc(lb as usize, ub - lb);
                 }
             }
             None

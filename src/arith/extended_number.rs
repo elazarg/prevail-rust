@@ -86,8 +86,17 @@ impl ExtendedNumber {
         }
     }
 
-    /// Helper for division/remainder operations.
-    fn abs_div<F>(&self, rhs: &ExtendedNumber, f: F) -> ExtendedNumber
+    /// Helper for division/remainder operations. `flip_infinite_by_divisor_sign`
+    /// negates an infinite dividend when the divisor is negative (only signed
+    /// division does this: -oo / negative == +oo). Modulo keeps the dividend's
+    /// infinity regardless of divisor sign, and unsigned udiv/urem treat the
+    /// divisor as unsigned (never negative), so those callers pass `false`.
+    fn abs_div<F>(
+        &self,
+        rhs: &ExtendedNumber,
+        f: F,
+        flip_infinite_by_divisor_sign: bool,
+    ) -> ExtendedNumber
     where
         F: FnOnce(&Number, &Number) -> ExtendedNumber,
     {
@@ -101,7 +110,11 @@ impl ExtendedNumber {
             return Finite(Number::default());
         }
         if self.is_infinite() {
-            return *self;
+            return if flip_infinite_by_divisor_sign && *rhs < Finite(Number::default()) {
+                -*self
+            } else {
+                *self
+            };
         }
         match (self, rhs) {
             (Finite(a), Finite(b)) => f(a, b),
@@ -110,11 +123,11 @@ impl ExtendedNumber {
     }
 
     pub fn udiv(&self, rhs: &ExtendedNumber) -> ExtendedNumber {
-        self.abs_div(rhs, |a, b| Finite(to_unsigned(a) / to_unsigned(b)))
+        self.abs_div(rhs, |a, b| Finite(to_unsigned(a) / to_unsigned(b)), false)
     }
 
     pub fn urem(&self, rhs: &ExtendedNumber) -> ExtendedNumber {
-        self.abs_div(rhs, |a, b| Finite(to_unsigned(a) % to_unsigned(b)))
+        self.abs_div(rhs, |a, b| Finite(to_unsigned(a) % to_unsigned(b)), false)
     }
 
     /// True if the value is positive (> 0, including +infinity).
@@ -265,7 +278,7 @@ impl std::ops::Mul for ExtendedNumber {
 impl std::ops::Div for &ExtendedNumber {
     type Output = ExtendedNumber;
     fn div(self, rhs: Self) -> ExtendedNumber {
-        self.abs_div(rhs, |a, b| Finite(a / b))
+        self.abs_div(rhs, |a, b| Finite(a / b), true)
     }
 }
 
@@ -280,7 +293,7 @@ impl std::ops::Div for ExtendedNumber {
 impl std::ops::Rem for &ExtendedNumber {
     type Output = ExtendedNumber;
     fn rem(self, rhs: Self) -> ExtendedNumber {
-        self.abs_div(rhs, |a, b| Finite(a % b))
+        self.abs_div(rhs, |a, b| Finite(a % b), false)
     }
 }
 

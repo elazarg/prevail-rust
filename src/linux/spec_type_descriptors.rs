@@ -7,6 +7,9 @@
 #![allow(dead_code)]
 
 use crate::spec::ebpf_base::EbpfCtxDescriptor;
+use crate::spec::type_descriptors::{
+    EbpfStructDescriptor, EbpfStructFieldDescriptor, EbpfStructFieldPermission,
+};
 
 pub const NMAPS: i32 = 64;
 pub const NONMAPS: i32 = 5;
@@ -39,6 +42,89 @@ pub const LIRC_MODE2_REGIONS: i32 = 4;
 pub const NETFILTER_REGIONS: i32 = 2 * 8;
 // Syscall: context is user-supplied buffer, kernel allows up to U16_MAX.
 pub const SYSCALL_REGIONS: i32 = 65535;
+
+pub const BPF_SOCK_BOUND_DEV_IF_OFFSET: i32 = 0;
+pub const BPF_SOCK_FAMILY_OFFSET: i32 = 4;
+pub const BPF_SOCK_SRC_IP4_OFFSET: i32 = 24;
+pub const BPF_SOCK_SRC_IP6_OFFSET: i32 = 28;
+pub const BPF_SOCK_SRC_IP6_END: i32 = 44;
+pub const BPF_SOCK_SRC_PORT_OFFSET: i32 = 44;
+pub const BPF_SOCK_DST_PORT_OFFSET: i32 = 48;
+pub const BPF_SOCK_DST_PORT_END: i32 = 50;
+pub const BPF_SOCK_DST_IP4_OFFSET: i32 = 52;
+pub const BPF_SOCK_DST_IP6_OFFSET: i32 = 56;
+pub const BPF_SOCK_DST_IP6_END: i32 = 72;
+pub const BPF_SOCK_STATE_OFFSET: i32 = 72;
+pub const BPF_SOCK_RX_QUEUE_MAPPING_OFFSET: i32 = 76;
+pub const BPF_SOCK_U32_FIELD_SIZE: i32 = 4;
+
+const fn readonly_bpf_sock_u32_field(offset: i32) -> EbpfStructFieldDescriptor {
+    EbpfStructFieldDescriptor {
+        offset,
+        span: BPF_SOCK_U32_FIELD_SIZE,
+        permission: EbpfStructFieldPermission::ReadOnly,
+        max_access_width: BPF_SOCK_U32_FIELD_SIZE,
+        allow_narrow_access: true,
+        extra_read_width_at_start: 0,
+    }
+}
+
+/// Prevail currently collapses Linux's PTR_TO_SOCK_COMMON and PTR_TO_SOCKET into
+/// one T_SOCKET, so direct socket access uses this common safe field subset. The
+/// table intentionally excludes the type..priority range and padding bytes.
+pub static BPF_SOCK_COMMON_FIELDS: &[EbpfStructFieldDescriptor] = &[
+    // Unlike the other u32 fields, bound_dev_if does not opt into narrow
+    // sub-field reads: it is accepted only at its exact 32-bit width. Narrow
+    // access here is intentionally left out of the verified-safe subset, which
+    // is conservative (stricter than the kernel only rejects valid programs; it
+    // never accepts invalid ones). Widen this to allow_narrow_access if a real
+    // program needs sub-word bound_dev_if reads.
+    EbpfStructFieldDescriptor {
+        offset: BPF_SOCK_BOUND_DEV_IF_OFFSET,
+        span: BPF_SOCK_U32_FIELD_SIZE,
+        permission: EbpfStructFieldPermission::ReadOnly,
+        max_access_width: BPF_SOCK_U32_FIELD_SIZE,
+        allow_narrow_access: false,
+        extra_read_width_at_start: 0,
+    },
+    readonly_bpf_sock_u32_field(BPF_SOCK_FAMILY_OFFSET),
+    readonly_bpf_sock_u32_field(BPF_SOCK_SRC_IP4_OFFSET),
+    EbpfStructFieldDescriptor {
+        offset: BPF_SOCK_SRC_IP6_OFFSET,
+        span: BPF_SOCK_SRC_IP6_END - BPF_SOCK_SRC_IP6_OFFSET,
+        permission: EbpfStructFieldPermission::ReadOnly,
+        max_access_width: BPF_SOCK_U32_FIELD_SIZE,
+        allow_narrow_access: true,
+        extra_read_width_at_start: 0,
+    },
+    readonly_bpf_sock_u32_field(BPF_SOCK_SRC_PORT_OFFSET),
+    EbpfStructFieldDescriptor {
+        offset: BPF_SOCK_DST_PORT_OFFSET,
+        span: BPF_SOCK_DST_PORT_END - BPF_SOCK_DST_PORT_OFFSET,
+        permission: EbpfStructFieldPermission::ReadOnly,
+        max_access_width: BPF_SOCK_DST_PORT_END - BPF_SOCK_DST_PORT_OFFSET,
+        allow_narrow_access: true,
+        // The kernel permits a 32-bit read starting at dst_port although the
+        // logical field is 16 bits.
+        extra_read_width_at_start: BPF_SOCK_U32_FIELD_SIZE,
+    },
+    readonly_bpf_sock_u32_field(BPF_SOCK_DST_IP4_OFFSET),
+    EbpfStructFieldDescriptor {
+        offset: BPF_SOCK_DST_IP6_OFFSET,
+        span: BPF_SOCK_DST_IP6_END - BPF_SOCK_DST_IP6_OFFSET,
+        permission: EbpfStructFieldPermission::ReadOnly,
+        max_access_width: BPF_SOCK_U32_FIELD_SIZE,
+        allow_narrow_access: true,
+        extra_read_width_at_start: 0,
+    },
+    readonly_bpf_sock_u32_field(BPF_SOCK_STATE_OFFSET),
+    readonly_bpf_sock_u32_field(BPF_SOCK_RX_QUEUE_MAPPING_OFFSET),
+];
+
+pub static BPF_SOCK_COMMON_LAYOUT: EbpfStructDescriptor = EbpfStructDescriptor {
+    size: CGROUP_SOCK_REGIONS,
+    fields: BPF_SOCK_COMMON_FIELDS,
+};
 
 pub static SK_BUFF: EbpfCtxDescriptor = EbpfCtxDescriptor {
     size: SK_SKB_REGIONS,

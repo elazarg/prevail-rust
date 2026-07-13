@@ -425,12 +425,35 @@ impl TypeToNumDomain {
                 self.types.havoc_type_var(*type_variable);
                 let uv = registry.kind_var(DataKind::Uvalues, *type_variable);
                 self.values.havoc(uv);
-                for &kind in type_to_kinds(te) {
-                    let v = registry.kind_var(kind, *type_variable);
-                    self.values.havoc(v);
-                }
+                self.forget_type_dependent_values(*type_variable, registry);
             }
         }
+    }
+
+    /// Havoc every type-dependent kind value (offsets, sizes, svalue) attached to
+    /// `type_variable`, regardless of which type it currently has. Call this
+    /// before installing a new type on a register or frame slot: otherwise a
+    /// stale kind value from a previous type (e.g. a stack offset) can survive
+    /// under the new type and be misinterpreted, since a havoc scoped to only the
+    /// *current* (pre- or post-change) type set can miss it. `uvalue` is
+    /// intentionally left untouched -- its meaning is type-independent.
+    pub fn forget_type_dependent_values(
+        &mut self,
+        type_variable: Variable,
+        registry: &mut VariableRegistry,
+    ) {
+        for &te in &TYPES_WITH_KINDS {
+            for &kind in type_to_kinds(te) {
+                let v = registry.kind_var(kind, type_variable);
+                self.values.havoc(v);
+            }
+        }
+    }
+
+    /// Convenience: `forget_type_dependent_values` for a register's type variable.
+    pub fn forget_type_dependent_values_reg(&mut self, reg: &Reg, registry: &mut VariableRegistry) {
+        let type_variable = reg_type(reg, registry);
+        self.forget_type_dependent_values(type_variable, registry);
     }
 
     /// Assign one register to another (copy type and all values).
@@ -438,6 +461,11 @@ impl TypeToNumDomain {
         if lhs.v == rhs.v {
             return;
         }
+        // Forget lhs's type-dependent values before the type changes: a havoc
+        // scoped to iterate_types(lhs) computed *after* assign_type_from_reg would
+        // only cover rhs's (the new) types, leaving a stale kind value from lhs's
+        // previous type (e.g. a stack offset) unwatched.
+        self.forget_type_dependent_values_reg(lhs, registry);
         self.types.assign_type_from_reg(lhs, rhs, registry);
 
         let lhs_pack = reg_pack(lhs, registry);
@@ -445,14 +473,7 @@ impl TypeToNumDomain {
         self.values
             .assign_var(lhs_pack.uvalue, rhs_pack.uvalue, registry);
 
-        // Havoc lhs kinds first, then copy from rhs.
         let lhs_type_var = reg_type(lhs, registry);
-        for &te in &self.types.iterate_types(lhs, registry) {
-            for &kind in type_to_kinds(te) {
-                let v = registry.kind_var(kind, lhs_type_var);
-                self.values.havoc(v);
-            }
-        }
         for &te in &self.types.iterate_types(rhs, registry) {
             let rhs_type_var = reg_type(rhs, registry);
             for &kind in type_to_kinds(te) {

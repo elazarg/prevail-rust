@@ -79,13 +79,13 @@ fn test_assertions_mem_load() {
     let assertions = get_assertions(&ins, &info, &EbpfRuntimeConfig::default(), &None);
 
     // Load should generate:
-    // 1. TypeConstraint(base, Pointer)
+    // 1. TypeConstraint(base, Dereferenceable)
     // 2. ValidAccess(base, offset=0, width=8, Read)
     assert_eq!(assertions.len(), 2);
 
     if let Assertion::TypeConstraint(tc) = &assertions[0] {
         assert_eq!(tc.reg.v, 1);
-        assert!(matches!(tc.types, TypeGroup::Pointer));
+        assert!(matches!(tc.types, TypeGroup::Dereferenceable));
     } else {
         panic!("Expected TypeConstraint for base register");
     }

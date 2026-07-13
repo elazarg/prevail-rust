@@ -1216,6 +1216,12 @@ verify_section_pass!(
     "xdp_bpf_bpfel.o",
     "xdp"
 );
+verify_section_pass!(
+    cilium_examples_tcprtt_sockops,
+    "cilium-examples",
+    "tcprtt_sockops_bpf_bpfel.o",
+    "sockops"
+);
 
 // ── suricata/ (3 sections) ────────────────────────────────────────
 verify_section_pass!(suricata_filter_filter, "suricata", "filter.o", "filter");
@@ -2653,6 +2659,22 @@ verify_program_pass!(
     "tc/entry",
     "cil_to_container",
     4
+);
+verify_program_pass!(
+    cilium_core_bpf_lxc_tc_tail_tail_handle_ipv4_cont,
+    "cilium-core",
+    "bpf_lxc.o",
+    "tc/tail",
+    "tail_handle_ipv4_cont",
+    30
+);
+verify_program_pass!(
+    cilium_core_bpf_lxc_tc_tail_tail_ipv4_policy,
+    "cilium-core",
+    "bpf_lxc.o",
+    "tc/tail",
+    "tail_ipv4_policy",
+    30
 );
 verify_program_pass!(
     cilium_core_bpf_overlay_tc_entry_cil_from_overlay,

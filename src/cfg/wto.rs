@@ -64,42 +64,56 @@ impl WtoCycle {
     pub fn iter(&self) -> impl Iterator<Item = &CycleOrLabel> {
         self.components.iter().rev()
     }
-
-    /// Visit the heads of all nested loops in this cycle.
-    pub fn for_each_loop_head(&self, f: &mut dyn FnMut(&Label)) {
-        visit_loop_heads(self.iter(), f);
-    }
 }
 
 /// Visit the heads of all loops in a sequence of WTO components.
+///
+/// Iterative (explicit work-stack) rather than recursive on cycle-nesting depth: a
+/// crafted CFG can nest ~N/2 components and overflow the stack.
 fn visit_loop_heads<'a>(
     components: impl Iterator<Item = &'a CycleOrLabel>,
     f: &mut dyn FnMut(&Label),
 ) {
-    for component in components {
-        if let CycleOrLabel::Cycle(cycle) = component {
-            f(cycle.head());
-            cycle.for_each_loop_head(f);
+    let mut stack: Vec<&Rc<WtoCycle>> = components
+        .filter_map(|component| match component {
+            CycleOrLabel::Cycle(cycle) => Some(cycle),
+            CycleOrLabel::Label(_) => None,
+        })
+        .collect();
+    while let Some(cycle) = stack.pop() {
+        f(cycle.head());
+        for component in cycle.iter() {
+            if let CycleOrLabel::Cycle(sub) = component {
+                stack.push(sub);
+            }
         }
     }
 }
 
 /// Check if a label is a member of a WTO component.
+///
+/// Iterative (explicit work-stack) rather than recursive on cycle-nesting depth: a
+/// crafted CFG can nest ~N/2 components and overflow the stack.
 pub fn is_component_member(label: &Label, component: &CycleOrLabel) -> bool {
-    match component {
-        CycleOrLabel::Label(l) => l == label,
-        CycleOrLabel::Cycle(cycle) => {
-            if cycle.head() == label {
-                return true;
-            }
-            for sub in cycle.iter() {
-                if is_component_member(label, sub) {
+    let mut stack = vec![component];
+    while let Some(current) = stack.pop() {
+        match current {
+            CycleOrLabel::Label(l) => {
+                if l == label {
                     return true;
                 }
             }
-            false
+            CycleOrLabel::Cycle(cycle) => {
+                if cycle.head() == label {
+                    return true;
+                }
+                for sub in cycle.iter() {
+                    stack.push(sub);
+                }
+            }
         }
     }
+    false
 }
 
 /// The nesting of a vertex: the set of heads of nested components containing it.

@@ -381,12 +381,11 @@ fn main() -> ExitCode {
     let mut rust_platform = LinuxPlatform::new();
 
     // Apply conformance groups.
+    // Empty by default so that, absent --include_groups, only DEFAULT_GROUPS are
+    // enabled below (the documented intent: no callx or packet). Pre-seeding with
+    // every group name would OR all groups back in, overriding DEFAULT_GROUPS.
     let mut groups = conformance::DEFAULT_GROUPS;
-    let include_set: Vec<&str> = if cli.include_groups.is_empty() {
-        conformance::all_group_names()
-    } else {
-        cli.include_groups.iter().map(|s| s.as_str()).collect()
-    };
+    let include_set: Vec<&str> = cli.include_groups.iter().map(|s| s.as_str()).collect();
     for name in &include_set {
         if let Some(g) = conformance::group_by_name(name) {
             groups |= g;

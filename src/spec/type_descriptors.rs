@@ -43,6 +43,40 @@ pub struct EbpfMapType {
     pub value_type: EbpfMapValueType,
 }
 
+/// Whether a struct field may be written, or is read-only.
+/// Mirrors C++ `EbpfStructFieldPermission`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum EbpfStructFieldPermission {
+    #[default]
+    ReadOnly,
+    ReadWrite,
+}
+
+/// Describes one field of a directly-accessible struct (e.g. a socket).
+/// Mirrors C++ `EbpfStructFieldDescriptor`.
+///
+/// Default permission is `ReadOnly` so a descriptor that omits an explicit
+/// permission fails closed (rejects writes); writable fields must opt in with
+/// `ReadWrite`.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct EbpfStructFieldDescriptor {
+    pub offset: i32,
+    pub span: i32,
+    pub permission: EbpfStructFieldPermission,
+    pub max_access_width: i32,
+    pub allow_narrow_access: bool,
+    /// Additional exact-width read allowed only at the field start.
+    pub extra_read_width_at_start: i32,
+}
+
+/// Describes a directly-accessible struct's layout as a set of fields.
+/// Mirrors C++ `EbpfStructDescriptor`.
+#[derive(Clone, Copy, Debug)]
+pub struct EbpfStructDescriptor {
+    pub size: i32,
+    pub fields: &'static [EbpfStructFieldDescriptor],
+}
+
 /// Describes an eBPF program type.
 /// Mirrors C++ `EbpfProgramType`.
 ///

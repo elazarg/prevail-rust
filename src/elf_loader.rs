@@ -1637,16 +1637,15 @@ impl<'a> ProgramReader<'a> {
         }
         visiting.insert(prog_idx);
 
-        let prog_name = self.raw_programs[prog_idx].function_name.clone();
-
-        // Collect relocations for this program.
+        // Collect relocations for this program. r.source_offset is an instruction
+        // index into raw_programs[r.prog_index], so the relocation must be matched
+        // to its owning program by index identity, not by function_name: ELF symbol
+        // names need not be unique, and applying a relocation meant for a larger
+        // same-named program here could index this program's instructions out of bounds.
         let relocs_for_prog: Vec<(usize, usize, String)> = self
             .function_relocations
             .iter()
-            .filter(|r| {
-                r.prog_index < self.raw_programs.len()
-                    && self.raw_programs[r.prog_index].function_name == prog_name
-            })
+            .filter(|r| r.prog_index == prog_idx)
             .map(|r| {
                 (
                     r.source_offset,
