@@ -324,6 +324,11 @@ impl SplitDBM {
     ///
     /// Returns false if infeasible.
     pub fn strengthen_bound(&mut self, v: VertId, side: Side, bound_value: &Weight) -> bool {
+        // One scratch space for every repair_potential call in this method: each
+        // call's underlying grow() reallocates an O(n^2) edge_marks matrix, so
+        // going through the self.repair_potential wrapper (a fresh ScratchSpace
+        // per call) would reallocate it on every predecessor/successor.
+        let mut scratch = ScratchSpace::new();
         match side {
             Side::Left => {
                 let edge_weight = -bound_value;
@@ -332,7 +337,7 @@ impl SplitDBM {
                     return true;
                 }
                 self.g.set_edge(v, edge_weight, 0);
-                if !self.repair_potential(v, 0) {
+                if !graph_ops::repair_potential(&mut scratch, &self.g, &mut self.potential, v, 0) {
                     return false;
                 }
                 // Propagate to predecessors
@@ -344,7 +349,13 @@ impl SplitDBM {
                     .collect();
                 for (pred, pred_val) in preds {
                     self.g.update_edge(pred, pred_val + edge_weight, 0);
-                    if !self.repair_potential(pred, 0) {
+                    if !graph_ops::repair_potential(
+                        &mut scratch,
+                        &self.g,
+                        &mut self.potential,
+                        pred,
+                        0,
+                    ) {
                         return false;
                     }
                 }
@@ -355,7 +366,7 @@ impl SplitDBM {
                     return true;
                 }
                 self.g.set_edge(0, *bound_value, v);
-                if !self.repair_potential(0, v) {
+                if !graph_ops::repair_potential(&mut scratch, &self.g, &mut self.potential, 0, v) {
                     return false;
                 }
                 // Propagate to successors
@@ -367,7 +378,13 @@ impl SplitDBM {
                     .collect();
                 for (succ, succ_val) in succs {
                     self.g.update_edge(0, succ_val + bound_value, succ);
-                    if !self.repair_potential(0, succ) {
+                    if !graph_ops::repair_potential(
+                        &mut scratch,
+                        &self.g,
+                        &mut self.potential,
+                        0,
+                        succ,
+                    ) {
                         return false;
                     }
                 }

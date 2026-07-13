@@ -200,7 +200,7 @@ static RE_TYPE_TOK: LazyLock<Regex> = LazyLock::new(|| compile(TYPE_PAT));
 // Lookup tables
 // ---------------------------------------------------------------------------
 
-fn str_to_binop() -> HashMap<&'static str, BinOp> {
+static STR_TO_BINOP: LazyLock<HashMap<&'static str, BinOp>> = LazyLock::new(|| {
     HashMap::from([
         ("", BinOp::MOV),
         ("+", BinOp::ADD),
@@ -220,9 +220,9 @@ fn str_to_binop() -> HashMap<&'static str, BinOp> {
         ("s16", BinOp::MOVSX16),
         ("s32", BinOp::MOVSX32),
     ])
-}
+});
 
-fn str_to_unop() -> HashMap<&'static str, UnOp> {
+static STR_TO_UNOP: LazyLock<HashMap<&'static str, UnOp>> = LazyLock::new(|| {
     HashMap::from([
         ("be16", UnOp::BE16),
         ("be32", UnOp::BE32),
@@ -235,9 +235,9 @@ fn str_to_unop() -> HashMap<&'static str, UnOp> {
         ("swap64", UnOp::SWAP64),
         ("-", UnOp::NEG),
     ])
-}
+});
 
-fn str_to_cmpop() -> HashMap<&'static str, ConditionOp> {
+static STR_TO_CMPOP: LazyLock<HashMap<&'static str, ConditionOp>> = LazyLock::new(|| {
     HashMap::from([
         ("==", ConditionOp::EQ),
         ("!=", ConditionOp::NE),
@@ -252,9 +252,9 @@ fn str_to_cmpop() -> HashMap<&'static str, ConditionOp> {
         ("s>", ConditionOp::SGT),
         ("s>=", ConditionOp::SGE),
     ])
-}
+});
 
-fn str_to_atomicop() -> HashMap<&'static str, AtomicOp> {
+static STR_TO_ATOMICOP: LazyLock<HashMap<&'static str, AtomicOp>> = LazyLock::new(|| {
     HashMap::from([
         ("+", AtomicOp::ADD),
         ("|", AtomicOp::OR),
@@ -263,16 +263,16 @@ fn str_to_atomicop() -> HashMap<&'static str, AtomicOp> {
         ("x", AtomicOp::XCHG),
         ("cx", AtomicOp::CMPXCHG),
     ])
-}
+});
 
-fn str_to_width() -> HashMap<&'static str, AccessSize> {
+static STR_TO_WIDTH: LazyLock<HashMap<&'static str, AccessSize>> = LazyLock::new(|| {
     HashMap::from([
         ("8", AccessSize::Byte),
         ("16", AccessSize::Half),
         ("32", AccessSize::Word),
         ("64", AccessSize::DWord),
     ])
-}
+});
 
 // ---------------------------------------------------------------------------
 // Helper functions
@@ -385,9 +385,8 @@ fn make_deref(
     offset_str: &str,
 ) -> Deref {
     let offset = to_int(offset_str);
-    let widths = str_to_width();
     Deref {
-        width: widths[width_str],
+        width: STR_TO_WIDTH[width_str],
         basereg: reg(basereg_str),
         offset: if sign_str.trim() == "-" {
             -offset
@@ -427,12 +426,6 @@ pub fn parse_instruction_with_platform(
     if text.is_empty() {
         return Instruction::Undefined(Undefined { opcode: 0 });
     }
-
-    let binops = str_to_binop();
-    let unops = str_to_unop();
-    let cmpops = str_to_cmpop();
-    let atomicops = str_to_atomicop();
-    let widths = str_to_width();
 
     // exit
     if RE_EXIT.is_match(text) {
@@ -496,7 +489,7 @@ pub fn parse_instruction_with_platform(
         let r = m.get(1).unwrap().as_str();
         let op_str = m.get(2).unwrap().as_str();
         let src = m.get(3).unwrap().as_str();
-        if let Some(&op) = binops.get(op_str) {
+        if let Some(&op) = STR_TO_BINOP.get(op_str) {
             return Instruction::Bin(Bin {
                 op,
                 dst: reg(r),
@@ -516,7 +509,7 @@ pub fn parse_instruction_with_platform(
             panic!("Invalid unary operation: {}", text);
         }
         return Instruction::Un(Un {
-            op: unops[op_str],
+            op: STR_TO_UNOP[op_str],
             dst: reg(dst_str),
             is64: is64_reg(dst_str),
         });
@@ -576,7 +569,7 @@ pub fn parse_instruction_with_platform(
         let imm_str = m.get(3).unwrap().as_str();
         let ll_str = m.get(4).unwrap().as_str();
         let lddw = !ll_str.is_empty();
-        if let Some(&op) = binops.get(op_str) {
+        if let Some(&op) = STR_TO_BINOP.get(op_str) {
             return Instruction::Bin(Bin {
                 op,
                 dst: reg(r),
@@ -621,7 +614,7 @@ pub fn parse_instruction_with_platform(
 
     // lock *(u<width> *)(<reg> +/- <imm>) <atomicop> <reg> [fetch]
     if let Some(m) = RE_ATOMIC.captures(text) {
-        let op = atomicops[m.get(6).unwrap().as_str()];
+        let op = STR_TO_ATOMICOP[m.get(6).unwrap().as_str()];
         let fetch_matched = m.get(8).is_some();
         return Instruction::Atomic(Atomic {
             op,
@@ -639,7 +632,7 @@ pub fn parse_instruction_with_platform(
 
     // r0 = *(u<width> *)skb[...]  (packet access)
     if let Some(m) = RE_PACKET.captures(text) {
-        let width = widths[m.get(1).unwrap().as_str()];
+        let width = STR_TO_WIDTH[m.get(1).unwrap().as_str()];
         let access = m.get(2).unwrap().as_str();
 
         if let Some(m2) = RE_PACKET_REG.captures(access) {
@@ -680,7 +673,7 @@ pub fn parse_instruction_with_platform(
         let right_str = m.get(3).unwrap().as_str();
         return Instruction::Assume(Assume {
             cond: Condition {
-                op: cmpops[op_str],
+                op: STR_TO_CMPOP[op_str],
                 left: reg(left_str),
                 right: reg_or_imm(right_str),
                 is64: is64_reg(left_str),
@@ -696,7 +689,7 @@ pub fn parse_instruction_with_platform(
             let cond = if let Some(m1) = m.get(1) {
                 let left_str = m1.as_str();
                 Some(Condition {
-                    op: cmpops[m.get(2).unwrap().as_str()],
+                    op: STR_TO_CMPOP[m.get(2).unwrap().as_str()],
                     left: reg(left_str),
                     right: reg_or_imm(m.get(3).unwrap().as_str()),
                     is64: is64_reg(left_str),

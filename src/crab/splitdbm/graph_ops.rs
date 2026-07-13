@@ -187,6 +187,22 @@ pub fn apply_delta(g: &mut Graph, delta: &EdgeVector) {
     }
 }
 
+/// Tighten edge `s -> d` to `w` if that improves on the current edge (or add
+/// it if absent). Returns whether the edge was updated/added.
+fn relax(g: &mut Graph, s: VertId, d: VertId, w: Weight) -> bool {
+    match g.lookup_mut(s, d) {
+        Some(pw) if *pw <= w => false,
+        Some(pw) => {
+            *pw = w;
+            true
+        }
+        None => {
+            g.add_edge(s, w, d);
+            true
+        }
+    }
+}
+
 /// Close the graph over a single edge (ii, jj).
 ///
 /// For every path s→ii→jj→d, ensures edge s→d ≤ w(s→ii) + w(ii→jj) + w(jj→d).
@@ -207,16 +223,7 @@ pub fn close_over_edge(g: &mut Graph, ii: VertId, jj: VertId) {
     let mut src_dec: Vec<(VertId, Weight)> = Vec::new();
     for (se, se_val) in &preds_ii {
         let wt_sij = se_val + c;
-        if *se != jj {
-            if let Some(pw) = g.lookup_mut(*se, jj)
-                && *pw <= wt_sij
-            {
-                continue;
-            } else if let Some(pw) = g.lookup_mut(*se, jj) {
-                *pw = wt_sij;
-            } else {
-                g.add_edge(*se, wt_sij, jj);
-            }
+        if *se != jj && relax(g, *se, jj, wt_sij) {
             src_dec.push((*se, *se_val));
         }
     }
@@ -232,16 +239,7 @@ pub fn close_over_edge(g: &mut Graph, ii: VertId, jj: VertId) {
     let mut dest_dec: Vec<(VertId, Weight)> = Vec::new();
     for (de, de_val) in &succs_jj {
         let wt_ijd = de_val + c;
-        if *de != ii {
-            if let Some(pw) = g.lookup_mut(ii, *de)
-                && *pw <= wt_ijd
-            {
-                continue;
-            } else if let Some(pw) = g.lookup_mut(ii, *de) {
-                *pw = wt_ijd;
-            } else {
-                g.add_edge(ii, wt_ijd, *de);
-            }
+        if *de != ii && relax(g, ii, *de, wt_ijd) {
             dest_dec.push((*de, *de_val));
         }
     }
@@ -251,15 +249,7 @@ pub fn close_over_edge(g: &mut Graph, ii: VertId, jj: VertId) {
         let wt_sij = c + p1;
         for (de, p2) in &dest_dec {
             let wt_sijd = wt_sij + p2;
-            if let Some(pw) = g.lookup_mut(*se, *de)
-                && *pw <= wt_sijd
-            {
-                continue;
-            } else if let Some(pw) = g.lookup_mut(*se, *de) {
-                *pw = wt_sijd;
-            } else {
-                g.add_edge(*se, wt_sijd, *de);
-            }
+            relax(g, *se, *de, wt_sijd);
         }
     }
 }

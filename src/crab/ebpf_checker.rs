@@ -652,8 +652,8 @@ impl<'a> EbpfChecker<'a> {
                         let offset = self.dom.state.values.eval_interval(&lb, self.registry);
                         let Some(exact_offset) = offset
                             .singleton()
+                            .filter(|n| n.fits_cast_to(32))
                             .and_then(|n| n.to_i64())
-                            .filter(|n| *n >= i32::MIN as i64 && *n <= i32::MAX as i64)
                         else {
                             return self.throw_fail("Socket access offset must be precise");
                         };

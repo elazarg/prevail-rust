@@ -1017,14 +1017,11 @@ impl ArrayDomain {
                     access,
                 );
             }
-            if offset + size as u64 > cell_end as u64 + 1 {
-                // No right split needed.
-            } else if offset + size as u64 <= cell_end as u64 + 1 {
+            if offset + (size as u64) < cell_end as u64 + 1 {
+                // Use the bytes to the right of the specified range.
                 let right_start = (offset + size as u64) as i32;
                 let right_len = (cell_end as u64 + 1 - (offset + size as u64)) as u32;
-                if right_len > 0 {
-                    self.split_cell(inv, kind, right_start, right_len, access);
-                }
+                self.split_cell(inv, kind, right_start, right_len, access);
             }
         }
     }

@@ -681,6 +681,11 @@ pub fn read_btf_string(btf_data: &[u8], string_offset: u32) -> Result<String, Un
 
     let str_start = header.hdr_len as usize + header.str_off as usize;
     let str_end = str_start + header.str_len as usize;
+    if str_end > btf_data.len() {
+        return Err(UnmarshalError(
+            "Invalid .BTF section - string table out of range".into(),
+        ));
+    }
     let target = str_start + string_offset as usize;
 
     if target >= str_end {
@@ -762,5 +767,26 @@ mod tests {
             assert!(!r.section.is_empty());
             assert!(!r.file_name.is_empty());
         }
+    }
+
+    /// A header whose declared string-table range extends past the actual
+    /// section data must be rejected, not indexed out of bounds.
+    #[test]
+    fn read_btf_string_rejects_out_of_range_string_table() {
+        let hdr_size = mem::size_of::<BtfHeader>();
+        let mut btf_data = vec![0u8; hdr_size];
+        // magic (u16 LE)
+        btf_data[0..2].copy_from_slice(&BTF_HEADER_MAGIC.to_le_bytes());
+        btf_data[2] = BTF_HEADER_VERSION; // version
+        btf_data[3] = 0; // flags
+        btf_data[4..8].copy_from_slice(&(hdr_size as u32).to_le_bytes()); // hdr_len
+        btf_data[8..12].copy_from_slice(&0u32.to_le_bytes()); // type_off
+        btf_data[12..16].copy_from_slice(&0u32.to_le_bytes()); // type_len
+        btf_data[16..20].copy_from_slice(&0u32.to_le_bytes()); // str_off
+        // str_len claims a string table far larger than btf_data actually is.
+        btf_data[20..24].copy_from_slice(&1_000_000u32.to_le_bytes());
+
+        let result = read_btf_string(&btf_data, 0);
+        assert!(result.is_err(), "expected an error, got {result:?}");
     }
 }

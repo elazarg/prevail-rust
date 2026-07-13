@@ -8,7 +8,8 @@ use std::fmt;
 /// Wrapper for typed variables used by the abstract domains and linear constraints.
 ///
 /// Construction is restricted to `pub(crate)` to mirror the C++ `friend class VariableRegistry`
-/// pattern. Only code within this crate (e.g. a future `VariableRegistry`) can create variables.
+/// pattern: only code within this crate (chiefly [`crate::crab::var_registry::VariableRegistry`])
+/// can create variables.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct Variable {
     id: u64,
@@ -30,7 +31,9 @@ impl Variable {
 
 impl fmt::Display for Variable {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Full display (with name lookup) will be added with VariableRegistry.
+        // Variable has no access to a VariableRegistry, so it can't print a
+        // name here; callers that need the named form go through
+        // VariableRegistry::name instead.
         write!(f, "v{}", self.id)
     }
 }

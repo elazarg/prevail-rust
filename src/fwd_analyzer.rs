@@ -293,9 +293,8 @@ impl<'a, P: Program> FwdFixpointIterator<'a, P> {
     // ========================================================================
 
     /// Visit all components of a cycle except the head.
-    fn visit_cycle_body(&mut self, cycle: &Rc<WtoCycle>, head: &Label) {
-        let components: Vec<_> = cycle.iter().collect();
-        for component in &components {
+    fn visit_cycle_body(&mut self, components: &[&CycleOrLabel], head: &Label) {
+        for component in components {
             let is_head = matches!(component, CycleOrLabel::Label(l) if *l == *head);
             if !is_head {
                 self.visit_component(component);
@@ -363,11 +362,17 @@ impl<'a, P: Program> FwdFixpointIterator<'a, P> {
             }
         }
 
+        // Collected once: this cycle's components don't change across the
+        // ascending/descending iterations below, unlike visit_cycle_body's
+        // own iterator, which would otherwise re-walk (and re-collect) them
+        // on every single iteration.
+        let components: Vec<&CycleOrLabel> = cycle.iter().collect();
+
         // Ascending iteration with widening.
         for iteration in 1u32.. {
             self.set_pre(&head, invariant.clone());
             self.transform_to_post(&head, invariant.clone());
-            self.visit_cycle_body(cycle, &head);
+            self.visit_cycle_body(&components, &head);
 
             let new_pre = self.join_all_prevs(&head);
             if new_pre.is_included_in(&invariant, self.registry) {
@@ -383,7 +388,7 @@ impl<'a, P: Program> FwdFixpointIterator<'a, P> {
         // Descending iteration with narrowing.
         for iteration in 1u32.. {
             self.transform_to_post(&head, invariant.clone());
-            self.visit_cycle_body(cycle, &head);
+            self.visit_cycle_body(&components, &head);
 
             let new_pre = self.join_all_prevs(&head);
             if invariant.is_included_in(&new_pre, self.registry) {

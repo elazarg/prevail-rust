@@ -4,9 +4,8 @@
 //! Integer type for the abstract domain.
 //!
 //! Uses `i128` to represent all values. The eBPF verifier never needs more than
-//! 127 bits (worst case: 64-bit MUL/SHL intermediates). This provides ~3x speedup
-//! over the previous BigInt-based implementation while still handling all values
-//! that arise in practice.
+//! 127 bits (worst case: 64-bit MUL/SHL intermediates), so `i128` covers every
+//! value that arises in practice.
 
 use std::cmp::Ordering;
 
@@ -184,16 +183,12 @@ impl Number {
         self.0 < (1i128 << width)
     }
 
-    /// Check whether the value can be cast to a signed integer of the given
-    /// bit width (fits as either the signed or unsigned type of that width).
-    pub fn fits_cast_to_signed(&self, width: u32) -> bool {
+    /// Check whether the value fits in an integer of the given bit width,
+    /// under either the signed or unsigned interpretation. Mirrors upstream
+    /// `Number::fits_cast_to<T>()`, which checks `fits<T>() || fits<SwapSignedness<T>>()`
+    /// (signedness doesn't change which single function callers need).
+    pub fn fits_cast_to(&self, width: u32) -> bool {
         self.fits_signed(width) || self.fits_unsigned(width)
-    }
-
-    /// Check whether the value can be cast to an unsigned integer of the given
-    /// bit width (fits as either the unsigned or signed type of that width).
-    pub fn fits_cast_to_unsigned(&self, width: u32) -> bool {
-        self.fits_unsigned(width) || self.fits_signed(width)
     }
 
     /// Truncate to a signed integer of the given bit width
@@ -705,14 +700,13 @@ mod tests {
     #[test]
     fn test_fits_cast_to() {
         // 200 doesn't fit i8 signed (-128..127) but fits u8 (0..255)
-        assert!(Number::from(200i64).fits_cast_to_signed(8));
+        assert!(Number::from(200i64).fits_cast_to(8));
 
         // -1 doesn't fit u8 but fits i8
-        assert!(Number::from(-1i64).fits_cast_to_unsigned(8));
+        assert!(Number::from(-1i64).fits_cast_to(8));
 
         // 300 doesn't fit i8 or u8
-        assert!(!Number::from(300i64).fits_cast_to_signed(8));
-        assert!(!Number::from(300i64).fits_cast_to_unsigned(8));
+        assert!(!Number::from(300i64).fits_cast_to(8));
     }
 
     #[test]

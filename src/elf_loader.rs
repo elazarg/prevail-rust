@@ -92,9 +92,6 @@ fn bytes_to_instructions(data: &[u8]) -> Result<Vec<EbpfInst>, UnmarshalError> {
 type MapOffsets = BTreeMap<String, usize>;
 
 enum MapResolution {
-    /// Legacy mode — retained for future legacy-record-size path.
-    #[expect(dead_code)]
-    Legacy(usize),
     /// Name-based lookup from map/section name to descriptor index.
     Named(MapOffsets),
 }
@@ -154,13 +151,49 @@ fn get_symbol_details(
     })
 }
 
+/// Maps a section index to its named `STT_FUNC` symbols, keyed by in-section
+/// byte offset. Built once with a single O(sym_count) pass so per-program and
+/// per-relocation lookups (`find_function_symbol_at_offset`,
+/// `get_program_name_and_size`) are O(log n) instead of re-scanning every
+/// symbol; a crafted ELF with many symbols/relocations would otherwise make
+/// each lookup rescan the whole table (a CPU-DoS on untrusted input).
+type FuncSymbolIndex = BTreeMap<usize, BTreeMap<u64, String>>;
+
+fn build_func_symbol_index(
+    symbols: &SymbolTable<'_>,
+    sym_count: usize,
+) -> Result<FuncSymbolIndex, UnmarshalError> {
+    let mut index: FuncSymbolIndex = BTreeMap::new();
+    for i in 0..sym_count {
+        let Ok(sd) = get_symbol_details(symbols, i) else {
+            continue;
+        };
+        if sd.sym_type != elf::STT_FUNC || sd.name.is_empty() {
+            continue;
+        }
+        if !sd.value.is_multiple_of(size_of::<EbpfInst>() as u64) {
+            return Err(UnmarshalError(format!(
+                "Non-instruction-aligned FUNC symbol '{}' at offset {} in section index {}",
+                sd.name, sd.value, sd.section_index
+            )));
+        }
+        index
+            .entry(sd.section_index)
+            .or_default()
+            .entry(sd.value)
+            .or_insert(sd.name);
+    }
+    Ok(index)
+}
+
 // ── Function relocation record ──────────────────────────────────────
 
-/// Fields are populated for diagnostics; not all are read today.
-#[expect(dead_code)]
 struct FunctionRelocation {
     prog_index: usize,
     source_offset: usize,
+    /// Diagnostic-only, matching upstream's own write-only field of the same
+    /// name (elf_reader.hpp); not read anywhere, upstream or here.
+    #[expect(dead_code)]
     relocation_entry_index: usize,
     target_section_index: usize,
     target_function_name: String,
@@ -722,24 +755,11 @@ fn extract_global_data(
 
 /// Find a function symbol at a given byte offset within a section.
 fn find_function_symbol_at_offset(
-    symbols: &SymbolTable<'_>,
-    sym_count: usize,
+    func_symbols: &FuncSymbolIndex,
     section_index: usize,
     byte_offset: u64,
 ) -> Option<String> {
-    for i in 0..sym_count {
-        let sd = match get_symbol_details(symbols, i) {
-            Ok(sd) => sd,
-            Err(_) => continue,
-        };
-        if sd.section_index != section_index || sd.sym_type != elf::STT_FUNC || sd.name.is_empty() {
-            continue;
-        }
-        if sd.value == byte_offset {
-            return Some(sd.name);
-        }
-    }
-    None
+    func_symbols.get(&section_index)?.get(&byte_offset).cloned()
 }
 
 // ── Reachable CFG span ─────────────────────────────────────────────
@@ -838,42 +858,46 @@ fn compute_reachable_program_span(
 
 // ── Program name and size from symbols ──────────────────────────────
 
+/// Alignment of every `FuncSymbolIndex` entry is validated once, at index-build
+/// time (`build_func_symbol_index`), so no error can arise from this lookup.
 fn get_program_name_and_size(
     sec_idx: usize,
     sec_name: &str,
     sec_size: u64,
     start: u64,
-    symbols: &SymbolTable<'_>,
-    sym_count: usize,
-) -> Result<(String, u64), UnmarshalError> {
+    func_symbols: &FuncSymbolIndex,
+) -> (String, u64) {
     let mut program_name = sec_name.to_string();
     let mut size = sec_size - start;
 
-    for i in 0..sym_count {
-        let sd = match get_symbol_details(symbols, i) {
-            Ok(sd) => sd,
-            Err(_) => continue,
-        };
-        if sd.section_index != sec_idx || sd.name.is_empty() {
-            continue;
+    if let Some(section_symbols) = func_symbols.get(&sec_idx) {
+        if let Some(name) = section_symbols.get(&start) {
+            program_name = name.clone();
         }
-        if sd.sym_type != elf::STT_FUNC {
-            continue;
-        }
-        let relocation_offset = sd.value;
-        if !relocation_offset.is_multiple_of(size_of::<EbpfInst>() as u64) {
-            return Err(UnmarshalError(format!(
-                "Non-instruction-aligned FUNC symbol '{}' at offset {relocation_offset} in section {sec_name}",
-                sd.name
-            )));
-        }
-        if relocation_offset == start {
-            program_name = sd.name;
-        } else if relocation_offset > start && relocation_offset < start + size {
+        // The nearest following symbol in (start, start + size) ends this program.
+        if let Some((&relocation_offset, _)) =
+            section_symbols.range((start + 1)..(start + size)).next()
+        {
             size = relocation_offset - start;
         }
     }
-    Ok((program_name, size))
+    (program_name, size)
+}
+
+/// Maps `(section_name, function_name)` to a program's index, for resolving
+/// local-call subprogram targets by name.
+///
+/// Matches upstream `find_subprogram`'s first-match linear scan: ELF symbol
+/// names need not be unique, so a duplicate `(section, function)` pair must
+/// resolve to the first program with that name, not (silently) the last.
+fn build_prog_lookup(programs: &[RawProgram]) -> BTreeMap<(String, String), usize> {
+    let mut prog_lookup: BTreeMap<(String, String), usize> = BTreeMap::new();
+    for (idx, prog) in programs.iter().enumerate() {
+        prog_lookup
+            .entry((prog.section_name.clone(), prog.function_name.clone()))
+            .or_insert(idx);
+    }
+    prog_lookup
 }
 
 struct UnresolvedSymbolError {
@@ -892,7 +916,7 @@ struct ProgramReader<'a> {
     elf: &'a ElfFile<'a, Elf64>,
     data: &'a [u8],
     symbols: &'a SymbolTable<'a>,
-    sym_count: usize,
+    func_symbols: FuncSymbolIndex,
     global: &'a ElfGlobalData,
 
     raw_programs: Vec<RawProgram>,
@@ -914,8 +938,9 @@ impl<'a> ProgramReader<'a> {
         symbols: &'a SymbolTable<'a>,
         sym_count: usize,
         global: &'a ElfGlobalData,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, UnmarshalError> {
+        let func_symbols = build_func_symbol_index(symbols, sym_count)?;
+        Ok(Self {
             path,
             options,
             platform,
@@ -923,14 +948,14 @@ impl<'a> ProgramReader<'a> {
             elf,
             data,
             symbols,
-            sym_count,
+            func_symbols,
             global,
             raw_programs: Vec::new(),
             function_relocations: Vec::new(),
             unresolved_symbol_errors: Vec::new(),
             builtin_offsets_for_current_program: BTreeSet::new(),
             ksym_function_resolution_cache: BTreeMap::new(),
-        }
+        })
     }
 
     // ── Ksym resolution cache ─────────────────────────────────────
@@ -988,23 +1013,11 @@ impl<'a> ProgramReader<'a> {
 
     // ── Map relocation helpers ──────────────────────────────────────
 
-    fn relocate_map(&self, name: &str, sym_index: usize) -> Result<i32, UnmarshalError> {
-        let val = match &self.global.map_resolution {
-            MapResolution::Legacy(record_size) => {
-                let sd = get_symbol_details(self.symbols, sym_index)?;
-                let symbol_value = sd.value as usize;
-                if *record_size > 0 && !symbol_value.is_multiple_of(*record_size) {
-                    return Err(UnmarshalError(format!(
-                        "Map symbol offset {symbol_value} is not aligned to record size \
-                         {record_size}"
-                    )));
-                }
-                symbol_value / record_size
-            }
-            MapResolution::Named(offsets) => *offsets
-                .get(name)
-                .ok_or_else(|| UnmarshalError(format!("Map descriptor not found: {name}")))?,
-        };
+    fn relocate_map(&self, name: &str, _sym_index: usize) -> Result<i32, UnmarshalError> {
+        let MapResolution::Named(offsets) = &self.global.map_resolution;
+        let val = *offsets
+            .get(name)
+            .ok_or_else(|| UnmarshalError(format!("Map descriptor not found: {name}")))?;
         if val >= self.global.map_descriptors.len() {
             return Err(UnmarshalError(format!(
                 "Bad reloc value ({val}). Make sure to compile with -O2."
@@ -1014,10 +1027,7 @@ impl<'a> ProgramReader<'a> {
     }
 
     fn relocate_global_variable(&self, section_name: &str) -> Result<i32, UnmarshalError> {
-        let offsets = match &self.global.map_resolution {
-            MapResolution::Named(o) => o,
-            _ => return Err(UnmarshalError("Invalid map offsets".into())),
-        };
+        let MapResolution::Named(offsets) = &self.global.map_resolution;
         let val = *offsets
             .get(section_name)
             .ok_or_else(|| UnmarshalError(format!("Map descriptor not found: {section_name}")))?;
@@ -1142,8 +1152,7 @@ impl<'a> ProgramReader<'a> {
                     ));
                 }
                 if let Some(name) = find_function_symbol_at_offset(
-                    self.symbols,
-                    self.sym_count,
+                    &self.func_symbols,
                     symbol_section_index,
                     target_byte_offset as u64,
                 ) {
@@ -1173,9 +1182,6 @@ impl<'a> ProgramReader<'a> {
                 .variable_section_indices
                 .contains(&symbol_section_index)
             {
-                if !matches!(self.global.map_resolution, MapResolution::Named(_)) {
-                    return Ok(false);
-                }
                 validate_lddw_pair(instructions, location, "global variable")?;
                 let lo_imm = instructions[location].imm;
                 instructions[location + 1].imm =
@@ -1383,17 +1389,13 @@ impl<'a> ProgramReader<'a> {
             }
 
             let target_offset = (target * inst_size) as u64;
-            let target_name = find_function_symbol_at_offset(
-                self.symbols,
-                self.sym_count,
-                section_index,
-                target_offset,
-            )
-            .ok_or_else(|| {
-                UnmarshalError(format!(
-                    "Subprogram not found at section offset {target_offset}"
-                ))
-            })?;
+            let target_name =
+                find_function_symbol_at_offset(&self.func_symbols, section_index, target_offset)
+                    .ok_or_else(|| {
+                        UnmarshalError(format!(
+                            "Subprogram not found at section offset {target_offset}"
+                        ))
+                    })?;
 
             self.function_relocations.push(FunctionRelocation {
                 prog_index,
@@ -1599,10 +1601,7 @@ impl<'a> ProgramReader<'a> {
         let mut resolved: BTreeSet<usize> = BTreeSet::new();
         let mut visiting: BTreeSet<usize> = BTreeSet::new();
 
-        let mut prog_lookup: BTreeMap<(String, String), usize> = BTreeMap::new();
-        for (idx, prog) in self.raw_programs.iter().enumerate() {
-            prog_lookup.insert((prog.section_name.clone(), prog.function_name.clone()), idx);
-        }
+        let prog_lookup = build_prog_lookup(&self.raw_programs);
 
         for prog_idx in 0..prog_count {
             match self.resolve_subprograms_for(prog_idx, &prog_lookup, &mut resolved, &mut visiting)
@@ -1750,9 +1749,8 @@ impl<'a> ProgramReader<'a> {
                     sec_name,
                     sec_size,
                     offset,
-                    self.symbols,
-                    self.sym_count,
-                )?;
+                    &self.func_symbols,
+                );
 
                 // Expand the program span to cover all reachable instructions.
                 let extracted_size =
@@ -2372,6 +2370,7 @@ impl ElfObject {
                 ))
             })?;
         let sym_count = symbols.len();
+        let func_symbols = build_func_symbol_index(&symbols, sym_count)?;
 
         for section in elf.sections() {
             let sh = section.elf_section_header();
@@ -2395,9 +2394,8 @@ impl ElfObject {
 
             let mut offset: u64 = 0;
             while offset < sec_size {
-                let (name, initial_size) = get_program_name_and_size(
-                    sec_idx, &sec_name, sec_size, offset, &symbols, sym_count,
-                )?;
+                let (name, initial_size) =
+                    get_program_name_and_size(sec_idx, &sec_name, sec_size, offset, &func_symbols);
                 let prog_idx = self.programs.len();
                 self.programs.push(ElfProgramInfo {
                     section_name: sec_name.clone(),
@@ -2561,10 +2559,16 @@ pub fn read_elf(
         &symbols,
         sym_count,
         &global,
-    );
+    )?;
     reader.read_programs()?;
 
-    // Filter by desired program name.
+    // Filter by desired program name. Faithfully mirrors upstream elf_reader.cpp's
+    // read_elf: on a match, only that one program is returned (not every same-named
+    // program); if desired_program is non-empty but matches nothing, upstream falls
+    // through to returning every program rather than erroring -- surprising, but
+    // intentional parity, not a bug to silently "fix" here. `ElfObject::get_programs`
+    // (via `filter_by_program`) is a separate, Rust-only entry point with no upstream
+    // equivalent, and is free to be stricter.
     if !desired_program.is_empty()
         && let Some(pos) = reader
             .raw_programs
@@ -3042,5 +3046,39 @@ mod tests {
         let options = default_options();
         let programs = read_elf(&data, "synthetic.o", "", "", &options, &mut platform).unwrap();
         assert!(!programs.is_empty());
+    }
+
+    fn dummy_raw_program(section_name: &str, function_name: &str) -> RawProgram {
+        RawProgram {
+            filename: String::new(),
+            section_name: section_name.to_string(),
+            insn_off: 0,
+            function_name: function_name.to_string(),
+            prog: Vec::new(),
+            info: ProgramInfo::default(),
+        }
+    }
+
+    /// ELF symbol names need not be unique: two programs can legitimately share
+    /// a `(section, function)` pair. `build_prog_lookup` must resolve the
+    /// *first* one, matching upstream `find_subprogram`'s linear-scan
+    /// first-match semantics -- not silently pick the last-inserted one.
+    #[test]
+    fn build_prog_lookup_resolves_first_match_on_duplicate_name() {
+        let programs = vec![
+            dummy_raw_program("tc/tail", "dup"),
+            dummy_raw_program("tc/tail", "other"),
+            dummy_raw_program("tc/tail", "dup"),
+        ];
+        let lookup = build_prog_lookup(&programs);
+        assert_eq!(
+            lookup.get(&("tc/tail".to_string(), "dup".to_string())),
+            Some(&0),
+            "expected the first program with a duplicate name to win"
+        );
+        assert_eq!(
+            lookup.get(&("tc/tail".to_string(), "other".to_string())),
+            Some(&1)
+        );
     }
 }

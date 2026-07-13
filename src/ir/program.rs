@@ -877,9 +877,6 @@ impl CfgBuilder {
     }
 
     /// Remove a directed edge from `a` to `b`.
-    ///
-    /// NOTE: This requires `Cfg::remove_child` to be available. If it is not
-    /// yet implemented on `Cfg`, this will need to be added there.
     fn remove_child(&mut self, a: &Label, b: &Label) {
         self.prog.cfg.remove_child(a, b);
     }

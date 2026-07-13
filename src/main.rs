@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 //! Rust entry point for the prevail eBPF verifier CLI.
-//! Port of `src/main/check.cpp`.
+//! Port of `src/main.cpp`.
 
 use std::process::ExitCode;
 

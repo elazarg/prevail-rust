@@ -28,8 +28,6 @@ pub enum DataKind {
     AllocMemSizes,
 }
 
-/// Used by tests; lib code reaches the same range via `KIND_VALUE_MIN`.
-#[cfg_attr(not(test), allow(dead_code))]
 pub const KIND_MIN: DataKind = DataKind::Types;
 pub const KIND_VALUE_MIN: DataKind = DataKind::Svalues;
 pub const KIND_MAX: DataKind = DataKind::AllocMemSizes;

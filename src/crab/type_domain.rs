@@ -744,6 +744,31 @@ impl TypeDomain {
         s.get_typeset(v).contains(te)
     }
 
+    /// The variables this domain currently has information for. Narrowly
+    /// intended for `TypeToNumDomain`'s `is_included_in`/`join_selective`
+    /// helpers that need to iterate the per-variable structure. For
+    /// everything else, prefer `variables_with_type`. Bottom and top both
+    /// return empty.
+    pub fn variables(&self) -> Vec<Variable> {
+        let Some(s) = &self.state else {
+            return Vec::new();
+        };
+        s.vars.vars().map(|(v, _id)| v).collect()
+    }
+
+    /// Variables whose `TypeSet` may contain `type`. Use this when the
+    /// question is "which variables might have type T?" (e.g., havoc all
+    /// packet-typed locations).
+    pub fn variables_with_type(&self, te: TypeEncoding) -> Vec<Variable> {
+        let Some(s) = &self.state else {
+            return Vec::new();
+        };
+        s.vars
+            .vars()
+            .filter_map(|(v, _id)| s.get_typeset(v).contains(te).then_some(v))
+            .collect()
+    }
+
     /// Check whether a register is initialized (type != T_UNINIT).
     pub fn is_initialized_reg(&self, r: &Reg, registry: &mut VariableRegistry) -> bool {
         let v = reg_type(r, registry);

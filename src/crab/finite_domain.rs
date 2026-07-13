@@ -1,12 +1,17 @@
 // Copyright (c) Prevail Verifier contributors.
 // SPDX-License-Identifier: MIT
-#![allow(clippy::too_many_arguments, clippy::if_same_then_else)]
 
 //! Finite-width arithmetic domain wrapping ZoneDomain.
 //!
 //! Ported from `src/crab/finite_domain.hpp` and `src/crab/finite_domain.cpp`.
 //! Adds overflow handling, bitwise operations, and signed/unsigned comparison
 //! constraint generation on top of the relational zone domain.
+//!
+//! Many functions here take 8-10 parameters (register svalue/uvalue pairs,
+//! comparison operands, precomputed intervals) matching upstream's own
+//! parameter lists 1:1; bundling them into a params struct would diverge from
+//! upstream's shape and complicate future syncs more than the lint is worth.
+#![allow(clippy::too_many_arguments)]
 
 use crate::arith::linear_constraint::{LinearConstraint, eq, expr_eq, geq, gt, leq, lt, neq};
 use crate::arith::linear_expression::LinearExpression;
@@ -660,6 +665,10 @@ impl FiniteDomain {
         vec![]
     }
 
+    // The `if`/`else if` pairs below test genuinely different (LT vs GT-shaped)
+    // conditions that happen to produce the same constant result; collapsing
+    // them would obscure which comparison direction each branch handles.
+    #[expect(clippy::if_same_then_else)]
     pub fn assume_signed_cst_interval(
         &self,
         op: ConditionOp,
@@ -994,110 +1003,75 @@ impl FiniteDomain {
 
         let (llb, lub) = left_interval.pair();
         let (rlb, rub) = right_interval.pair();
-        if is_lt {
-            if if strict { llb >= rub } else { llb > rub } {
-                let out = vec![LinearConstraint::false_const()];
-                dump_unsigned_trace(
-                    op,
-                    is64,
-                    left_svalue,
-                    left_uvalue,
-                    right_svalue,
-                    right_uvalue,
-                    &left_interval,
-                    &right_interval,
-                    &out,
-                );
-                return out;
-            }
-        } else if if strict { lub <= rlb } else { lub < rlb } {
-            let out = vec![LinearConstraint::false_const()];
-            dump_unsigned_trace(
-                op,
-                is64,
-                left_svalue,
-                left_uvalue,
-                right_svalue,
-                right_uvalue,
-                &left_interval,
-                &right_interval,
-                &out,
-            );
-            return out;
-        }
-        if is_lt && (if strict { lub < rlb } else { lub <= rlb }) {
-            if is64 {
-                let out = vec![strict_cmp(
-                    strict,
-                    true,
-                    left_uvalue.into(),
-                    right_uvalue.clone(),
-                )];
-                dump_unsigned_trace(
-                    op,
-                    is64,
-                    left_svalue,
-                    left_uvalue,
-                    right_svalue,
-                    right_uvalue,
-                    &left_interval,
-                    &right_interval,
-                    &out,
-                );
-                return out;
-            }
-            let out = vec![];
-            dump_unsigned_trace(
-                op,
-                is64,
-                left_svalue,
-                left_uvalue,
-                right_svalue,
-                right_uvalue,
-                &left_interval,
-                &right_interval,
-                &out,
-            );
-            return out;
-        } else if !is_lt && (if strict { llb > rub } else { llb >= rub }) {
-            if is64 {
-                let out = vec![strict_cmp(
-                    strict,
-                    false,
-                    left_uvalue.into(),
-                    right_uvalue.clone(),
-                )];
-                dump_unsigned_trace(
-                    op,
-                    is64,
-                    left_svalue,
-                    left_uvalue,
-                    right_svalue,
-                    right_uvalue,
-                    &left_interval,
-                    &right_interval,
-                    &out,
-                );
-                return out;
-            }
-            let out = vec![];
-            dump_unsigned_trace(
-                op,
-                is64,
-                left_svalue,
-                left_uvalue,
-                right_svalue,
-                right_uvalue,
-                &left_interval,
-                &right_interval,
-                &out,
-            );
-            return out;
-        }
 
-        let out = if is64 {
+        // Every exit from here on is traced once, below, rather than at each
+        // early return; `break 'result` stands in for `return` within this block.
+        let out = 'result: {
             if is_lt {
-                self.assume_unsigned_64bit_lt(
+                if if strict { llb >= rub } else { llb > rub } {
+                    break 'result vec![LinearConstraint::false_const()];
+                }
+            } else if if strict { lub <= rlb } else { lub < rlb } {
+                break 'result vec![LinearConstraint::false_const()];
+            }
+            if is_lt && (if strict { lub < rlb } else { lub <= rlb }) {
+                if is64 {
+                    break 'result vec![strict_cmp(
+                        strict,
+                        true,
+                        left_uvalue.into(),
+                        right_uvalue.clone(),
+                    )];
+                }
+                break 'result vec![];
+            } else if !is_lt && (if strict { llb > rub } else { llb >= rub }) {
+                if is64 {
+                    break 'result vec![strict_cmp(
+                        strict,
+                        false,
+                        left_uvalue.into(),
+                        right_uvalue.clone(),
+                    )];
+                }
+                break 'result vec![];
+            }
+
+            if is64 {
+                if is_lt {
+                    self.assume_unsigned_64bit_lt(
+                        strict,
+                        left_svalue,
+                        left_uvalue,
+                        &left_interval_low,
+                        &left_interval_high,
+                        right_svalue,
+                        right_uvalue,
+                        &right_interval,
+                        reg,
+                    )
+                } else {
+                    self.assume_unsigned_64bit_gt(
+                        strict,
+                        left_svalue,
+                        left_uvalue,
+                        &left_interval_low,
+                        &left_interval_high,
+                        right_svalue,
+                        right_uvalue,
+                        &right_interval,
+                    )
+                }
+            } else if is_lt {
+                self.assume_unsigned_32bit_lt(
+                    strict,
+                    left_svalue,
+                    left_uvalue,
+                    right_svalue,
+                    right_uvalue,
+                    reg,
+                )
+            } else {
+                self.assume_unsigned_32bit_gt(
                     strict,
                     left_svalue,
                     left_uvalue,
@@ -1108,39 +1082,7 @@ impl FiniteDomain {
                     &right_interval,
                     reg,
                 )
-            } else {
-                self.assume_unsigned_64bit_gt(
-                    strict,
-                    left_svalue,
-                    left_uvalue,
-                    &left_interval_low,
-                    &left_interval_high,
-                    right_svalue,
-                    right_uvalue,
-                    &right_interval,
-                )
             }
-        } else if is_lt {
-            self.assume_unsigned_32bit_lt(
-                strict,
-                left_svalue,
-                left_uvalue,
-                right_svalue,
-                right_uvalue,
-                reg,
-            )
-        } else {
-            self.assume_unsigned_32bit_gt(
-                strict,
-                left_svalue,
-                left_uvalue,
-                &left_interval_low,
-                &left_interval_high,
-                right_svalue,
-                right_uvalue,
-                &right_interval,
-                reg,
-            )
         };
         dump_unsigned_trace(
             op,

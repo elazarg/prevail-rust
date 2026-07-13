@@ -316,7 +316,11 @@ impl TypeToNumDomain {
     /// because the register doesn't have the corresponding type.
     pub fn get_nonexistent_kind_variables(&self, registry: &mut VariableRegistry) -> Vec<Variable> {
         let mut res = Vec::new();
-        let type_vars = registry.get_type_variables();
+        // A variable TypeDomain doesn't track is implicitly top (may_have_type_var
+        // is true for every type), so it never contributes a "nonexistent" kind
+        // here regardless -- restricting to tracked variables changes nothing
+        // observable and avoids re-scanning every registered variable.
+        let type_vars = self.types.variables();
         for v in &type_vars {
             for &te in &TYPES_WITH_KINDS {
                 if self.types.may_have_type_var(*v, te, registry) {
@@ -339,7 +343,14 @@ impl TypeToNumDomain {
         registry: &mut VariableRegistry,
     ) -> Vec<(Variable, Interval)> {
         let mut result = Vec::new();
-        let type_vars = registry.get_type_variables();
+        // A variable tracked by neither side is implicitly top on both, so
+        // in_left == in_right == true for every type and it never contributes
+        // a constraint; the union of each side's tracked variables is exactly
+        // the set that can produce a difference here.
+        let mut type_vars = self.types.variables();
+        type_vars.extend(right.types.variables());
+        type_vars.sort_unstable();
+        type_vars.dedup();
         for type_var in &type_vars {
             for &te in &TYPES_WITH_KINDS {
                 let kinds = type_to_kinds(te);

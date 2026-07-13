@@ -58,17 +58,6 @@ impl LinearExpression {
         }
     }
 
-    /// Add a variable (with coefficient 1).
-    pub fn plus_variable(&self, variable: Variable) -> LinearExpression {
-        let mut variable_terms = self.variable_terms.clone();
-        let new_coeff = self.coefficient_of(&variable) + Number::from(1i32);
-        variable_terms.insert(variable, new_coeff);
-        LinearExpression {
-            constant_term: self.constant_term,
-            variable_terms,
-        }
-    }
-
     /// Add another expression.
     pub fn plus(&self, other: &LinearExpression) -> LinearExpression {
         let mut variable_terms = self.variable_terms.clone();

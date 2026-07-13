@@ -1912,7 +1912,15 @@ fn transform_bin(
                     if imm == 0 {
                         return Ok(());
                     }
-                    add_to_reg(dom, &bin.dst, -(imm as i32), finite_width, registry);
+                    // imm is always in i32 range (sign-extended from the instruction's
+                    // 32-bit immediate field), but negating i32::MIN overflows i32;
+                    // narrow the i64 negation instead of negating the truncated i32.
+                    let neg_imm = i32::try_from(-imm).map_err(|_| {
+                        VerificationError::new(format!(
+                            "Immediate value {imm} cannot be negated for SUB"
+                        ))
+                    })?;
+                    add_to_reg(dom, &bin.dst, neg_imm, finite_width, registry);
                 }
                 BinOp::MUL => {
                     dom.state.values.inner_mut().mul_num(

@@ -1,9 +1,9 @@
 // Copyright (c) Prevail Verifier contributors.
 // SPDX-License-Identifier: MIT
 
-//! Marshal encoding helpers ported from `src/ir/marshal.cpp`.
-// Inverse of unmarshal — retained for spec completeness.
-#![allow(dead_code)]
+//! Marshal encoding helpers, the inverse of unmarshal. Test-only: upstream's
+//! equivalent (`marshal.cpp`) lives under `src/test/`, exercised only by its
+//! own encode/decode round-trip tests, not by production code.
 
 use crate::ir::syntax::{BinOp, ConditionOp, UnOp};
 
