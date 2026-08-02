@@ -89,18 +89,18 @@ fuzz_target!(|input: FuzzElf| {
         section_ids.push(id);
     }
 
-    if let Some(maps) = &input.maps {
-        if maps.len() <= 4096 {
-            let id = obj.add_section(Vec::new(), b"maps".to_vec(), SectionKind::Data);
-            obj.append_section_data(id, maps, 8);
-        }
+    if let Some(maps) = &input.maps
+        && maps.len() <= 4096
+    {
+        let id = obj.add_section(Vec::new(), b"maps".to_vec(), SectionKind::Data);
+        obj.append_section_data(id, maps, 8);
     }
 
-    if let Some(license) = &input.license {
-        if license.len() <= 256 {
-            let id = obj.add_section(Vec::new(), b"license".to_vec(), SectionKind::Data);
-            obj.append_section_data(id, license, 1);
-        }
+    if let Some(license) = &input.license
+        && license.len() <= 256
+    {
+        let id = obj.add_section(Vec::new(), b"license".to_vec(), SectionKind::Data);
+        obj.append_section_data(id, license, 1);
     }
 
     // FUNC symbols pointing into program sections.
