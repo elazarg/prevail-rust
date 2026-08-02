@@ -708,8 +708,7 @@ fn resolve_inner_map_references_linux(
         let inner = map_descriptors[i].inner_map_fd; // Get the inner_map_idx back.
         if inner < 0 || (inner as usize) >= len {
             return Err(UnmarshalError(format!(
-                "bad inner map index {} for map {}",
-                inner, i
+                "bad inner map index {inner} for map {i}"
             )));
         }
         map_descriptors[i].inner_map_fd = map_descriptors[inner as usize].original_fd;
@@ -773,7 +772,7 @@ fn get_map_descriptor_linux(
     // In this case, we would like to query the map descriptor info
     // (key size, value size) from the execution context, but this is
     // not yet supported on Linux.
-    Err(UnmarshalError(format!("map_fd {} not found", map_fd)))
+    Err(UnmarshalError(format!("map_fd {map_fd} not found")))
 }
 
 // ── LinuxPlatform: EbpfPlatform implementation ─────────────────────

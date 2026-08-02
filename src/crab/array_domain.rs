@@ -997,9 +997,8 @@ impl ArrayDomain {
         // out-of-bounds access below the stack frame: there is no cell to split
         // and it has no representation in the unsigned cell-offset type, so
         // leave it for the checker.
-        let offset = match ii.singleton().and_then(|n| n.to_u64()) {
-            Some(offset) => offset,
-            None => return,
+        let Some(offset) = ii.singleton().and_then(|n| n.to_u64()) else {
+            return;
         };
         let n_bytes = match elem_size.singleton() {
             Some(n) => *n,

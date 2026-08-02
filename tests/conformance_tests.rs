@@ -286,25 +286,19 @@ fn run_conformance_test_case(data_file: &Path) -> ConformanceTestResult {
 
     // Unmarshal
     let mut notes = Vec::new();
-    let inst_seq = match unmarshal::unmarshal(&insts, &mut notes, &info, &platform, &options) {
-        Ok(seq) => seq,
-        Err(_) => {
-            return ConformanceTestResult {
-                success: false,
-                r0_value: Interval::top(),
-            };
-        }
+    let Ok(inst_seq) = unmarshal::unmarshal(&insts, &mut notes, &info, &platform, &options) else {
+        return ConformanceTestResult {
+            success: false,
+            r0_value: Interval::top(),
+        };
     };
 
     // Build program
-    let prog = match Program::from_sequence(&inst_seq, &mut info, &platform, &options) {
-        Ok(p) => p,
-        Err(_) => {
-            return ConformanceTestResult {
-                success: false,
-                r0_value: Interval::top(),
-            };
-        }
+    let Ok(prog) = Program::from_sequence(&inst_seq, &mut info, &platform, &options) else {
+        return ConformanceTestResult {
+            success: false,
+            r0_value: Interval::top(),
+        };
     };
 
     let ctx = DomainContext {

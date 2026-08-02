@@ -651,7 +651,7 @@ impl Interval {
 
     pub fn sign_extend(&self, width: i32) -> Interval {
         if width <= 0 {
-            panic!("Invalid width {}", width);
+            panic!("Invalid width {width}");
         }
         let full_range = Interval::signed_int(width);
         if self.size() < full_range.size() {
@@ -668,7 +668,7 @@ impl Interval {
 
     pub fn zero_extend(&self, width: i32) -> Interval {
         if width <= 0 {
-            panic!("Invalid width {}", width);
+            panic!("Invalid width {width}");
         }
         let full_range = Interval::unsigned_int(width);
         if self.size() < full_range.size() {

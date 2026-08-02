@@ -484,8 +484,8 @@ mod tests {
 
     #[test]
     fn test_display() {
-        assert_eq!(format!("{}", PlusInfinity), "+oo");
-        assert_eq!(format!("{}", MinusInfinity), "-oo");
+        assert_eq!(format!("{PlusInfinity}"), "+oo");
+        assert_eq!(format!("{MinusInfinity}"), "-oo");
         assert_eq!(format!("{}", Finite(Number::from(42i64))), "42");
     }
 

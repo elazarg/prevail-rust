@@ -185,26 +185,26 @@ mod tests {
     #[test]
     fn test_display_simple() {
         let label = Label::new(5);
-        assert_eq!(format!("{}", label), "5");
+        assert_eq!(format!("{label}"), "5");
     }
 
     #[test]
     fn test_display_jump() {
         let label = Label::new_with_to(3, 7);
-        assert_eq!(format!("{}", label), "3:7");
+        assert_eq!(format!("{label}"), "3:7");
     }
 
     #[test]
     fn test_display_with_prefix() {
         let label = Label::new_full(3, 7, "foo".to_string());
-        assert_eq!(format!("{}", label), "foo/3:7");
+        assert_eq!(format!("{label}"), "foo/3:7");
     }
 
     #[test]
     fn test_display_with_special() {
         let mut label = Label::new_with_to(3, 7);
         label.special_label = "counter".to_string();
-        assert_eq!(format!("{}", label), "3:7 (counter)");
+        assert_eq!(format!("{label}"), "3:7 (counter)");
     }
 
     #[test]

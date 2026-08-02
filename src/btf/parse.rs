@@ -745,12 +745,9 @@ mod tests {
             eprintln!("Skipping test: no .BTF section in {BTF_TEST_ELF}");
             return;
         };
-        let btf_ext_section = match elf.section_by_name(".BTF.ext") {
-            Some(s) => s,
-            None => {
-                eprintln!("Skipping test: no .BTF.ext section in {BTF_TEST_ELF}");
-                return;
-            }
+        let Some(btf_ext_section) = elf.section_by_name(".BTF.ext") else {
+            eprintln!("Skipping test: no .BTF.ext section in {BTF_TEST_ELF}");
+            return;
         };
 
         let btf_data = btf_section.data().unwrap();

@@ -347,7 +347,7 @@ impl AnalysisResult {
         self.invariants
             .get(label)
             .map(|pair| pair.post.to_set(registry))
-            .unwrap_or_else(|| panic!("Label {} not found in invariant map", label))
+            .unwrap_or_else(|| panic!("Label {label} not found in invariant map"))
     }
 
     /// Find the first verification error among reachable labels.

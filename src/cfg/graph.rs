@@ -51,13 +51,13 @@ impl Cfg {
     fn get_node(&self, label: &Label) -> &Adjacent {
         self.neighbours
             .get(label)
-            .unwrap_or_else(|| panic!("Label {} not found in the CFG", label))
+            .unwrap_or_else(|| panic!("Label {label} not found in the CFG"))
     }
 
     fn get_node_mut(&mut self, label: &Label) -> &mut Adjacent {
         self.neighbours
             .get_mut(label)
-            .unwrap_or_else(|| panic!("Label {} not found in the CFG", label))
+            .unwrap_or_else(|| panic!("Label {label} not found in the CFG"))
     }
 
     /// Returns the children (successors) of the given label.
@@ -93,8 +93,7 @@ impl Cfg {
         assert_eq!(
             node.children.len(),
             1,
-            "Label {} does not have a single child",
-            label
+            "Label {label} does not have a single child"
         );
         node.children.iter().next().unwrap().clone()
     }
@@ -107,8 +106,7 @@ impl Cfg {
         assert_eq!(
             node.parents.len(),
             1,
-            "Label {} does not have a single parent",
-            label
+            "Label {label} does not have a single parent"
         );
         node.parents.iter().next().unwrap().clone()
     }
@@ -135,8 +133,7 @@ impl Cfg {
     pub fn insert(&mut self, label: Label) {
         assert!(
             !self.neighbours.contains_key(&label),
-            "Label {} already exists",
-            label
+            "Label {label} already exists"
         );
         self.neighbours.insert(label, Adjacent::new());
     }

@@ -593,7 +593,7 @@ mod tests {
     #[test]
     fn test_display() {
         let n = Number::from(-12345i64);
-        assert_eq!(format!("{}", n), "-12345");
+        assert_eq!(format!("{n}"), "-12345");
     }
 
     #[test]

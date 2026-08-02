@@ -452,9 +452,8 @@ fn parse_map_sections(
     let mut section_base_index: BTreeMap<usize, usize> = BTreeMap::new();
 
     for section in elf.sections() {
-        let sec_name = match section.name() {
-            Ok(n) => n,
-            Err(_) => continue,
+        let Ok(sec_name) = section.name() else {
+            continue;
         };
         if !is_map_section(sec_name) {
             continue;
@@ -565,20 +564,17 @@ fn parse_map_sections(
     // Build name-to-index mapping.
     let mut map_offsets = MapOffsets::new();
     for i in 0..sym_count {
-        let sd = match get_symbol_details(symbols, i) {
-            Ok(sd) => sd,
-            Err(_) => continue,
+        let Ok(sd) = get_symbol_details(symbols, i) else {
+            continue;
         };
         if !global.map_section_indices.contains(&sd.section_index) || sd.name.is_empty() {
             continue;
         }
-        let record_size = match section_record_sizes.get(&sd.section_index) {
-            Some(&rs) => rs,
-            None => continue,
+        let Some(&record_size) = section_record_sizes.get(&sd.section_index) else {
+            continue;
         };
-        let base_index = match section_base_index.get(&sd.section_index) {
-            Some(&bi) => bi,
-            None => continue,
+        let Some(&base_index) = section_base_index.get(&sd.section_index) else {
+            continue;
         };
 
         let sym_value = sd.value as usize;
@@ -631,9 +627,8 @@ fn map_typeid_to_fd(map_descriptors: &[EbpfMapDescriptor]) -> BTreeMap<i32, i32>
 
 /// Parse BTF-defined maps from the `.BTF` section.
 fn parse_btf_section(elf: &ElfFile<'_, Elf64>) -> Result<ElfGlobalData, UnmarshalError> {
-    let btf_section = match elf.section_by_name(".BTF") {
-        Some(s) => s,
-        None => return Ok(ElfGlobalData::default()),
+    let Some(btf_section) = elf.section_by_name(".BTF") else {
+        return Ok(ElfGlobalData::default());
     };
     let btf_bytes = btf_section
         .data()
@@ -1113,9 +1108,8 @@ impl<'a> ProgramReader<'a> {
                     if let Some(resolved) = cached {
                         if !rewrite_extern_kfunc_call(&mut instructions[location], resolved) {
                             return Err(UnmarshalError(format!(
-                                "Invalid kfunc call rewrite for symbol {}: \
-                                 instruction encoding or resolver output is invalid",
-                                symbol_name
+                                "Invalid kfunc call rewrite for symbol {symbol_name}: \
+                                 instruction encoding or resolver output is invalid"
                             )));
                         }
                         return Ok(true);
@@ -1420,9 +1414,8 @@ impl<'a> ProgramReader<'a> {
         let rel_name = format!(".rel{name}");
         let rela_name = format!(".rela{name}");
         for section in self.elf.sections() {
-            let sec_name = match section.name() {
-                Ok(n) => n,
-                Err(_) => continue,
+            let Ok(sec_name) = section.name() else {
+                continue;
             };
             if (sec_name == rel_name || sec_name == rela_name)
                 && section.data().map(|d| !d.is_empty()).unwrap_or(false)
@@ -1444,9 +1437,8 @@ impl<'a> ProgramReader<'a> {
         btf_data: &BtfTypeData,
         btf_section_data: &[u8],
     ) -> Result<(), UnmarshalError> {
-        let btf_ext_sec = match self.elf.section_by_name(".BTF.ext") {
-            Some(s) => s,
-            None => return Ok(()),
+        let Some(btf_ext_sec) = self.elf.section_by_name(".BTF.ext") else {
+            return Ok(());
         };
         let ext = btf_ext_sec
             .data()
@@ -1697,7 +1689,7 @@ impl<'a> ProgramReader<'a> {
                         .prog
                         .extend_from_slice(&sub_instructions);
                 } else {
-                    let err_msg = format!("Subprogram not found: {}", target_name);
+                    let err_msg = format!("Subprogram not found: {target_name}");
                     if self.raw_programs[prog_idx].section_name == self.desired_section {
                         return Err(UnmarshalError(err_msg));
                     }
@@ -1973,9 +1965,10 @@ fn resolve_core_field(
         result.type_id = unwrap_btf_type(btf_data, result.type_id)?;
         match btf_data.get_kind_index(result.type_id)? {
             BtfKindIndex::Struct | BtfKindIndex::Union => {
-                let members = match btf_data.get_kind(result.type_id)? {
-                    BtfKind::Struct { members, .. } | BtfKind::Union { members, .. } => members,
-                    _ => unreachable!(),
+                let (BtfKind::Struct { members, .. } | BtfKind::Union { members, .. }) =
+                    btf_data.get_kind(result.type_id)?
+                else {
+                    unreachable!()
                 };
                 if (index as usize) >= members.len() {
                     return Err(UnmarshalError(format!(
@@ -2772,12 +2765,9 @@ mod tests {
     #[test]
     fn load_simple_elf_from_samples() {
         let path = "tests/upstream/ebpf-samples/build/byteswap.o";
-        let data = match std::fs::read(path) {
-            Ok(d) => d,
-            Err(_) => {
-                eprintln!("Skipping test: {path} not found");
-                return;
-            }
+        let Ok(data) = std::fs::read(path) else {
+            eprintln!("Skipping test: {path} not found");
+            return;
         };
         let mut platform = TestPlatform;
         let options = default_options();
@@ -2795,12 +2785,9 @@ mod tests {
     #[test]
     fn load_elf_with_section_filter() {
         let path = "tests/upstream/ebpf-samples/build/byteswap.o";
-        let data = match std::fs::read(path) {
-            Ok(d) => d,
-            Err(_) => {
-                eprintln!("Skipping test: {path} not found");
-                return;
-            }
+        let Ok(data) = std::fs::read(path) else {
+            eprintln!("Skipping test: {path} not found");
+            return;
         };
         let mut platform = TestPlatform;
         let options = default_options();
@@ -2818,12 +2805,9 @@ mod tests {
     #[test]
     fn load_elf_nonexistent_section_fails() {
         let path = "tests/upstream/ebpf-samples/build/byteswap.o";
-        let data = match std::fs::read(path) {
-            Ok(d) => d,
-            Err(_) => {
-                eprintln!("Skipping test: {path} not found");
-                return;
-            }
+        let Ok(data) = std::fs::read(path) else {
+            eprintln!("Skipping test: {path} not found");
+            return;
         };
         let mut platform = TestPlatform;
         let options = default_options();
@@ -2868,12 +2852,9 @@ mod tests {
     fn load_btf_maps_elf() {
         // twomaps_btf.o uses BTF-defined maps (has .maps section with BTF metadata)
         let path = "tests/upstream/ebpf-samples/build/twomaps_btf.o";
-        let data = match std::fs::read(path) {
-            Ok(d) => d,
-            Err(_) => {
-                eprintln!("Skipping test: {path} not found");
-                return;
-            }
+        let Ok(data) = std::fs::read(path) else {
+            eprintln!("Skipping test: {path} not found");
+            return;
         };
         let mut platform = TestPlatform;
         let options = default_options();
@@ -2900,12 +2881,9 @@ mod tests {
     #[test]
     fn load_elf_with_line_info() {
         let path = "tests/upstream/ebpf-samples/build/byteswap.o";
-        let data = match std::fs::read(path) {
-            Ok(d) => d,
-            Err(_) => {
-                eprintln!("Skipping test: {path} not found");
-                return;
-            }
+        let Ok(data) = std::fs::read(path) else {
+            eprintln!("Skipping test: {path} not found");
+            return;
         };
         let mut platform = TestPlatform;
         let mut options = default_options();
@@ -2935,12 +2913,9 @@ mod tests {
     #[test]
     fn load_elf_without_line_info() {
         let path = "tests/upstream/ebpf-samples/build/byteswap.o";
-        let data = match std::fs::read(path) {
-            Ok(d) => d,
-            Err(_) => {
-                eprintln!("Skipping test: {path} not found");
-                return;
-            }
+        let Ok(data) = std::fs::read(path) else {
+            eprintln!("Skipping test: {path} not found");
+            return;
         };
         let mut platform = TestPlatform;
         let options = default_options(); // print_line_info = false
@@ -2960,12 +2935,9 @@ mod tests {
     #[test]
     fn load_map_in_map_btf() {
         let path = "tests/upstream/ebpf-samples/build/map_in_map.o";
-        let data = match std::fs::read(path) {
-            Ok(d) => d,
-            Err(_) => {
-                eprintln!("Skipping test: {path} not found");
-                return;
-            }
+        let Ok(data) = std::fs::read(path) else {
+            eprintln!("Skipping test: {path} not found");
+            return;
         };
         let mut platform = TestPlatform;
         let options = default_options();

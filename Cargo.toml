@@ -1,6 +1,12 @@
 [workspace]
 members = [".", "xtask"]
 
+# Idiom lints the codebase has been brought into line with. They are not on by
+# default, so without this they would drift back one call site at a time.
+[workspace.lints.clippy]
+uninlined_format_args = "deny"
+manual_let_else = "deny"
+
 [package]
 name = "prevail"
 version = "0.2.5"
@@ -26,6 +32,9 @@ path = "src/lib.rs"
 [features]
 default = []
 map-trace = ["serde", "serde_json"]
+
+[lints]
+workspace = true
 
 [dependencies]
 object = { version = "0.36", default-features = false, features = ["read", "elf"] }

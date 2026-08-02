@@ -1547,8 +1547,7 @@ mod tests {
         for &id in &realloc_ids {
             assert!(
                 PROTOTYPES[id].reallocate_packet,
-                "helper {} should have reallocate_packet=true",
-                id
+                "helper {id} should have reallocate_packet=true"
             );
         }
         // Most helpers should NOT reallocate.
@@ -1572,7 +1571,7 @@ mod tests {
     fn test_unsupported_dynptr_helpers() {
         // dynptr helpers 197-203 are explicitly unsupported
         for (id, proto) in PROTOTYPES.iter().enumerate().take(203 + 1).skip(197) {
-            assert!(proto.unsupported, "helper {} should be unsupported", id);
+            assert!(proto.unsupported, "helper {id} should be unsupported");
         }
         // user_ringbuf_drain (209) is also unsupported
         assert!(PROTOTYPES[209].unsupported);
@@ -1666,7 +1665,7 @@ mod tests {
     #[test]
     fn test_all_names_non_empty() {
         for (i, p) in PROTOTYPES.iter().enumerate() {
-            assert!(!p.name.is_empty(), "helper {} has empty name", i);
+            assert!(!p.name.is_empty(), "helper {i} has empty name");
         }
     }
 }

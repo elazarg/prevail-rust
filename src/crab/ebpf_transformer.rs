@@ -159,10 +159,7 @@ pub fn ebpf_domain_transform(
         // throws std::logic_error here and lets verify()'s catch block convert
         // it into `return false`, which masks the bug. We panic instead so the
         // underlying domain issue surfaces.
-        panic!(
-            "Bug! pre-invariant:\n{}\n followed by instruction: {:?}\nleads to bottom",
-            pre, ins
-        );
+        panic!("Bug! pre-invariant:\n{pre}\n followed by instruction: {ins:?}\nleads to bottom");
     }
     Ok(())
 }

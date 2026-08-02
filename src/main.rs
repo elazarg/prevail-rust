@@ -506,7 +506,7 @@ fn main() -> ExitCode {
                 eprintln!("terminate called after throwing an instance of 'std::runtime_error'");
                 eprintln!("  what():  {what}");
             } else {
-                println!("unmarshaling error at {}\n", e);
+                println!("unmarshaling error at {e}\n");
             }
             return ExitCode::from(1);
         }
@@ -539,7 +539,7 @@ fn main() -> ExitCode {
     {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("error: {}", e);
+            eprintln!("error: {e}");
             return ExitCode::from(1);
         }
     };

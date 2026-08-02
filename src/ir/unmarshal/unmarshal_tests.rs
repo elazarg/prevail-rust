@@ -59,15 +59,12 @@ fn check_unmarshal_fail(ins: EbpfInst, expected_msg_part: &str) {
     let res = unmarshal(&insts, &mut notes, &info, &platform, &options);
     assert!(
         res.is_err(),
-        "Expected error containing '{}', but got success",
-        expected_msg_part
+        "Expected error containing '{expected_msg_part}', but got success"
     );
     let err_msg = res.err().unwrap().to_string();
     assert!(
         err_msg.contains(expected_msg_part),
-        "Expected error containing '{}', but got '{}'",
-        expected_msg_part,
-        err_msg
+        "Expected error containing '{expected_msg_part}', but got '{err_msg}'"
     );
 }
 

@@ -66,7 +66,7 @@ pub enum UnmarshalError {
 impl std::fmt::Display for UnmarshalError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            UnmarshalError::InvalidInstruction { pc, message } => write!(f, "{}: {}", pc, message),
+            UnmarshalError::InvalidInstruction { pc, message } => write!(f, "{pc}: {message}"),
             UnmarshalError::ZeroLengthProgram => write!(f, "Zero length programs are not allowed"),
             UnmarshalError::InvalidOptions(msg) => write!(f, "Invalid verifier options: {msg}"),
         }
@@ -86,7 +86,7 @@ impl UnmarshalError {
     fn invalid_opcode(pc: usize, msg: &str, opcode: u8) -> Self {
         Self::InvalidInstruction {
             pc,
-            message: format!("{} op 0x{:x}", msg, opcode),
+            message: format!("{msg} op 0x{opcode:x}"),
         }
     }
 }

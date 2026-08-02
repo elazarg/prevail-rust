@@ -239,7 +239,7 @@ impl<'a> EbpfChecker<'a> {
         )?;
         self.require_value(
             leq(ub, LinearExpression::from(desc_size as i64)),
-            &format!("Upper bound must be at most {}", desc_size),
+            &format!("Upper bound must be at most {desc_size}"),
         )
     }
 
@@ -335,7 +335,7 @@ impl<'a> EbpfChecker<'a> {
             let max_packet = self.ctx.runtime.max_packet_size;
             self.require_value(
                 leq(ub, LinearExpression::from(max_packet as i64)),
-                &format!("Upper bound must be at most {}", max_packet),
+                &format!("Upper bound must be at most {max_packet}"),
             )
         }
     }
@@ -450,7 +450,7 @@ impl<'a> EbpfChecker<'a> {
         {
             let imm = imm as i32;
             if !self.ctx.platform.is_helper_usable(imm) {
-                return self.throw_fail(&format!("invalid helper function id {}", imm));
+                return self.throw_fail(&format!("invalid helper function id {imm}"));
             }
             // Check sub assertions for call arguments
             let call = make_call(imm, self.ctx.platform);
@@ -785,8 +785,7 @@ impl<'a> EbpfChecker<'a> {
                         self.require_value(
                             LinearConstraint::false_const(),
                             &format!(
-                                "Illegal map update with a non-numerical value [{}-{})",
-                                lb_s, ub_s
+                                "Illegal map update with a non-numerical value [{lb_s}-{ub_s})"
                             ),
                         )?;
                     } else if self.ctx.runtime.strict

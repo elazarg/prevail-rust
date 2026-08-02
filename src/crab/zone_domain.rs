@@ -349,7 +349,7 @@ impl ZoneDomain {
         self.diffcsts_of_lin_leq(exp, &mut csts, &mut lbs, &mut ubs, registry);
         dump_constraint_trace(
             "add_linear_leq:input",
-            &format!("exp={exp} lbs={:?} ubs={:?} csts={:?}", lbs, ubs, csts),
+            &format!("exp={exp} lbs={lbs:?} ubs={ubs:?} csts={csts:?}"),
         );
 
         for (var, n) in &lbs {
@@ -823,18 +823,16 @@ impl ZoneDomain {
             if s == 0 {
                 continue;
             }
-            let vs = match self.rev_map.get(s as usize).and_then(|v| *v) {
-                Some(v) => v,
-                None => continue,
+            let Some(vs) = self.rev_map.get(s as usize).and_then(|v| *v) else {
+                continue;
             };
             let mut least = vs;
             for d in g.succs(s) {
                 if d == 0 {
                     continue;
                 }
-                let vd = match self.rev_map.get(d as usize).and_then(|v| *v) {
-                    Some(v) => v,
-                    None => continue,
+                let Some(vd) = self.rev_map.get(d as usize).and_then(|v| *v) else {
+                    continue;
                 };
                 let w = g.edge_val(s, d);
                 if w == 0i64 {
@@ -905,9 +903,8 @@ impl ZoneDomain {
             if vert == 0 {
                 continue;
             }
-            let var = match self.rev_map.get(vert as usize).and_then(|v| *v) {
-                Some(v) => v,
-                None => continue,
+            let Some(var) = self.rev_map.get(vert as usize).and_then(|v| *v) else {
+                continue;
             };
             if !representatives.contains(&var) {
                 continue;

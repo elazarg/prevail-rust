@@ -924,9 +924,8 @@ pub fn print_invariants(
 ) -> io::Result<()> {
     let mut previous_source = String::new();
     for bb in &collect_basic_blocks(prog.cfg(), simplify) {
-        let first_inv = match result.invariants.get(bb.first_label()) {
-            Some(inv) => inv,
-            None => continue,
+        let Some(first_inv) = result.invariants.get(bb.first_label()) else {
+            continue;
         };
         if first_inv.pre.is_bottom() {
             continue;

@@ -2305,9 +2305,7 @@ impl FiniteDomain {
         let extended = right_interval.sign_extend(source_width);
         assert!(
             !extended.is_bottom(),
-            "Sign extension failed: {} width {} becomes bottom",
-            right_interval,
-            source_width
+            "Sign extension failed: {right_interval} width {source_width} becomes bottom"
         );
         self.dom.set(svalue, &extended, reg);
         self.assign_var(uvalue, svalue, reg);

@@ -340,7 +340,7 @@ impl fmt::Display for AdaptGraph {
                 } else {
                     write!(f, ", ")?;
                 }
-                write!(f, "[v{} -> ", v)?;
+                write!(f, "[v{v} -> ")?;
                 for (i, e) in edges.iter().enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;

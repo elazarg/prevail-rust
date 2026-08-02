@@ -58,7 +58,7 @@ const TYPE_PAT: &str =
 const MAP_VAL: &str = r"\s*map_val\((\d+)\)\s*\+\s*(\d+)\s*";
 
 fn wrapped_label() -> String {
-    format!(r"\s*{}\s*", LABEL_PAT)
+    format!(r"\s*{LABEL_PAT}\s*")
 }
 
 // ---------------------------------------------------------------------------
@@ -77,75 +77,66 @@ fn compile(pat: &str) -> Regex {
 
 // parse_instruction_with_platform
 static RE_EXIT: LazyLock<Regex> = LazyLock::new(|| compile(r"^exit$"));
-static RE_CALL_IMM: LazyLock<Regex> = LazyLock::new(|| compile(&format!("^call {}$", IMM)));
+static RE_CALL_IMM: LazyLock<Regex> = LazyLock::new(|| compile(&format!("^call {IMM}$")));
 static RE_CALL_LABEL: LazyLock<Regex> =
     LazyLock::new(|| compile(&format!("^call {}$", wrapped_label())));
-static RE_CALLX: LazyLock<Regex> = LazyLock::new(|| compile(&format!("^callx {}$", REG)));
+static RE_CALLX: LazyLock<Regex> = LazyLock::new(|| compile(&format!("^callx {REG}$")));
 static RE_CALL_BTF_MODULE: LazyLock<Regex> =
-    LazyLock::new(|| compile(&format!(r"^call_btf {}\s+module\s+{}$", IMM, IMM)));
-static RE_CALL_BTF: LazyLock<Regex> = LazyLock::new(|| compile(&format!("^call_btf {}$", IMM)));
+    LazyLock::new(|| compile(&format!(r"^call_btf {IMM}\s+module\s+{IMM}$")));
+static RE_CALL_BTF: LazyLock<Regex> = LazyLock::new(|| compile(&format!("^call_btf {IMM}$")));
 static RE_BIN_REG: LazyLock<Regex> =
-    LazyLock::new(|| compile(&format!("^{}{}{}$", WREG, OPASSIGN, WREG)));
-static RE_UN: LazyLock<Regex> =
-    LazyLock::new(|| compile(&format!("^{}{}{}{}$", WREG, ASSIGN, UNOP, WREG)));
+    LazyLock::new(|| compile(&format!("^{WREG}{OPASSIGN}{WREG}$")));
+static RE_UN: LazyLock<Regex> = LazyLock::new(|| compile(&format!("^{WREG}{ASSIGN}{UNOP}{WREG}$")));
 static RE_LOAD_MAP_ADDRESS: LazyLock<Regex> =
-    LazyLock::new(|| compile(&format!("^{}{}{}$", WREG, ASSIGN, MAP_VAL)));
-static RE_LOAD_MAP_FD: LazyLock<Regex> = LazyLock::new(|| {
-    compile(&format!(
-        r"^{}{}map_fd(?:_programs)?\s+(\d+)\s*$",
-        WREG, ASSIGN
-    ))
-});
+    LazyLock::new(|| compile(&format!("^{WREG}{ASSIGN}{MAP_VAL}$")));
+static RE_LOAD_MAP_FD: LazyLock<Regex> =
+    LazyLock::new(|| compile(&format!(r"^{WREG}{ASSIGN}map_fd(?:_programs)?\s+(\d+)\s*$")));
 static RE_PSEUDO_VARIABLE_ADDR: LazyLock<Regex> =
-    LazyLock::new(|| compile(&format!("^{}{}variable_addr\\s+{}$", WREG, ASSIGN, IMM)));
+    LazyLock::new(|| compile(&format!("^{WREG}{ASSIGN}variable_addr\\s+{IMM}$")));
 static RE_PSEUDO_CODE_ADDR: LazyLock<Regex> =
-    LazyLock::new(|| compile(&format!("^{}{}code_addr\\s+{}$", WREG, ASSIGN, IMM)));
+    LazyLock::new(|| compile(&format!("^{WREG}{ASSIGN}code_addr\\s+{IMM}$")));
 static RE_PSEUDO_MAP_BY_IDX: LazyLock<Regex> =
-    LazyLock::new(|| compile(&format!(r"^{}{}map_by_idx\({}\)$", WREG, ASSIGN, IMM)));
+    LazyLock::new(|| compile(&format!(r"^{WREG}{ASSIGN}map_by_idx\({IMM}\)$")));
 static RE_PSEUDO_MVA: LazyLock<Regex> = LazyLock::new(|| {
     compile(&format!(
-        r"^{}{}mva\(map_by_idx\({}\)\)\s*\+\s*{}$",
-        WREG, ASSIGN, IMM, IMM
+        r"^{WREG}{ASSIGN}mva\(map_by_idx\({IMM}\)\)\s*\+\s*{IMM}$"
     ))
 });
 static RE_BIN_IMM: LazyLock<Regex> =
-    LazyLock::new(|| compile(&format!("^{}{}{}{}$", WREG, OPASSIGN, IMM, LONGLONG)));
+    LazyLock::new(|| compile(&format!("^{WREG}{OPASSIGN}{IMM}{LONGLONG}$")));
 static RE_MEM_LOAD: LazyLock<Regex> = LazyLock::new(|| {
-    let deref_pat = format!("{}{}([su])(\\d+){}{}", STAR, LPAREN, STAR, RPAREN);
-    let inner = format!("{}{}{}", REG, PLUSMINUS, IMM);
+    let deref_pat = format!("{STAR}{LPAREN}([su])(\\d+){STAR}{RPAREN}");
+    let inner = format!("{REG}{PLUSMINUS}{IMM}");
     compile(&format!(
-        "^{}{}{}{}{}{}$",
-        REG, ASSIGN, deref_pat, LPAREN, inner, RPAREN
+        "^{REG}{ASSIGN}{deref_pat}{LPAREN}{inner}{RPAREN}$"
     ))
 });
 static RE_MEM_STORE: LazyLock<Regex> = LazyLock::new(|| {
-    let deref_pat = format!("{}{}([su])(\\d+){}{}", STAR, LPAREN, STAR, RPAREN);
-    let inner = format!("{}{}{}", REG, PLUSMINUS, IMM);
+    let deref_pat = format!("{STAR}{LPAREN}([su])(\\d+){STAR}{RPAREN}");
+    let inner = format!("{REG}{PLUSMINUS}{IMM}");
     compile(&format!(
-        "^{}{}{}{}{}{}$",
-        deref_pat, LPAREN, inner, RPAREN, ASSIGN, REG_OR_IMM
+        "^{deref_pat}{LPAREN}{inner}{RPAREN}{ASSIGN}{REG_OR_IMM}$"
     ))
 });
 static RE_ATOMIC: LazyLock<Regex> = LazyLock::new(|| {
-    let deref_pat = format!("{}{}([su])(\\d+){}{}", STAR, LPAREN, STAR, RPAREN);
-    let inner = format!("{}{}{}", REG, PLUSMINUS, IMM);
+    let deref_pat = format!("{STAR}{LPAREN}([su])(\\d+){STAR}{RPAREN}");
+    let inner = format!("{REG}{PLUSMINUS}{IMM}");
     compile(&format!(
-        r"^lock {}{}{}{}{}{}( fetch)?$",
-        deref_pat, LPAREN, inner, RPAREN, ATOMICOP, REG
+        r"^lock {deref_pat}{LPAREN}{inner}{RPAREN}{ATOMICOP}{REG}( fetch)?$"
     ))
 });
 static RE_PACKET: LazyLock<Regex> = LazyLock::new(|| {
-    let deref_pat = format!("{}{}u(\\d+){}{}", STAR, LPAREN, STAR, RPAREN);
-    compile(&format!(r"^r0 = {}skb\[(.*)\]$", deref_pat))
+    let deref_pat = format!("{STAR}{LPAREN}u(\\d+){STAR}{RPAREN}");
+    compile(&format!(r"^r0 = {deref_pat}skb\[(.*)\]$"))
 });
-static RE_PACKET_REG: LazyLock<Regex> = LazyLock::new(|| compile(&format!("^{}$", REG)));
-static RE_PACKET_IMM: LazyLock<Regex> = LazyLock::new(|| compile(&format!("^{}$", IMM)));
+static RE_PACKET_REG: LazyLock<Regex> = LazyLock::new(|| compile(&format!("^{REG}$")));
+static RE_PACKET_IMM: LazyLock<Regex> = LazyLock::new(|| compile(&format!("^{IMM}$")));
 static RE_PACKET_REG_PM_REG: LazyLock<Regex> =
-    LazyLock::new(|| compile(&format!("^{}{}{}$", REG, PLUSMINUS, REG)));
+    LazyLock::new(|| compile(&format!("^{REG}{PLUSMINUS}{REG}$")));
 static RE_PACKET_REG_PM_IMM: LazyLock<Regex> =
-    LazyLock::new(|| compile(&format!("^{}{}{}$", REG, PLUSMINUS, IMM)));
+    LazyLock::new(|| compile(&format!("^{REG}{PLUSMINUS}{IMM}$")));
 static RE_ASSUME: LazyLock<Regex> =
-    LazyLock::new(|| compile(&format!("^assume {}{}{}$", WREG, CMPOP, REG_OR_IMM)));
+    LazyLock::new(|| compile(&format!("^assume {WREG}{CMPOP}{REG_OR_IMM}$")));
 static RE_GOTO: LazyLock<Regex> = LazyLock::new(|| {
     compile(&format!(
         "^(?:if {}{}{})?goto\\s+(?:{})?{}$",
@@ -158,42 +149,38 @@ static RE_GOTO: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 // parse_program
-static RE_LABEL: LazyLock<Regex> = LazyLock::new(|| compile(&format!("{}:", LABEL_PAT)));
+static RE_LABEL: LazyLock<Regex> = LazyLock::new(|| compile(&format!("{LABEL_PAT}:")));
 static RE_PREFIX: LazyLock<Regex> = LazyLock::new(|| compile(r"^\s*(\d+:)?\s*"));
 
 // parse_linear_constraints
 static RE_SPECIAL_EQ_IMM: LazyLock<Regex> =
-    LazyLock::new(|| compile(&format!("^{}={}$", SPECIAL_VAR, IMM)));
+    LazyLock::new(|| compile(&format!("^{SPECIAL_VAR}={IMM}$")));
 static RE_SPECIAL_EQ_INTERVAL: LazyLock<Regex> =
-    LazyLock::new(|| compile(&format!("^{}={}$", SPECIAL_VAR, INTERVAL)));
+    LazyLock::new(|| compile(&format!("^{SPECIAL_VAR}={INTERVAL}$")));
 static RE_SPECIAL_EQ_REG_KIND: LazyLock<Regex> =
-    LazyLock::new(|| compile(&format!("^{}={}{}{}$", SPECIAL_VAR, REG, DOT, KIND)));
+    LazyLock::new(|| compile(&format!("^{SPECIAL_VAR}={REG}{DOT}{KIND}$")));
 static RE_REG_KIND_EQ_SPECIAL: LazyLock<Regex> =
-    LazyLock::new(|| compile(&format!("^{}{}{}={}$", REG, DOT, KIND, SPECIAL_VAR)));
+    LazyLock::new(|| compile(&format!("^{REG}{DOT}{KIND}={SPECIAL_VAR}$")));
 static RE_REG_KIND_EQ_REG_KIND: LazyLock<Regex> =
-    LazyLock::new(|| compile(&format!("^{}{}{}={}{}{}$", REG, DOT, KIND, REG, DOT, KIND)));
+    LazyLock::new(|| compile(&format!("^{REG}{DOT}{KIND}={REG}{DOT}{KIND}$")));
 static RE_REG_TYPE_EQ_REG_TYPE: LazyLock<Regex> =
-    LazyLock::new(|| compile(&format!("^{}{}type={}{}type$", REG, DOT, REG, DOT)));
+    LazyLock::new(|| compile(&format!("^{REG}{DOT}type={REG}{DOT}type$")));
 static RE_REG_TYPE_EQ_TYPE: LazyLock<Regex> =
-    LazyLock::new(|| compile(&format!("^{}{}type={}$", REG, DOT, TYPE_PAT)));
+    LazyLock::new(|| compile(&format!("^{REG}{DOT}type={TYPE_PAT}$")));
 static RE_REG_TYPE_IN_TYPESET: LazyLock<Regex> =
-    LazyLock::new(|| compile(&format!("^{}{}type{}{}$", REG, DOT, IN, TYPE_SET)));
+    LazyLock::new(|| compile(&format!("^{REG}{DOT}type{IN}{TYPE_SET}$")));
 static RE_REG_KIND_EQ_IMM: LazyLock<Regex> =
-    LazyLock::new(|| compile(&format!("^{}{}{}={}$", REG, DOT, KIND, IMM)));
+    LazyLock::new(|| compile(&format!("^{REG}{DOT}{KIND}={IMM}$")));
 static RE_REG_KIND_EQ_INTERVAL: LazyLock<Regex> =
-    LazyLock::new(|| compile(&format!("^{}{}{}={}$", REG, DOT, KIND, INTERVAL)));
-static RE_REG_KIND_DIFF_LEQ: LazyLock<Regex> = LazyLock::new(|| {
-    compile(&format!(
-        "^{}{}{}-{}{}{}<={}$",
-        REG, DOT, KIND, REG, DOT, KIND, IMM
-    ))
-});
+    LazyLock::new(|| compile(&format!("^{REG}{DOT}{KIND}={INTERVAL}$")));
+static RE_REG_KIND_DIFF_LEQ: LazyLock<Regex> =
+    LazyLock::new(|| compile(&format!("^{REG}{DOT}{KIND}-{REG}{DOT}{KIND}<={IMM}$")));
 static RE_STACK_RANGE_TYPE: LazyLock<Regex> =
-    LazyLock::new(|| compile(&format!("^s{}{}type={}$", ARRAY_RANGE, DOT, TYPE_PAT)));
+    LazyLock::new(|| compile(&format!("^s{ARRAY_RANGE}{DOT}type={TYPE_PAT}$")));
 static RE_STACK_RANGE_SVALUE: LazyLock<Regex> =
-    LazyLock::new(|| compile(&format!("^s{}{}svalue={}$", ARRAY_RANGE, DOT, IMM)));
+    LazyLock::new(|| compile(&format!("^s{ARRAY_RANGE}{DOT}svalue={IMM}$")));
 static RE_STACK_RANGE_UVALUE: LazyLock<Regex> =
-    LazyLock::new(|| compile(&format!("^s{}{}uvalue={}$", ARRAY_RANGE, DOT, IMM)));
+    LazyLock::new(|| compile(&format!("^s{ARRAY_RANGE}{DOT}uvalue={IMM}$")));
 static RE_TYPE_TOK: LazyLock<Regex> = LazyLock::new(|| compile(TYPE_PAT));
 
 // ---------------------------------------------------------------------------
@@ -506,7 +493,7 @@ pub fn parse_instruction_with_platform(
         let op_str = m.get(2).unwrap().as_str();
         let src_str = m.get(3).unwrap().as_str();
         if dst_str != src_str {
-            panic!("Invalid unary operation: {}", text);
+            panic!("Invalid unary operation: {text}");
         }
         return Instruction::Un(Un {
             op: STR_TO_UNOP[op_str],
@@ -770,7 +757,7 @@ fn parse_reg_var(
     registry: &mut VariableRegistry,
 ) -> Variable {
     let kind_str = m.get(kind_group).unwrap().as_str();
-    let kind = regkind(kind_str).unwrap_or_else(|| panic!("Unknown kind: {}", kind_str));
+    let kind = regkind(kind_str).unwrap_or_else(|| panic!("Unknown kind: {kind_str}"));
     registry.reg(kind, regnum(m.get(regnum_group).unwrap().as_str()))
 }
 
@@ -778,7 +765,7 @@ fn special_var(s: &str, registry: &mut VariableRegistry) -> Variable {
     match s {
         "packet_size" => registry.packet_size(),
         "meta_offset" => registry.meta_offset(),
-        _ => panic!("Bad special variable: {}", s),
+        _ => panic!("Bad special variable: {s}"),
     }
 }
 
@@ -873,12 +860,12 @@ pub fn parse_linear_constraints(
             for cap in RE_TYPE_TOK.captures_iter(inside) {
                 let sym = cap.get(1).unwrap().as_str();
                 let enc = string_to_type_encoding(sym)
-                    .unwrap_or_else(|| panic!("Unknown type encoding: {}", sym));
+                    .unwrap_or_else(|| panic!("Unknown type encoding: {sym}"));
                 ts = ts.union(crate::crab::type_encoding::TypeSet::singleton(enc));
             }
 
             if ts.is_empty() {
-                panic!("Empty type set in 'in {{...}}' constraint: {}", cst_text);
+                panic!("Empty type set in 'in {{...}}' constraint: {cst_text}");
             }
 
             type_restrictions.push((d, ts));
@@ -955,7 +942,7 @@ pub fn parse_linear_constraints(
                 LinearExpression::from(unsigned_number(m.get(3).unwrap().as_str())),
             ));
         } else {
-            panic!("Unknown constraint: {}", cst_text);
+            panic!("Unknown constraint: {cst_text}");
         }
     }
 

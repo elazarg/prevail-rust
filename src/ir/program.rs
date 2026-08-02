@@ -231,10 +231,7 @@ fn validate_tail_call_chain_depth(
                 .and_then(|x| x.clone())
                 .unwrap_or_else(|| scc_id.clone());
             return Err(InvalidControlFlow {
-                message: format!(
-                    "tail call chain depth exceeds {} (at {})",
-                    TAIL_CALL_CHAIN_LIMIT, at
-                ),
+                message: format!("tail call chain depth exceeds {TAIL_CALL_CHAIN_LIMIT} (at {at})"),
             });
         }
 
@@ -330,7 +327,7 @@ impl Program {
     pub fn instruction_at(&self, label: &Label) -> &Instruction {
         self.instructions
             .get(label)
-            .unwrap_or_else(|| panic!("Label {} not found in the CFG", label))
+            .unwrap_or_else(|| panic!("Label {label} not found in the CFG"))
     }
 
     /// Returns a mutable reference to the instruction at the given label.
@@ -339,7 +336,7 @@ impl Program {
     pub fn instruction_at_mut(&mut self, label: &Label) -> &mut Instruction {
         self.instructions
             .get_mut(label)
-            .unwrap_or_else(|| panic!("Label {} not found in the CFG", label))
+            .unwrap_or_else(|| panic!("Label {label} not found in the CFG"))
     }
 
     /// Returns the assertions at the given label.
@@ -348,7 +345,7 @@ impl Program {
     pub fn assertions_at(&self, label: &Label) -> &[Assertion] {
         self.assertions
             .get(label)
-            .unwrap_or_else(|| panic!("Label {} not found in the CFG", label))
+            .unwrap_or_else(|| panic!("Label {label} not found in the CFG"))
     }
 
     /// Top-level instruction labels usable as callback entries via PTR_TO_FUNC.
@@ -458,7 +455,7 @@ fn pass_resolve_kfunc_calls(
             let mut call = platform
                 .resolve_kfunc_call(call_btf.btf_id, call_btf.module, info)
                 .map_err(|why_not| InvalidControlFlow {
-                    message: format!("not implemented: {} (at {})", why_not, label),
+                    message: format!("not implemented: {why_not} (at {label})"),
                 })?;
             // The lowered Call's identity is the pre-resolution (btf_id, module)
             // pair plus the fixed CallKind::Kfunc tag; stamp those from the source
@@ -622,7 +619,7 @@ fn pass_connect_edges(
             } else {
                 if !builder.prog.cfg.contains(target_label) {
                     return Err(InvalidControlFlow {
-                        message: format!("jump to undefined label {}", target_label),
+                        message: format!("jump to undefined label {target_label}"),
                     });
                 }
                 builder.insert_jump(
@@ -840,7 +837,7 @@ impl CfgBuilder {
     /// Insert a new label with its instruction. Panics if the label already exists.
     fn insert(&mut self, label: Label, ins: Instruction) {
         if self.prog.cfg.contains(&label) {
-            panic!("Label {} already exists", label);
+            panic!("Label {label} already exists");
         }
         self.prog.cfg.insert(label.clone());
         self.prog.instructions.insert(label, ins);
@@ -851,8 +848,7 @@ impl CfgBuilder {
     fn insert_after(&mut self, prev_label: &Label, new_label: Label, ins: Instruction) {
         assert_ne!(
             *prev_label, new_label,
-            "Cannot insert after the same label {}",
-            new_label
+            "Cannot insert after the same label {new_label}"
         );
         self.prog.instructions.insert(new_label.clone(), ins);
         self.prog.cfg.insert_after(prev_label, new_label);
@@ -863,7 +859,7 @@ impl CfgBuilder {
     fn insert_jump(&mut self, from: &Label, to: &Label, ins: Instruction) -> Label {
         let jump_label = Label::make_jump(from, to);
         if self.prog.cfg.contains(&jump_label) {
-            panic!("Jump label {} already exists", jump_label);
+            panic!("Jump label {jump_label} already exists");
         }
         self.insert(jump_label.clone(), ins);
         self.add_child(from, &jump_label);
@@ -884,7 +880,7 @@ impl CfgBuilder {
     /// Set the assertions for a given label. Panics if the label is not in the CFG.
     fn set_assertions(&mut self, label: &Label, assertions: Vec<Assertion>) {
         if !self.prog.cfg.contains(label) {
-            panic!("Label {} not found in the CFG", label);
+            panic!("Label {label} not found in the CFG");
         }
         self.prog.assertions.insert(label.clone(), assertions);
     }
@@ -1164,7 +1160,7 @@ fn add_cfg_nodes(
 ) -> Result<(), InvalidControlFlow> {
     // Guard at the entry so the check applies uniformly to all invocations
     // (including the top-level one), matching upstream PR #1070.
-    let caller_label_str = format!("{}", caller_label);
+    let caller_label_str = format!("{caller_label}");
     let stack_frame_depth = caller_label_str
         .chars()
         .filter(|&c| c == STACK_FRAME_DELIMITER)
@@ -1193,7 +1189,7 @@ fn add_cfg_nodes(
     // Construct the variable prefix to use for the new stack frame
     // and store a copy in the CallLocal instruction since the instruction-specific
     // labels may only exist until the CFG is simplified.
-    let stack_frame_prefix = format!("{}", caller_label);
+    let stack_frame_prefix = format!("{caller_label}");
     if let Instruction::CallLocal(pcall) = builder.prog.instruction_at_mut(caller_label) {
         pcall.stack_frame_prefix = Rc::from(stack_frame_prefix.as_str());
     }
@@ -1208,7 +1204,7 @@ fn add_cfg_nodes(
     while let Some(macro_label) = macro_labels.pop_first() {
         if stack_frame_prefix == macro_label.stack_frame_prefix {
             return Err(InvalidControlFlow {
-                message: format!("{}: illegal recursion", stack_frame_prefix),
+                message: format!("{stack_frame_prefix}: illegal recursion"),
             });
         }
 
@@ -1690,9 +1686,8 @@ mod tests {
         let mut info = ProgramInfo::default();
         let platform = LinuxPlatform::new();
         let opts = EbpfVerifierOptions::default();
-        let err = match Program::from_sequence(&seq, &mut info, &platform, &opts) {
-            Ok(_) => panic!("must reject >33 tail calls"),
-            Err(err) => err,
+        let Err(err) = Program::from_sequence(&seq, &mut info, &platform, &opts) else {
+            panic!("must reject >33 tail calls")
         };
         assert!(err.message.contains("tail call chain depth exceeds 33"));
     }
@@ -1802,9 +1797,8 @@ mod tests {
         let mut info = ProgramInfo::default();
         let platform = LinuxPlatform::new();
         let opts = EbpfVerifierOptions::default();
-        let err = match Program::from_sequence(&seq, &mut info, &platform, &opts) {
-            Ok(_) => panic!("unknown kfunc id must be rejected"),
-            Err(err) => err,
+        let Err(err) = Program::from_sequence(&seq, &mut info, &platform, &opts) else {
+            panic!("unknown kfunc id must be rejected")
         };
         assert!(
             err.message

@@ -289,7 +289,7 @@ fn parse_options(raw: &[String]) -> EbpfVerifierOptions {
             "simplify" => opts.verbosity_opts.simplify = true,
             "big_endian" => opts.runtime.big_endian = true,
             "!big_endian" => opts.runtime.big_endian = false,
-            other => panic!("Unknown option: {}", other),
+            other => panic!("Unknown option: {other}"),
         }
     }
     opts
@@ -329,7 +329,7 @@ fn parse_code_blocks(code: &serde_yaml::Value, platform: &dyn EbpfPlatform) -> I
             let ins = parse_instruction_with_platform(trimmed, &label_map, Some(platform));
             if matches!(ins, Instruction::Undefined(_)) && !trimmed.is_empty() {
                 // Only warn, don't fail — some instructions may be intentionally undefined
-                eprintln!("Warning: unparsed instruction: {}", trimmed);
+                eprintln!("Warning: unparsed instruction: {trimmed}");
             }
             result.push((Label::new(pc), ins, None));
             pc += 1;
@@ -359,11 +359,11 @@ fn load_suite(path: &str, platform: &dyn EbpfPlatform) -> Vec<TestCase> {
         "YAML fixture not found: {path}. Initialize submodules per CONTRIBUTING.md (Initial Setup)"
     );
     let content =
-        std::fs::read_to_string(path).unwrap_or_else(|e| panic!("Failed to read {}: {}", path, e));
+        std::fs::read_to_string(path).unwrap_or_else(|e| panic!("Failed to read {path}: {e}"));
     let mut cases = Vec::new();
     for doc in serde_yaml::Deserializer::from_str(&content) {
         let raw: RawTestCase = RawTestCase::deserialize(doc)
-            .unwrap_or_else(|e| panic!("Failed to parse YAML in {}: {}", path, e));
+            .unwrap_or_else(|e| panic!("Failed to parse YAML in {path}: {e}"));
 
         if raw.expected_exception.is_some() {
             // Exception fixture: try to parse, capture any panic as actual_exception.
@@ -428,7 +428,7 @@ struct Failure {
 fn run_test_case(test_case: &TestCase, platform: &TestPlatform) -> Option<Failure> {
     // Handle expected-exception test cases.
     if let Some(expected_exception) = &test_case.expected_exception {
-        let expected_messages: BTreeSet<String> = [format!("Exception: {}", expected_exception)]
+        let expected_messages: BTreeSet<String> = [format!("Exception: {expected_exception}")]
             .into_iter()
             .collect();
         let actual_messages: BTreeSet<String> = test_case

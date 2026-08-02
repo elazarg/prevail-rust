@@ -30,12 +30,9 @@ pub(crate) fn load_btf_section_from_elf(path: &str) -> Option<Vec<u8>> {
     use object::Object;
     use object::ObjectSection;
     let elf = object::File::parse(&*data).unwrap();
-    let btf_section = match elf.section_by_name(".BTF") {
-        Some(s) => s,
-        None => {
-            eprintln!("Skipping test: no .BTF section in {path}");
-            return None;
-        }
+    let Some(btf_section) = elf.section_by_name(".BTF") else {
+        eprintln!("Skipping test: no .BTF section in {path}");
+        return None;
     };
     Some(btf_section.data().unwrap().to_vec())
 }

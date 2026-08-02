@@ -122,11 +122,11 @@ fn try_verify_section(path: &str, section: &str, opts: &EbpfVerifierOptions) -> 
         path.to_string()
     };
     let mut platform = LinuxPlatform::new();
-    let mut raw_progs =
-        match elf_loader::read_elf_file(&resolved_path, section, "", opts, &mut platform) {
-            Ok(p) => p,
-            Err(_) => return false,
-        };
+    let Ok(mut raw_progs) =
+        elf_loader::read_elf_file(&resolved_path, section, "", opts, &mut platform)
+    else {
+        return false;
+    };
     if raw_progs.len() != 1 {
         return false;
     }
@@ -136,15 +136,14 @@ fn try_verify_section(path: &str, section: &str, opts: &EbpfVerifierOptions) -> 
     platform.set_program_type(&raw_prog.info.program_type);
 
     let mut notes = Vec::new();
-    let inst_seq =
-        match unmarshal::unmarshal(&raw_prog.prog, &mut notes, &raw_prog.info, &platform, opts) {
-            Ok(s) => s,
-            Err(_) => return false,
-        };
+    let Ok(inst_seq) =
+        unmarshal::unmarshal(&raw_prog.prog, &mut notes, &raw_prog.info, &platform, opts)
+    else {
+        return false;
+    };
 
-    let program = match Program::from_sequence(&inst_seq, &mut raw_prog.info, &platform, opts) {
-        Ok(p) => p,
-        Err(_) => return false,
+    let Ok(program) = Program::from_sequence(&inst_seq, &mut raw_prog.info, &platform, opts) else {
+        return false;
     };
 
     let ctx = DomainContext {
@@ -173,11 +172,11 @@ fn try_verify_program(
         path.to_string()
     };
     let mut platform = LinuxPlatform::new();
-    let mut raw_progs =
-        match elf_loader::read_elf_file(&resolved_path, section, "", opts, &mut platform) {
-            Ok(p) => p,
-            Err(_) => return false,
-        };
+    let Ok(mut raw_progs) =
+        elf_loader::read_elf_file(&resolved_path, section, "", opts, &mut platform)
+    else {
+        return false;
+    };
     if raw_progs.len() != expected_count {
         return false;
     }
@@ -188,22 +187,17 @@ fn try_verify_program(
             platform.set_program_type(&raw_prog.info.program_type);
 
             let mut notes = Vec::new();
-            let inst_seq = match unmarshal::unmarshal(
-                &raw_prog.prog,
-                &mut notes,
-                &raw_prog.info,
-                &platform,
-                opts,
-            ) {
-                Ok(s) => s,
-                Err(_) => return false,
+            let Ok(inst_seq) =
+                unmarshal::unmarshal(&raw_prog.prog, &mut notes, &raw_prog.info, &platform, opts)
+            else {
+                return false;
             };
 
-            let program =
-                match Program::from_sequence(&inst_seq, &mut raw_prog.info, &platform, opts) {
-                    Ok(p) => p,
-                    Err(_) => return false,
-                };
+            let Ok(program) =
+                Program::from_sequence(&inst_seq, &mut raw_prog.info, &platform, opts)
+            else {
+                return false;
+            };
 
             let ctx = DomainContext {
                 program_info: &raw_prog.info,
@@ -333,8 +327,7 @@ fn fail_unmarshal_wronghelper() {
             assert!(
                 err.to_string()
                     .contains("rejected: helper function is unavailable on this platform"),
-                "unexpected error: {}",
-                err
+                "unexpected error: {err}"
             );
         }
     }

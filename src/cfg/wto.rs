@@ -158,7 +158,7 @@ impl fmt::Display for WtoNesting {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // Output from outermost to innermost.
         for head in self.heads.iter().rev() {
-            write!(f, "{} ", head)?;
+            write!(f, "{head} ")?;
         }
         Ok(())
     }
@@ -231,7 +231,7 @@ impl fmt::Display for Wto {
         fn write_partition(f: &mut fmt::Formatter<'_>, partition: &WtoPartition) -> fmt::Result {
             for component in partition.iter().rev() {
                 match component {
-                    CycleOrLabel::Label(label) => write!(f, "{}", label)?,
+                    CycleOrLabel::Label(label) => write!(f, "{label}")?,
                     CycleOrLabel::Cycle(cycle) => {
                         write!(f, "( ")?;
                         write_partition(f, &cycle.components)?;
@@ -624,7 +624,7 @@ mod tests {
     #[test]
     fn wto_figure_1() {
         let wto = figure_1_wto();
-        assert_eq!(format!("{}", wto), "entry 1 2 ( 3 4 ( 5 6 ) 7 ) 8 exit \n");
+        assert_eq!(format!("{wto}"), "entry 1 2 ( 3 4 ( 5 6 ) 7 ) 8 exit \n");
     }
 
     /// Port of test_wto.cpp: "wto figure 2a"
@@ -638,7 +638,7 @@ mod tests {
             (l(4), vec![l(3), l(5)]),
             (l(5), vec![l(4)]),
         ]));
-        assert_eq!(format!("{}", wto), "entry 1 ( 4 5 ) 2 3 exit \n");
+        assert_eq!(format!("{wto}"), "entry 1 ( 4 5 ) 2 3 exit \n");
     }
 
     /// Port of test_wto.cpp: "wto figure 2b"
@@ -651,7 +651,7 @@ mod tests {
             (l(3), vec![l(1), Label::exit()]),
             (l(4), vec![l(3)]),
         ]));
-        assert_eq!(format!("{}", wto), "entry ( 1 4 2 3 ) exit \n");
+        assert_eq!(format!("{wto}"), "entry ( 1 4 2 3 ) exit \n");
     }
 
     #[test]

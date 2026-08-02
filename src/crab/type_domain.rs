@@ -869,18 +869,18 @@ impl TypeDomain {
                         continue;
                     }
                     let m_name = reg.name(*m);
-                    constraints.insert(format!("{}={}", m_name, te));
+                    constraints.insert(format!("{m_name}={te}"));
                 }
             } else {
                 // Multi-valued TypeSet: emit set for first member, equality for rest
                 let first = sorted[0];
                 let name = reg.name(*first);
-                let items: Vec<String> = ts.iter().map(|t| format!("{}", t)).collect();
+                let items: Vec<String> = ts.iter().map(|t| format!("{t}")).collect();
                 constraints.insert(format!("{} in {{{}}}", name, items.join(", ")));
 
                 for &m in &sorted[1..] {
                     let m_name = reg.name(*m);
-                    constraints.insert(format!("{}={}", m_name, name));
+                    constraints.insert(format!("{m_name}={name}"));
                 }
             }
         }

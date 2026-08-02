@@ -68,9 +68,8 @@ fn is_map_type(btf_data: &BtfTypeData, type_id: BtfTypeId) -> Result<bool, Unmar
     if btf_data.get_kind_index(type_id)? != BtfKindIndex::Struct {
         return Ok(false);
     }
-    let members = match btf_data.get_kind(type_id)? {
-        BtfKind::Struct { members, .. } => members,
-        _ => return Ok(false),
+    let BtfKind::Struct { members, .. } = btf_data.get_kind(type_id)? else {
+        return Ok(false);
     };
     let mut has_type = false;
     let mut has_max_entries = false;
@@ -92,9 +91,8 @@ fn get_map_definition_from_btf(
 ) -> Result<BtfMapDefinition, UnmarshalError> {
     let map_type_id = unwrap_type(btf_data, map_type_id)?;
 
-    let members = match btf_data.get_struct(map_type_id)? {
-        BtfKind::Struct { members, .. } => members,
-        _ => unreachable!(),
+    let BtfKind::Struct { members, .. } = btf_data.get_struct(map_type_id)? else {
+        unreachable!()
     };
 
     let mut type_field: BtfTypeId = 0;
@@ -200,9 +198,8 @@ pub fn parse_btf_map_section(
         let mut inner_map_type_ids = BTreeSet::new();
 
         let maps_section = btf_data.get_data_section(maps_id)?;
-        let members = match maps_section {
-            BtfKind::DataSection { members, .. } => members,
-            _ => unreachable!(),
+        let BtfKind::DataSection { members, .. } = maps_section else {
+            unreachable!()
         };
 
         let handle_map_type_id =
