@@ -9,7 +9,7 @@ manual_let_else = "deny"
 
 [package]
 name = "prevail"
-version = "0.2.5"
+version = "0.2.6"
 edition = "2024"
 description = "eBPF Verifier using Abstract Interpretation"
 license = "MIT"
