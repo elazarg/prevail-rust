@@ -4,7 +4,7 @@
 //! Context descriptor constants for Linux eBPF program types.
 //! Ported from `src/linux/gpl/spec_type_descriptors.hpp`.
 // All Linux program type descriptors retained for spec completeness.
-#![allow(dead_code)]
+#![expect(dead_code)]
 
 use crate::spec::ebpf_base::EbpfCtxDescriptor;
 use crate::spec::type_descriptors::{

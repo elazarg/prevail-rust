@@ -478,7 +478,7 @@ fn summary(map: &std::collections::BTreeMap<String, usize>) -> String {
         .join(" ")
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn save_finding(
     out_root: &Path,
     class: &str,

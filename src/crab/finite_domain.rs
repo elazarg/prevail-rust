@@ -11,7 +11,7 @@
 //! comparison operands, precomputed intervals) matching upstream's own
 //! parameter lists 1:1; bundling them into a params struct would diverge from
 //! upstream's shape and complicate future syncs more than the lint is worth.
-#![allow(clippy::too_many_arguments)]
+#![expect(clippy::too_many_arguments)]
 
 use crate::arith::linear_constraint::{LinearConstraint, eq, expr_eq, geq, gt, leq, lt, neq};
 use crate::arith::linear_expression::LinearExpression;

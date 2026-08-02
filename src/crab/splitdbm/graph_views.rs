@@ -22,8 +22,10 @@ use super::{VertId, Weight};
 /// The performance cost is negligible compared to the graph algorithm work.
 pub trait ReadableGraph {
     fn size(&self) -> usize;
-    /// Inherent callers use `AdaptGraph::elem`, which shadows the trait
-    /// method — rustc flags it as dead.
+    /// Part of the `ReadableGraph` contract, mirroring upstream's concept.
+    /// Non-test callers hold an `AdaptGraph`, whose inherent `elem` shadows this
+    /// one, so only the view types reach it — and only from tests. That makes it
+    /// dead in the non-test build alone, which `#[expect]` cannot express.
     #[allow(dead_code)]
     fn elem(&self, s: VertId, d: VertId) -> bool;
     fn edge_val(&self, s: VertId, d: VertId) -> Weight;

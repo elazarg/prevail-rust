@@ -1,6 +1,8 @@
 // Copyright (c) Prevail Verifier contributors.
 // SPDX-License-Identifier: MIT
 
+// Shared helper module: each test binary that includes it uses a different
+// subset, so what is dead varies by target and `#[expect]` cannot hold for all.
 #![allow(dead_code)]
 // Shared by multiple integration-test crates; each uses a subset.
 

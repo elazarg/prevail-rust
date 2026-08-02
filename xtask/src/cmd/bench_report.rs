@@ -17,11 +17,11 @@ struct HyperfineData {
 #[derive(Deserialize)]
 struct HyperfineResult {
     mean: f64,
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     stddev: f64,
     min: f64,
     #[serde(default)]
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     command: String,
 }
 

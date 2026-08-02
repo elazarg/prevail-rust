@@ -4,8 +4,6 @@
 //! BTF (BPF Type Format) parsing and type information.
 //!
 //! Ports the read-only subset of `external/libbtf/`.
-// Many BTF types and fields exist for spec completeness even if not yet used.
-#![allow(dead_code)]
 
 use zerocopy::FromBytes;
 

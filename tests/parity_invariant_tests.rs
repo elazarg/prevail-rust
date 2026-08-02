@@ -1,6 +1,6 @@
 // Copyright (c) Prevail Verifier contributors.
 // SPDX-License-Identifier: MIT
-#![allow(non_snake_case)]
+#![expect(non_snake_case)]
 
 //! Parity invariant tests: Rust-only tests that check for specific invariant
 //! properties that the C++ upstream verifier produces.
