@@ -16,7 +16,7 @@ use crate::crab::type_domain::reg_type;
 use crate::crab::type_encoding::{
     DataKind, T_NUM, T_STACK, TS_MAP, TS_POINTER, TS_SINGLETON_PTR, TypeEncoding, TypeSet,
 };
-use crate::crab::type_to_number::reg_pack;
+use crate::crab::type_to_number::{RegPack, reg_pack};
 use crate::crab::var_registry::VariableRegistry;
 use crate::ir::assertions::get_assertions;
 use crate::ir::syntax::{
@@ -486,14 +486,39 @@ impl<'a> EbpfChecker<'a> {
         }
         if !self.ctx.runtime.allow_division_by_zero {
             let r = reg_pack(&s.reg, self.registry);
-            let v = if s.is_signed { r.svalue } else { r.uvalue };
-
-            let intv = self.dom.state.values.eval_interval_var(v, self.registry);
-            if intv.contains(&Number::from(0)) {
+            if s.is64 {
+                let v = if s.is_signed { r.svalue } else { r.uvalue };
+                let intv = self.dom.state.values.eval_interval_var(v, self.registry);
+                if intv.contains(&Number::from(0)) {
+                    return self.throw_fail("Possible division by zero");
+                }
+            } else if self.may_be_zero_at_32_bits(&r) {
+                // A 32-bit division divides by the register's low half, the same
+                // view the transformer divides by. Testing all 64 bits instead
+                // would accept a divisor like 0x1_0000_0000, whose low half --
+                // the actual divisor -- is zero.
                 return self.throw_fail("Possible division by zero");
             }
         }
         Ok(())
+    }
+
+    /// Whether the low half of a register can be zero.
+    ///
+    /// Zero has the same representation in the signed and the unsigned view, so
+    /// either view excluding it proves the low half nonzero. Consulting both
+    /// matters: a range like `[1, 0xffffffff]` crosses the 32-bit sign
+    /// boundary, so sign-extending it yields the whole signed range, while
+    /// zero-extending keeps it exact.
+    fn may_be_zero_at_32_bits(&self, reg: &RegPack) -> bool {
+        let zero = Number::from(0);
+        let values = self.dom.state.values.inner();
+        values
+            .eval_interval_with_width(reg.uvalue, 32, self.registry)
+            .contains(&zero)
+            && values
+                .eval_interval_with_width(reg.svalue, 32, self.registry)
+                .contains(&zero)
     }
 
     fn check_type_constraint(&mut self, s: &TypeConstraint) -> Result<(), VerificationError> {

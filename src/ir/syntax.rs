@@ -434,10 +434,14 @@ pub struct Addable {
 }
 
 /// Check that a register contains a non-zero number (for division).
+///
+/// `is64` is the width of the division that consumes it: a 32-bit division
+/// divides by the register's low half, so only those bytes have to be non-zero.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ValidDivisor {
     pub reg: Reg,
     pub is_signed: bool,
+    pub is64: bool,
 }
 
 /// How memory is being accessed.

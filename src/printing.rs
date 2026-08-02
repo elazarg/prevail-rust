@@ -649,7 +649,7 @@ impl fmt::Display for Addable {
 
 impl fmt::Display for ValidDivisor {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} != 0", self.reg)
+        write!(f, "{} != 0", reg_name(&self.reg, self.is64))
     }
 }
 
@@ -1733,8 +1733,21 @@ mod tests {
         let vd = ValidDivisor {
             reg: Reg { v: 3 },
             is_signed: false,
+            is64: true,
         };
         assert_eq!(format!("{vd}"), "r3 != 0");
+    }
+
+    /// A 32-bit division checks the divisor's low half, so the assertion names
+    /// the 32-bit register, matching llvm-objdump's operand naming.
+    #[test]
+    fn test_display_valid_divisor_32bit() {
+        let vd = ValidDivisor {
+            reg: Reg { v: 3 },
+            is_signed: false,
+            is64: false,
+        };
+        assert_eq!(format!("{vd}"), "w3 != 0");
     }
 
     #[test]
@@ -1910,6 +1923,7 @@ mod tests {
         let a = Assertion::ValidDivisor(ValidDivisor {
             reg: Reg { v: 3 },
             is_signed: false,
+            is64: true,
         });
         assert_eq!(format!("{a}"), "r3 != 0");
     }

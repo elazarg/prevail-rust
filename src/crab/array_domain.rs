@@ -378,18 +378,37 @@ fn find_and_remove_overlap(
     array_map: &mut ArrayMap,
 ) -> (Option<(u64, u32)>, Vec<Cell>) {
     let mut res: Option<(u64, u32)> = None;
-    let cells;
+    let mut cells;
 
-    if let Some(n) = ii.singleton()
+    // A strong update requires an offset representable by the unsigned
+    // cell-offset type. An out-of-range constant (in particular a negative
+    // offset) stays on the weak path below: although the access starts outside
+    // the tracked stack, its possible byte range may still overlap a tracked
+    // cell.
+    if let Some(offset) = ii.singleton().and_then(|n| n.to_u64())
         && let Some(nb) = elem_size.singleton()
     {
-        let offset = n.to_i64().unwrap_or(0) as u64;
         let size = nb.to_i64().unwrap_or(0) as u32;
         let om = array_map.entry_or_default(kind);
         cells = om.get_overlap_cells(offset, size);
+        // `get_overlap_cells` deliberately excludes the exact-match cell
+        // `(offset, size)`, which is correct for loads (`get_cell` handles it
+        // separately) but wrong for a kill: a pure-havoc caller (e.g. storing
+        // an uninitialized register over an exact-match cell) must forget the
+        // stale value/type, so include it here.
+        if let Some(exact) = om.get_cell(offset, size) {
+            cells.push(exact);
+        }
         res = Some((offset, size));
     } else {
-        let range = ii.join(&(ii + elem_size));
+        // `elem_size` is a non-negative byte count (ValidSize enforces this for
+        // dynamic helper widths), so `ii + elem_size` is the exclusive end.
+        // `get_overlap_cells_symbolic` expects an inclusive interval of byte
+        // offsets; subtract one to avoid spuriously killing a cell that starts
+        // exactly at the end. This also makes a negative constant offset safe
+        // without narrowing: [-8, -8] with width 8 touches [-8, -1], while
+        // offset -4 with width 8 may touch [0, 3].
+        let range = ii.join(&(&(ii + elem_size) - &Interval::from_i64(1)));
         let om = array_map.entry_or_default(kind);
         cells = om.get_overlap_cells_symbolic(&range);
     }
@@ -974,8 +993,12 @@ impl ArrayDomain {
         access: &mut StackAccess<'_>,
     ) {
         assert!(kind == DataKind::Svalues || kind == DataKind::Uvalues);
-        let n = match ii.singleton() {
-            Some(n) => *n,
+        // We can only split a singleton offset. A negative offset is an
+        // out-of-bounds access below the stack frame: there is no cell to split
+        // and it has no representation in the unsigned cell-offset type, so
+        // leave it for the checker.
+        let offset = match ii.singleton().and_then(|n| n.to_u64()) {
+            Some(offset) => offset,
             None => return,
         };
         let n_bytes = match elem_size.singleton() {
@@ -983,7 +1006,6 @@ impl ArrayDomain {
             None => return,
         };
         let size = n_bytes.to_i64().unwrap_or(0) as u32;
-        let offset = n.to_i64().unwrap_or(0) as u64;
 
         let cells = {
             let om = self.cells.entry_or_default(kind);
@@ -1100,6 +1122,127 @@ mod tests {
             overlaps.contains(&Cell::new(48, 8)),
             "Cell(48,8) at [48,56) overlaps [54,56) but was missed by backward scan \
              (early break at touched-but-empty offset 50)",
+        );
+    }
+
+    /// A stack pointer walked out of bounds (below the frame) reaches the array
+    /// domain as a negative constant offset. Such an offset has no
+    /// representation in the unsigned cell-offset type, so the domain must
+    /// handle it gracefully (there is no cell there) and leave the
+    /// out-of-bounds access for the assertion checker to reject.
+    #[test]
+    fn negative_singleton_offset_leaves_in_bounds_cell_untouched() {
+        let mut registry = VariableRegistry::new();
+        let mut access = StackAccess::new(&mut registry, false);
+        let mut stack = ArrayDomain::new(8);
+        let mut types = TypeDomain::top();
+        let mut values = NumAbsDomain::top();
+        stack.initialize_numbers(0, 8);
+
+        let neg = Interval::from_i64(-8);
+        let width = Interval::from_i64(8);
+
+        stack.store_type(&mut types, &neg, &width, false, &mut access);
+        stack.havoc_type(&mut types, &neg, &width, &mut access);
+        stack.havoc(&mut values, DataKind::Svalues, &neg, &width, &mut access);
+        stack.store(&mut values, DataKind::Svalues, &neg, &width, &mut access);
+
+        // The in-bounds numeric cell must be untouched by the out-of-bounds
+        // operations.
+        assert!(stack.all_num_width(&Interval::from_i64(0), &Interval::from_i64(8)));
+    }
+
+    /// The access at `[-8, 0)` covers no in-bounds byte, so the tracked cell at
+    /// offset 0 must survive intact. Building the weak-path range as the
+    /// inclusive `[-8] | ([-8] + [8])` = `[-8, 0]` would overlap the cell at
+    /// byte 0 and erase its value.
+    #[test]
+    fn negative_offset_kill_preserves_in_bounds_cell_value() {
+        let mut registry = VariableRegistry::new();
+        let mut access = StackAccess::new(&mut registry, false);
+        let mut stack = ArrayDomain::new(8);
+        let mut values = NumAbsDomain::top();
+        stack.initialize_numbers(0, 8);
+
+        let cell = stack
+            .store(
+                &mut values,
+                DataKind::Svalues,
+                &Interval::from_i64(0),
+                &Interval::from_i64(8),
+                &mut access,
+            )
+            .expect("in-bounds store must create a cell");
+        values.assign_i64(cell, 42, access.registry);
+
+        let neg = Interval::from_i64(-8);
+        let width = Interval::from_i64(8);
+        stack.havoc(&mut values, DataKind::Svalues, &neg, &width, &mut access);
+        stack.store(&mut values, DataKind::Svalues, &neg, &width, &mut access);
+
+        let reloaded = stack
+            .load(
+                &values,
+                DataKind::Svalues,
+                &Interval::from_i64(0),
+                8,
+                &mut access,
+            )
+            .expect("in-bounds cell must still be loadable");
+        assert_eq!(
+            values
+                .eval_interval(&reloaded, access.registry)
+                .singleton()
+                .copied(),
+            Some(Number::from(42))
+        );
+    }
+
+    /// A negative offset whose byte range can still reach into the stack must
+    /// forget the overlapping cell.
+    #[test]
+    fn negative_offset_kill_forgets_cells_on_possible_partial_overlap() {
+        // The write covers [-4, 4), so bytes [0, 4) of the tracked cell may change.
+        assert_partial_overlap_forgets(Interval::from_i64(-4), Interval::from_i64(8));
+        // Width 8 covers [-8, 0), but width 16 covers [-8, 8). The weak update
+        // must account for the overlapping alternative.
+        assert_partial_overlap_forgets(Interval::from_i64(-8), Interval::from_i64_pair(8, 16));
+    }
+
+    fn assert_partial_overlap_forgets(idx: Interval, width: Interval) {
+        let mut registry = VariableRegistry::new();
+        let mut access = StackAccess::new(&mut registry, false);
+        let mut stack = ArrayDomain::new(8);
+        let mut values = NumAbsDomain::top();
+        stack.initialize_numbers(0, 8);
+
+        let cell = stack
+            .store(
+                &mut values,
+                DataKind::Svalues,
+                &Interval::from_i64(0),
+                &Interval::from_i64(8),
+                &mut access,
+            )
+            .expect("in-bounds store must create a cell");
+        values.assign_i64(cell, 42, access.registry);
+
+        stack.havoc(&mut values, DataKind::Svalues, &idx, &width, &mut access);
+
+        let reloaded = stack
+            .load(
+                &values,
+                DataKind::Svalues,
+                &Interval::from_i64(0),
+                8,
+                &mut access,
+            )
+            .expect("in-bounds cell must still be loadable");
+        assert!(
+            !values
+                .eval_interval(&reloaded, access.registry)
+                .is_singleton(),
+            "cell value must be forgotten when the write may overlap it"
         );
     }
 }

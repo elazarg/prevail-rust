@@ -223,76 +223,76 @@ fn print_help() {
     let argv0 = std::env::args()
         .next()
         .unwrap_or_else(|| "check".to_string());
-    println!("PREVAIL is a new eBPF verifier based on abstract interpretation. ");
+    println!("PREVAIL is a new eBPF verifier based on abstract interpretation.");
     println!();
     println!();
     println!("{argv0} [OPTIONS] path [section] [function]");
     println!();
     println!();
     println!("POSITIONALS:");
-    println!("  path TEXT:FILE REQUIRED     Elf file to analyze ");
-    println!("  section SECTION             Section to analyze ");
-    println!("  function FUNCTION           Function to analyze ");
+    println!("  path TEXT:FILE REQUIRED     Elf file to analyze");
+    println!("  section SECTION             Section to analyze");
+    println!("  function FUNCTION           Function to analyze");
     println!();
     println!("OPTIONS:");
-    println!("  -h,     --help              Print this help message and exit ");
-    println!("          --version           Display program version information and exit ");
-    println!("          --section SECTION   Section to analyze ");
-    println!("          --function FUNCTION Function to analyze ");
-    println!("  -l                          List programs ");
-    println!("  -q,     --quiet             No stdout output, exit code only ");
-    println!("          --cfg               Print control-flow graph and exit ");
+    println!("  -h,     --help              Print this help message and exit");
+    println!("          --version           Display program version information and exit");
+    println!("          --section SECTION   Section to analyze");
+    println!("          --function FUNCTION Function to analyze");
+    println!("  -l                          List programs");
+    println!("  -q,     --quiet             No stdout output, exit code only");
+    println!("          --cfg               Print control-flow graph and exit");
     println!();
     println!("Features:");
     println!("          --termination, --no-verify-termination{{false}} ");
-    println!("                              Verify termination. Default: ignore ");
+    println!("                              Verify termination. Default: ignore");
     println!("          --allow-division-by-zero, --no-division-by-zero{{false}} ");
-    println!("                              Handling potential division by zero. Default: allow ");
+    println!("                              Handling potential division by zero. Default: allow");
     println!(
-        "  -s,     --strict            Apply additional checks that would cause runtime failures "
+        "  -s,     --strict            Apply additional checks that would cause runtime failures"
     );
     println!("          --stack-size INT:INT in [1 - 1048576] ");
     println!(
-        "                              Per-subprogram stack frame size in bytes (default: 512) "
+        "                              Per-subprogram stack frame size in bytes (default: 512)"
     );
     println!("          --max-call-stack-frames INT:INT in [1 - 128] ");
-    println!("                              Maximum number of nested function calls (default: 8) ");
+    println!("                              Maximum number of nested function calls (default: 8)");
     println!("          --max-packet-size INT:INT in [1 - 1073741824] ");
-    println!("                              Maximum packet size in bytes (default: 65535) ");
+    println!("                              Maximum packet size in bytes (default: 65535)");
     println!(
         "          --include_groups GROUPS:{{atomic32,atomic64,base32,base64,callx,divmul32,divmul64,packet}} "
     );
-    println!("                              Include conformance groups ");
+    println!("                              Include conformance groups");
     println!(
         "          --exclude_groups GROUPS:{{atomic32,atomic64,base32,base64,callx,divmul32,divmul64,packet}} "
     );
-    println!("                              Exclude conformance groups ");
+    println!("                              Exclude conformance groups");
     println!();
     println!("Verbosity:");
     println!("          --simplify, --no-simplify{{false}} ");
     println!(
-        "                              Simplify the display of the CFG by merging chains of instructions "
+        "                              Simplify the display of the CFG by merging chains of instructions"
     );
     println!(
-        "                              into a single basic block. Default: enabled (disabled with "
+        "                              into a single basic block. Default: enabled (disabled with"
     );
-    println!("                              --failure-slice) ");
-    println!("          --line-info         Print line information ");
-    println!("          --print-btf-types   Print BTF types ");
-    println!("  -v                          Print invariants and first failure ");
-    println!("  -f                          Print first failure ");
+    println!("                              --failure-slice)");
+    println!("          --line-info         Print line information");
+    println!("          --print-btf-types   Print BTF types");
+    println!("  -v                          Print invariants and first failure");
+    println!("  -f                          Print first failure");
     println!(
-        "          --failure-slice     Print minimal failure slices showing only instructions that "
+        "          --failure-slice     Print minimal failure slices showing only instructions that"
     );
-    println!("                              contributed to errors ");
+    println!("                              contributed to errors");
     println!("          --failure-slice-depth UINT ");
     println!(
-        "                              Maximum backward steps for failure slicing (default: 200) "
+        "                              Maximum backward steps for failure slicing (default: 200)"
     );
     println!();
     println!("CFG output:");
-    println!("          --asm FILE          Print disassembly to FILE ");
-    println!("          --dot FILE          Export control-flow graph to dot FILE ");
+    println!("          --asm FILE          Print disassembly to FILE");
+    println!("          --dot FILE          Export control-flow graph to dot FILE");
 }
 
 // ── Main ────────────────────────────────────────────────────────────────────

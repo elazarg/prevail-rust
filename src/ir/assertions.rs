@@ -626,6 +626,7 @@ fn assertions_bin(ins: &Bin) -> Vec<Assertion> {
                     Assertion::ValidDivisor(ValidDivisor {
                         reg: *src,
                         is_signed,
+                        is64: ins.is64,
                     }),
                 ]
             } else {

@@ -301,14 +301,14 @@ parity_test!(
     parity_linux_xdp_redirect_cpu_kern_proto,
     "linux/xdp_redirect_cpu_kern.o",
     "xdp_cpu_map3_proto_separate",
-    "s[4092...4095].svalue-r8.packet_offset<=2"
+    "s[4092...4095].uvalue-r8.packet_offset<=2"
 );
 
 parity_test!(
     parity_linux_xdp_redirect_cpu_kern_ddos,
     "linux/xdp_redirect_cpu_kern.o",
     "xdp_cpu_map4_ddos_filter_pktgen",
-    "packet_size-s[4092...4095].svalue<=65534"
+    "packet_size-s[4092...4095].uvalue<=65534"
 );
 
 parity_test!(
@@ -329,7 +329,7 @@ parity_test!(
     parity_prototype_xdp_redirect_cpu_kern_ddos,
     "prototype-kernel/xdp_redirect_cpu_kern.o",
     "xdp_cpu_map4_ddos_filter_pktgen",
-    "packet_size-s[4092...4095].svalue<=65534"
+    "packet_size-s[4092...4095].uvalue<=65534"
 );
 
 // ============================================================================
@@ -373,7 +373,7 @@ parity_test!(
     parity_cilium_bpf_lxc_2_12,
     "cilium/bpf_lxc.o",
     "2/12",
-    "s[4012...4015].svalue=[0"
+    "s[4012...4015].uvalue=[0"
 );
 
 parity_test!(
@@ -387,7 +387,7 @@ parity_test!(
     parity_cilium_bpf_netdev_2_7,
     "cilium/bpf_netdev.o",
     "2/7",
-    "s[4044...4047].svalue=0"
+    "s[4044...4047].uvalue=0"
 );
 
 parity_test!(

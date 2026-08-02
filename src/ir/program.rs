@@ -1232,27 +1232,7 @@ fn add_cfg_nodes(
             builder.add_child(caller_label, &label);
         }
 
-        // Add an edge from any other predecessors.
-        let prev_macro_nodes: Vec<Label> = builder
-            .prog
-            .cfg
-            .parents_of(&macro_label)
-            .iter()
-            .cloned()
-            .collect();
-        for prev_macro_label in &prev_macro_nodes {
-            let prev_label = Label::new_full(
-                prev_macro_label.from,
-                prev_macro_label.to,
-                stack_frame_prefix.clone(),
-            );
-            // Check if prev_label exists in the CFG.
-            if builder.prog.cfg.contains(&prev_label) {
-                builder.add_child(&prev_label, &label);
-            }
-        }
-
-        // Walk all successor nodes.
+        // Walk all successor nodes, enqueuing any not-yet-cloned macro block.
         let next_macro_nodes: Vec<Label> = builder
             .prog
             .cfg
@@ -1261,14 +1241,41 @@ fn add_cfg_nodes(
             .cloned()
             .collect();
         for next_macro_label in &next_macro_nodes {
-            if *next_macro_label == Label::exit() {
-                // This is an exit transition, so add edge to the block to execute
-                // upon returning from the macro.
-                builder.add_child(&label, &exit_to_label);
-            } else if !seen_labels.contains(next_macro_label) {
-                // Push any other unprocessed successor label onto the list to be processed.
+            if *next_macro_label != Label::exit() && !seen_labels.contains(next_macro_label) {
                 macro_labels.insert(next_macro_label.clone());
                 seen_labels.insert(next_macro_label.clone());
+            }
+        }
+    }
+
+    // Reconstruct the cloned subprogram's internal edges now that every macro
+    // block has been cloned. This must run as a second pass: reconstructing
+    // edges while cloning (from already-cloned predecessors) loses any
+    // back-edge, because a loop latch is cloned after its head, so the
+    // latch->head edge is never re-added. The clone would then be analyzed
+    // straight-line, without widening or loop-counter insertion, missing a
+    // pointer that walks out of bounds across iterations.
+    for macro_label in &seen_labels {
+        let label = Label::new_full(macro_label.from, macro_label.to, stack_frame_prefix.clone());
+        let next_macro_nodes: Vec<Label> = builder
+            .prog
+            .cfg
+            .children_of(macro_label)
+            .iter()
+            .cloned()
+            .collect();
+        for next_macro_label in &next_macro_nodes {
+            if *next_macro_label == Label::exit() {
+                // This is an exit transition, so add an edge to the block to
+                // execute upon returning from the macro.
+                builder.add_child(&label, &exit_to_label);
+            } else {
+                let next_label = Label::new_full(
+                    next_macro_label.from,
+                    next_macro_label.to,
+                    stack_frame_prefix.clone(),
+                );
+                builder.add_child(&label, &next_label);
             }
         }
     }

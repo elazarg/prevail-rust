@@ -940,4 +940,68 @@ mod tests {
              see INVESTIGATION.md)"
         );
     }
+
+    /// Meet must not spuriously report bottom on a satisfiable cross-SCC system.
+    ///
+    /// Vertices: 0 (special zero vertex), 1 = x, 2 = y, 3 = z.
+    /// - Left graph:  `x == y`      → edges 1→2 : 0 (y - x <= 0) and 2→1 : 0 (x - y <= 0)
+    /// - Right graph: `x - z <= -10` → edge 3→1 : -10
+    ///
+    /// The conjunction `{x == y, x <= z - 10}` is satisfiable, so the meet must
+    /// not be bottom. Processing SCCs out of topological order in
+    /// `select_potentials` lets a cross-SCC edge relaxation be misread as a
+    /// negative cycle, spuriously bottoming the meet.
+    #[test]
+    fn test_meet_does_not_spuriously_bottom_on_cross_scc_system() {
+        let mut lg = Graph::new();
+        lg.grow_to(4);
+        lg.add_edge(1, w(0), 2);
+        lg.add_edge(2, w(0), 1);
+
+        let mut rg = Graph::new();
+        rg.grow_to(4);
+        rg.add_edge(3, w(-10), 1);
+
+        let pot = vec![w(0); 4];
+
+        let left = SplitDBM::from_parts(lg, pot.clone(), VertSet::new());
+        let right = SplitDBM::from_parts(rg, pot.clone(), VertSet::new());
+
+        let mut aligned = AlignedPair {
+            left: &left,
+            right: &right,
+            left_perm: vec![0, 1, 2, 3],
+            right_perm: vec![0, 1, 2, 3],
+            initial_potentials: pot,
+        };
+
+        let result = SplitDBM::meet(&mut aligned).expect("meet must not be bottom");
+
+        // The meet must retain both operands' relations and derive the
+        // transitive bound.
+        let g = result.graph();
+        assert!(g.elem(1, 2));
+        assert_eq!(g.edge_val(1, 2), w(0)); // y - x <= 0
+        assert!(g.elem(2, 1));
+        assert_eq!(g.edge_val(2, 1), w(0)); // x - y <= 0
+        assert!(g.elem(3, 1));
+        assert_eq!(g.edge_val(3, 1), w(-10)); // x - z <= -10
+        assert!(g.elem(3, 2));
+        assert_eq!(g.edge_val(3, 2), w(-10)); // y - z <= -10 (derived from x == y)
+
+        // The stored potentials must be a globally valid model: for every edge
+        // s→d, potential[d] <= potential[s] + w(s,d). Downstream reduced-cost
+        // closure (chromatic Dijkstra) is only correct when this holds. An
+        // invalid potential model here is a latent soundness hole even when
+        // this meet's result is right.
+        for s in g.verts() {
+            for e in g.e_succs(s) {
+                assert!(
+                    result.potential_at(e.vert) <= result.potential_at(s) + e.val,
+                    "potential model violated on edge {s}→{}",
+                    e.vert
+                );
+            }
+        }
+    }
 }

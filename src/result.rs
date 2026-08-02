@@ -1115,6 +1115,7 @@ mod tests {
         let assertion = Assertion::ValidDivisor(ValidDivisor {
             reg: Reg { v: 3 },
             is_signed: false,
+            is64: true,
         });
         let regs = extract_assertion_registers(&assertion);
         assert!(regs.contains(&Reg { v: 3 }));

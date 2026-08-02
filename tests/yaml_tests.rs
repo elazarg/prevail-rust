@@ -22,7 +22,7 @@ use serde::Deserialize;
 
 use prevail::cfg::label::Label;
 use prevail::crab::ebpf_domain::DomainContext;
-use prevail::crab::string_constraints::StringInvariant;
+use prevail::crab::string_constraints::{BOTTOM_LINE, StringInvariant};
 use prevail::crab::var_registry::VariableRegistry;
 use prevail::elf_loader::UnmarshalError;
 use prevail::fwd_analyzer;
@@ -297,7 +297,7 @@ fn parse_options(raw: &[String]) -> EbpfVerifierOptions {
 
 fn parse_invariant(raw: &[String]) -> StringInvariant {
     let set: BTreeSet<String> = raw.iter().cloned().collect();
-    if set.len() == 1 && set.contains("_|_") {
+    if set.len() == 1 && set.contains(BOTTOM_LINE) {
         return StringInvariant::bottom();
     }
     StringInvariant::from_set(set)
@@ -572,16 +572,8 @@ fn run_test_case(test_case: &TestCase, platform: &TestPlatform) -> Option<Failur
         return None;
     }
 
-    let actual_set = if actual_post.is_bottom() {
-        BTreeSet::new()
-    } else {
-        actual_post.value().clone()
-    };
-    let expected_set = if test_case.expected_post.is_bottom() {
-        BTreeSet::new()
-    } else {
-        test_case.expected_post.value().clone()
-    };
+    let actual_set = actual_post.to_lines();
+    let expected_set = test_case.expected_post.to_lines();
 
     Some(Failure {
         unexpected_props: actual_set.difference(&expected_set).cloned().collect(),
@@ -645,13 +637,16 @@ macro_rules! yaml_test_suite {
                 for (name, f) in &failures {
                     msg.push_str(&format!("\n  --- {} ---\n", name));
                     if !f.unexpected_props.is_empty() {
-                        msg.push_str(&format!(
-                            "  Unexpected properties: {:?}\n",
-                            f.unexpected_props
-                        ));
+                        msg.push_str("  Unexpected properties:\n");
+                        for prop in &f.unexpected_props {
+                            msg.push_str(&format!("    {prop}\n"));
+                        }
                     }
                     if !f.unseen_props.is_empty() {
-                        msg.push_str(&format!("  Unseen properties: {:?}\n", f.unseen_props));
+                        msg.push_str("  Unseen properties:\n");
+                        for prop in &f.unseen_props {
+                            msg.push_str(&format!("    {prop}\n"));
+                        }
                     }
                     if !f.unexpected_msgs.is_empty() {
                         msg.push_str(&format!("  Unexpected messages: {:?}\n", f.unexpected_msgs));

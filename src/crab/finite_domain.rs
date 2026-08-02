@@ -503,13 +503,27 @@ impl FiniteDomain {
         left_svalue: Variable,
         left_uvalue: Variable,
         left_interval_positive: &Interval,
-        left_interval_negative: &Interval,
         right_svalue: &LinearExpression,
         right_uvalue: &LinearExpression,
-        right_interval: &Interval,
         reg: &VariableRegistry,
     ) -> Vec<LinearConstraint> {
-        if right_interval.is_included_in(&Interval::negative(32)) {
+        // The constraints below relate the 64-bit svalue/uvalue variables, so
+        // each branch has to establish that those variables already coincide
+        // with the 32-bit values being compared. Testing only the truncated
+        // 32-bit views is not enough: a register whose 64-bit value falls
+        // outside the 32-bit range has a 32-bit view that says nothing about
+        // how the 64-bit variables are ordered.
+        if self
+            .eval_interval(left_svalue, reg)
+            .is_included_in(&Interval::signed_int(32))
+            && self
+                .eval_interval_expr(right_svalue, reg)
+                .is_included_in(&Interval::negative(32))
+        {
+            // `left` is a sign-extended 32-bit value and `right` is negative, so
+            // `left < right` forces `left` negative too: both then fit in
+            // [INT_MIN, -1], aka [INT_MAX+1, UINT_MAX], where the signed and
+            // unsigned orderings agree.
             let cmp_u = strict_cmp(strict, true, left_uvalue.into(), right_uvalue.clone());
             let cmp_s = strict_cmp(strict, true, left_svalue.into(), right_svalue.clone());
             return vec![
@@ -518,9 +532,12 @@ impl FiniteDomain {
                 cmp_s,
             ];
         }
-        if (left_interval_negative | left_interval_positive)
+        if self
+            .eval_interval(left_svalue, reg)
             .is_included_in(&Interval::nonnegative(32))
-            && right_interval.is_included_in(&Interval::nonnegative(32))
+            && self
+                .eval_interval_expr(right_svalue, reg)
+                .is_included_in(&Interval::nonnegative(32))
         {
             let lpub = *left_interval_positive
                 .truncate_to_signed(32)
@@ -610,13 +627,23 @@ impl FiniteDomain {
         left_svalue: Variable,
         left_uvalue: Variable,
         left_interval_positive: &Interval,
-        left_interval_negative: &Interval,
         right_svalue: &LinearExpression,
         right_uvalue: &LinearExpression,
-        right_interval: &Interval,
         reg: &VariableRegistry,
     ) -> Vec<LinearConstraint> {
-        if right_interval.is_included_in(&Interval::nonnegative(32)) {
+        // As in `assume_signed_32bit_lt`, each branch must establish that the
+        // 64-bit svalue/uvalue variables coincide with the 32-bit values being
+        // compared before constraining them.
+        if self
+            .eval_interval(left_svalue, reg)
+            .is_included_in(&Interval::signed_int(32))
+            && self
+                .eval_interval_expr(right_svalue, reg)
+                .is_included_in(&Interval::nonnegative(32))
+        {
+            // `left` is a sign-extended 32-bit value and `right` is
+            // non-negative, so `left > right` forces `left` non-negative too: it
+            // then fits in [0, INT_MAX], where svalue and uvalue coincide.
             let lpub = *left_interval_positive
                 .truncate_to_signed(32)
                 .ub()
@@ -634,9 +661,16 @@ impl FiniteDomain {
                 leq(left_uvalue.into(), lpub.into()),
             ];
         }
-        if (left_interval_negative | left_interval_positive).is_included_in(&Interval::negative(32))
-            && right_interval.is_included_in(&Interval::negative(32))
+        if self
+            .eval_interval(left_svalue, reg)
+            .is_included_in(&Interval::negative(32))
+            && self
+                .eval_interval_expr(right_svalue, reg)
+                .is_included_in(&Interval::negative(32))
         {
+            // Both operands are sign-extended negative 32-bit values, so they
+            // fit in [INT_MIN, -1], aka [INT_MAX+1, UINT_MAX], and the signed
+            // and unsigned orderings agree.
             let cmp_u = strict_cmp(strict, false, left_uvalue.into(), right_uvalue.clone());
             let cmp_s = strict_cmp(strict, false, left_svalue.into(), right_svalue.clone());
             return vec![
@@ -742,10 +776,8 @@ impl FiniteDomain {
                 left_svalue,
                 left_uvalue,
                 &left_interval_positive,
-                &left_interval_negative,
                 right_svalue,
                 right_uvalue,
-                &right_interval,
                 reg,
             )
         } else {
@@ -754,10 +786,8 @@ impl FiniteDomain {
                 left_svalue,
                 left_uvalue,
                 &left_interval_positive,
-                &left_interval_negative,
                 right_svalue,
                 right_uvalue,
-                &right_interval,
                 reg,
             )
         }
@@ -940,14 +970,28 @@ impl FiniteDomain {
         strict: bool,
         left_svalue: Variable,
         left_uvalue: Variable,
-        _left_interval_low: &Interval,
-        _left_interval_high: &Interval,
         right_svalue: &LinearExpression,
         right_uvalue: &LinearExpression,
-        right_interval: &Interval,
         reg: &VariableRegistry,
     ) -> Vec<LinearConstraint> {
-        if right_interval.is_included_in(&Interval::unsigned_high(32)) {
+        // Constraining `left_svalue` requires both operands to be sign-extended
+        // negative 32-bit values; only then do the 64-bit svalues order the same
+        // way as the 32-bit values being compared. This mirrors the
+        // corresponding branch of `assume_unsigned_32bit_lt`. Operands that are
+        // merely in the high half of the 32-bit range fall through to the
+        // uvalue-only branch below, which stays sound because both values are
+        // then below 2^32.
+        if self
+            .eval_interval(left_svalue, reg)
+            .is_included_in(&Interval::signed_int(32))
+            && self
+                .eval_interval_expr(right_svalue, reg)
+                .is_included_in(&Interval::negative(32))
+        {
+            // `left` is a sign-extended 32-bit value and `right`'s 32-bit value
+            // is in the high half, so `left > right` (unsigned) forces `left`
+            // into the high half too. Both are then sign-extended negatives,
+            // where the signed and unsigned orderings agree.
             let cmp_u = strict_cmp(strict, false, left_uvalue.into(), right_uvalue.clone());
             let cmp_s = strict_cmp(strict, false, left_svalue.into(), right_svalue.clone());
             return vec![geq(left_uvalue.into(), 0i64.into()), cmp_u, cmp_s];
@@ -1075,11 +1119,8 @@ impl FiniteDomain {
                     strict,
                     left_svalue,
                     left_uvalue,
-                    &left_interval_low,
-                    &left_interval_high,
                     right_svalue,
                     right_uvalue,
-                    &right_interval,
                     reg,
                 )
             }

@@ -21,7 +21,7 @@ use crate::crab::interval::Interval;
 use crate::crab::type_domain::reg_type;
 use crate::crab::type_encoding::*;
 use crate::crab::type_to_number::{
-    TypeToNumDomain, get_type_offset_variable, reg_pack, type_to_kinds,
+    RegPack, TypeToNumDomain, get_type_offset_variable, reg_pack, type_to_kinds,
 };
 use crate::crab::var_registry::VariableRegistry;
 use crate::crab::zone_domain::ArithBinOp;
@@ -525,15 +525,61 @@ fn do_load_stack(
     }
 }
 
+/// Narrow the destination of a width-N load to the range implied by that width.
+///
+/// Zero-extending loads constrain both `svalue` and `uvalue`. Signed loads
+/// havoc `uvalue`: a negative sign-extended value's unsigned 64-bit view is not
+/// a single interval, so it cannot be represented. The caller must ensure the
+/// type is `T_NUM`.
+fn narrow_num_by_load_width(
+    state: &mut TypeToNumDomain,
+    target: &RegPack,
+    width: i32,
+    is_signed: bool,
+    registry: &mut VariableRegistry,
+) {
+    if is_signed && (width == 1 || width == 2 || width == 4) {
+        state
+            .values
+            .set(target.svalue, &Interval::signed_int(width * 8), registry);
+        state.values.havoc(target.uvalue);
+    } else if width == 1 || width == 2 {
+        let full = Interval::unsigned_int(width * 8);
+        state.values.set(target.svalue, &full, registry);
+        state.values.set(target.uvalue, &full, registry);
+    }
+}
+
 // ============================================================================
 // Context load
 // ============================================================================
+
+/// The byte range a load of `width` bytes reads, over every address the load
+/// may use.
+fn read_range(addr: &Interval, width: i32) -> Interval {
+    addr + &Interval::from_i64_pair(0, (width - 1) as i64)
+}
+
+/// Whether a load covering `bytes` can see any byte of the inline pointer slot
+/// at `field_offset`. A field the context descriptor does not define is
+/// negative.
+fn may_read_ptr_field(bytes: &Interval, field_offset: i32, offset_width: i32) -> bool {
+    if field_offset < 0 {
+        return false;
+    }
+    let field = Interval::from_i64_pair(
+        field_offset as i64,
+        (field_offset + offset_width - 1) as i64,
+    );
+    !bytes.meet(&field).is_bottom()
+}
 
 fn do_load_ctx(
     state: &mut TypeToNumDomain,
     target_reg: &Reg,
     addr_vague: &LinearExpression,
     width: i32,
+    is_signed: bool,
     ctx: &DomainContext,
     registry: &mut VariableRegistry,
 ) {
@@ -551,6 +597,7 @@ fn do_load_ctx(
     if desc.end < 0 {
         state.havoc_register(target_reg, registry);
         state.assign_type_encoding(target_reg, T_NUM, registry);
+        narrow_num_by_load_width(state, &target, width, is_signed, registry);
         return;
     }
 
@@ -558,21 +605,31 @@ fn do_load_ctx(
     let maybe_addr = interval.singleton();
     state.havoc_register(target_reg, registry);
 
-    let may_touch_ptr = interval.contains(&Number::from(desc.data as i64))
-        || interval.contains(&Number::from(desc.meta as i64))
-        || interval.contains(&Number::from(desc.end as i64));
+    // We use offsets for packet data, data_end, and meta during verification,
+    // but at runtime they will be 64-bit pointers. We can use the offset values
+    // for verification like we use map_fd's as a proxy for maps which at
+    // runtime are actually 64-bit memory pointers.
+    let offset_width = desc.end - desc.data;
+
+    // A load that reads even one byte of a pointer slot yields pointer bytes,
+    // so its result must not be typed as a number: a partial or straddling read
+    // would otherwise launder a real pointer into a scalar the program can leak.
+    let bytes = read_range(&interval, width);
+    let may_touch_ptr = may_read_ptr_field(&bytes, desc.data, offset_width)
+        || may_read_ptr_field(&bytes, desc.meta, offset_width)
+        || may_read_ptr_field(&bytes, desc.end, offset_width);
 
     if maybe_addr.is_none() {
         if may_touch_ptr {
             state.types.havoc_type_reg(target_reg, registry);
         } else {
             state.assign_type_encoding(target_reg, T_NUM, registry);
+            narrow_num_by_load_width(state, &target, width, is_signed, registry);
         }
         return;
     }
 
     let addr = maybe_addr.unwrap();
-    let offset_width = desc.end - desc.data;
 
     let data_num = Number::from(desc.data as i64);
     let end_num = Number::from(desc.end as i64);
@@ -607,7 +664,9 @@ fn do_load_ctx(
         if may_touch_ptr {
             state.types.havoc_type_reg(target_reg, registry);
         } else {
+            // Inline ctx field (not data/data_end/meta): a plain scalar.
             state.assign_type_encoding(target_reg, T_NUM, registry);
+            narrow_num_by_load_width(state, &target, width, is_signed, registry);
         }
         return;
     }
@@ -643,18 +702,7 @@ fn do_load_packet_or_shared(
     state.assign_type_encoding(target_reg, T_NUM, registry);
 
     // Small copies can be range-limited and useful for later arithmetic.
-    if is_signed && (width == 1 || width == 2 || width == 4) {
-        state
-            .values
-            .set(target.svalue, &Interval::signed_int(width * 8), registry);
-        state
-            .values
-            .set(target.uvalue, &Interval::unsigned_int(width * 8), registry);
-    } else if width == 1 || width == 2 {
-        let full = Interval::unsigned_int(width * 8);
-        state.values.set(target.svalue, &full, registry);
-        state.values.set(target.uvalue, &full, registry);
-    }
+    narrow_num_by_load_width(state, &target, width, is_signed, registry);
 }
 
 // ============================================================================
@@ -704,7 +752,7 @@ fn do_load(
                     let mr = reg_pack(&basereg, registry);
                     let addr = LinearExpression::from(mr.ctx_offset)
                         + LinearExpression::from(offset as i64);
-                    do_load_ctx(state, target_reg, &addr, width, ctx, registry);
+                    do_load_ctx(state, target_reg, &addr, width, b.is_signed, ctx, registry);
                 }
                 TypeEncoding::TStack => {
                     let mr = reg_pack(&basereg, registry);
@@ -2461,7 +2509,11 @@ fn transform_bin(
                 BinOp::MOVSX8 | BinOp::MOVSX16 | BinOp::MOVSX32 => {
                     let source_width = movsx_bits(bin.op);
                     // Keep relational information if operation is a no-op.
-                    if dst.svalue == src.svalue {
+                    // Only when the result is 64 bits wide: a 32-bit MOVSX must
+                    // still zero-extend its 32-bit result into the upper half,
+                    // and returning here would skip the truncation applied at
+                    // the end of this function.
+                    if bin.is64 && dst.svalue == src.svalue {
                         let dst_interval = dom.state.values.eval_interval_var(dst.svalue, registry);
                         let signed_range = Interval::signed_int(source_width);
                         if dst_interval.is_included_in(&signed_range) {

@@ -9,6 +9,10 @@
 use std::collections::BTreeSet;
 use std::fmt;
 
+/// The text form of a bottom (unreachable) invariant. Rendering and parsing
+/// must agree on this spelling: the YAML harness reads it back as bottom.
+pub const BOTTOM_LINE: &str = "_|_";
+
 /// An optional set of invariant strings.
 ///
 /// - `Some(set)` represents a concrete set of invariant strings.
@@ -67,14 +71,16 @@ impl StringInvariant {
         self.value().contains(item)
     }
 
-    /// Set difference: self - other.
-    pub fn difference(&self, other: &StringInvariant) -> StringInvariant {
-        match (&self.maybe_inv, &other.maybe_inv) {
-            (None, _) => StringInvariant::bottom(),
-            (_, None) => self.clone(),
-            (Some(a), Some(b)) => StringInvariant {
-                maybe_inv: Some(a.difference(b).cloned().collect()),
-            },
+    /// Render as the set of text lines used for display and diffing.
+    ///
+    /// Bottom is the single line `_|_`, exactly the form the YAML harness
+    /// parses back into a bottom invariant; a non-bottom invariant is its set
+    /// of constraint lines. This lets callers diff two invariants with an
+    /// ordinary set difference over lines, with no special-casing of bottom.
+    pub fn to_lines(&self) -> BTreeSet<String> {
+        match &self.maybe_inv {
+            None => BTreeSet::from([BOTTOM_LINE.to_string()]),
+            Some(inv) => inv.clone(),
         }
     }
 
@@ -107,7 +113,7 @@ impl std::ops::Add<&StringInvariant> for StringInvariant {
 impl fmt::Display for StringInvariant {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.maybe_inv {
-            None => write!(f, "_|_"),
+            None => write!(f, "{BOTTOM_LINE}"),
             Some(inv) => {
                 // Match C++ format: [entries] with grouping by variable base name.
                 // Items with the same base (prefix before first '.', '=', or '[')
@@ -165,16 +171,39 @@ mod tests {
         assert_eq!(result.value().len(), 2);
     }
 
+    /// `to_lines` renders an invariant as the set of text lines the YAML
+    /// harness diffs on. Bottom renders as the single line `_|_` — the exact
+    /// form the harness parses back into a bottom invariant — so the diff is
+    /// an ordinary set difference over lines with no special-casing of bottom.
     #[test]
-    fn test_difference() {
-        let mut a = BTreeSet::new();
-        a.insert("x=1".to_string());
-        a.insert("y=2".to_string());
-        let mut b = BTreeSet::new();
-        b.insert("y=2".to_string());
-        let result = StringInvariant::from_set(a).difference(&StringInvariant::from_set(b));
-        assert_eq!(result.value().len(), 1);
-        assert!(result.contains("x=1"));
+    fn test_to_lines_renders_bottom_as_bottom_line() {
+        assert_eq!(
+            StringInvariant::bottom().to_lines(),
+            BTreeSet::from([BOTTOM_LINE.to_string()])
+        );
+        assert_eq!(StringInvariant::top().to_lines(), BTreeSet::new());
+
+        let inv = BTreeSet::from(["r0.type=number".to_string()]);
+        assert_eq!(StringInvariant::from_set(inv.clone()).to_lines(), inv);
+    }
+
+    /// The harness diffs two invariants by line-set difference. A matching
+    /// `_|_`-vs-`_|_` comparison is empty in both directions, so it never
+    /// reports the same `_|_` under both "unexpected" and "unseen", while a
+    /// genuine mismatch still surfaces the differing lines.
+    #[test]
+    fn test_line_diff_handles_bottom_uniformly() {
+        let bottom = StringInvariant::bottom().to_lines();
+        let concrete =
+            StringInvariant::from_set(BTreeSet::from(["r0.type=number".to_string()])).to_lines();
+
+        let diff = |a: &BTreeSet<String>, b: &BTreeSet<String>| -> BTreeSet<String> {
+            a.difference(b).cloned().collect()
+        };
+
+        assert!(diff(&bottom, &bottom).is_empty());
+        assert_eq!(diff(&bottom, &concrete), bottom);
+        assert_eq!(diff(&concrete, &bottom), concrete);
     }
 
     #[test]

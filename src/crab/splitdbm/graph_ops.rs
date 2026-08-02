@@ -559,8 +559,16 @@ pub fn select_potentials(
     let mut sccs: Vec<Vec<VertId>> = Vec::new();
     compute_sccs(scratch, g, &mut sccs);
 
-    // Run Bellman-Ford on each SCC.
-    for scc in &sccs {
+    // Run Bellman-Ford on each SCC in topological order (sources before sinks).
+    // `compute_sccs` (Tarjan) emits SCCs in reverse topological order, so we
+    // iterate `sccs` backwards. Topological order is what keeps the final
+    // potentials a globally valid model: every cross-SCC edge then points from
+    // the SCC being processed to a later, not-yet-processed SCC, so relaxing it
+    // lowers that target's potential before its own SCC runs -- the later SCC
+    // is seeded with the tightened value and re-establishes internal
+    // consistency. Downstream reduced-cost closure (chromatic Dijkstra)
+    // requires this validity: p(d) <= p(s) + w for every edge s->d.
+    for scc in sccs.iter().rev() {
         // Use dual_queue as two queues: [0..sz) and [sz..2*sz)
         let mut q_start = 0usize;
         let mut q_end = 0usize;
@@ -617,6 +625,17 @@ pub fn select_potentials(
                     return false;
                 }
             }
+        }
+
+        // Clear this SCC's vertex marks before moving on (defense-in-depth). In
+        // topological order no cross-SCC edge points back into a finished SCC,
+        // so a finished vertex is never relaxed and its stale `BF_SCC` mark is
+        // never read. Should the SCC order ever regress, this reset still
+        // prevents a leftover cross-SCC relaxation from being requeued (via
+        // `vert_marks[d] == BF_SCC`) and misread by the feasibility check as a
+        // spurious negative cycle.
+        for &v in scc {
+            scratch.vert_marks[v as usize] = BF_NONE;
         }
     }
     true

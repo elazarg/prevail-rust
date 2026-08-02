@@ -678,6 +678,20 @@ fn reject_build_ringbuf_uninit() {
     ));
 }
 
+/// Two sequential `bpf_map_lookup_elem` calls where the second result is
+/// dereferenced on its null branch. Clang hoists the error return, so `r0`
+/// enters the second lookup carrying `svalue = 4294967295`. A stale svalue
+/// surviving the call makes `assume r0 == 0` bottom out, and the null branch
+/// with its dereference is never analyzed — the program then passes.
+#[test]
+fn reject_build_map_sequential_lookup_unsafe() {
+    assert!(!verify_section(
+        "ebpf-samples/build/map_sequential_lookup_unsafe.o",
+        ".text",
+        &default_opts()
+    ));
+}
+
 // ============================================================================
 // build/ samples: reject-if-strict (pass normally, reject in strict mode)
 // ============================================================================
