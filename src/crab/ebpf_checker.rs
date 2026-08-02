@@ -5,7 +5,7 @@
 //!
 //! Ported from `src/crab/ebpf_checker.cpp`.
 
-use crate::arith::linear_constraint::{LinearConstraint, expr_eq, geq, gt, leq, lt};
+use crate::arith::linear_constraint::{LinearConstraint, expr_eq, expr_neq, geq, gt, leq, lt};
 use crate::arith::linear_expression::LinearExpression;
 use crate::arith::number::Number;
 use crate::arith::variable::Variable;
@@ -487,11 +487,15 @@ impl<'a> EbpfChecker<'a> {
         if !self.ctx.runtime.allow_division_by_zero {
             let r = reg_pack(&s.reg, self.registry);
             if s.is64 {
+                // Entailment, not an interval test: it first projects the same
+                // interval, then falls back to asking whether the relational
+                // domain can satisfy `v == 0` at all. That proves non-zeroness
+                // in cases where the projection alone cannot.
                 let v = if s.is_signed { r.svalue } else { r.uvalue };
-                let intv = self.dom.state.values.eval_interval_var(v, self.registry);
-                if intv.contains(&Number::from(0)) {
-                    return self.throw_fail("Possible division by zero");
-                }
+                self.require_value(
+                    expr_neq(LinearExpression::from(v), LinearExpression::from(0i64)),
+                    "Possible division by zero",
+                )?;
             } else if self.may_be_zero_at_32_bits(&r) {
                 // A 32-bit division divides by the register's low half, the same
                 // view the transformer divides by. Testing all 64 bits instead
