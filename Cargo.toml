@@ -23,6 +23,7 @@ exclude = [
     "fuzz/",
     ".github/",
     "xtask/",
+    ".claude/",
 ]
 default-run = "prevail"
 
