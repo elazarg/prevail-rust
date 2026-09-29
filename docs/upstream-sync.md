@@ -32,8 +32,9 @@ cargo xtask upstream-diff
 Or manually:
 
 ```bash
+git -C tests/upstream fetch origin
 LAST=$(git rev-parse --short HEAD:tests/upstream)
-git -C tests/upstream log --oneline "$LAST"..HEAD
+git -C tests/upstream log --oneline "$LAST"..origin/main
 ```
 
 ### 2. Triage each commit
@@ -80,7 +81,7 @@ git commit -s -m "Update upstream submodule to <new-hash>"
 
 - Add/update file in upstream `tests/upstream/test-data/`.
 - Update this repo's submodule pointer to include that upstream commit.
-- Add a `#[test] fn yaml_<name>` entry in `tests/yaml_tests.rs` (follow existing pattern).
+- Add a `yaml_test_suite!(yaml_<name>);` entry in `tests/yaml_tests.rs`.
 - Run and verify.
 
 ### Modified YAML test files
@@ -110,7 +111,8 @@ git commit -s -m "Update upstream submodule to <new-hash>"
 
 ## Helper command
 
-`cargo xtask upstream-diff` shows upstream commits since the last sync,
+`cargo xtask upstream-diff` fetches upstream and shows the commits between the
+pinned submodule commit and `origin/main` (the target of `cargo xtask bump`),
 categorized by area (test data, source changes, overall file stats).
 Defaults to `tests/upstream`; pass a custom path as positional argument:
 

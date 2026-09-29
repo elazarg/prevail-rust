@@ -29,14 +29,15 @@ pub fn prepare(root: &Path) -> Result<ParityEnv> {
         .clone()
         .unwrap_or_else(|| paths::cpp_bin(root));
 
-    if explicit_rust_bin.is_none() && !rust_bin.exists() {
+    // Build even when a binary exists: cargo is a no-op when it is current, and
+    // comparing a stale binary reports drift the source no longer has.
+    if explicit_rust_bin.is_none() {
         let auto = std::env::var("AUTO_BUILD_RUST").unwrap_or_else(|_| "1".into());
         if auto == "1" {
-            eprintln!("info: Rust binary missing; running cargo build --release");
             let status = process::run_status(process::cargo(root).args(["build", "--release"]))?;
             if !status.success() || !rust_bin.exists() {
                 bail!(
-                    "Rust build completed but binary still missing at {}",
+                    "cargo build --release did not produce {}",
                     rust_bin.display()
                 );
             }

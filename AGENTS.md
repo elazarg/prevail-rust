@@ -11,44 +11,44 @@
 - **Language:** Pure Rust, ported from the [upstream C++ verifier](https://github.com/vbpf/prevail).
 - **Primary deliverables:**
   - `prevail` (binary): command-line verifier for eBPF object files.
-  - Test suite: `cargo test` regression suite (~1058 tests).
+  - Test suite: `cargo test` regression suite.
 - **Dependencies:** Managed via `Cargo.toml`.
 
 ## Repository map
 - `src/lib.rs` — Library entry point.
 - `src/main.rs` — CLI binary (`prevail`).
-- `src/arith/` — Number (SmallNumber: i64 inline, BigInt overflow), ExtendedNumber, SafeI64, Variable, LinearExpression, LinearConstraint.
+- `src/arith/` — Number (an `i128` newtype), ExtendedNumber, Variable, LinearExpression, LinearConstraint.
 - `src/btf/` — BTF type parsing.
 - `src/cfg/` — Label, Cfg, BasicBlock, WTO (Bourdoncle weak topological ordering).
 - `src/crab/` — Abstract domain stack: SplitDBM, zone/finite/type domains, array domain, eBPF domain/transformer/checker.
-- `src/elf_loader/` — ELF parser using the `object` crate.
-- `src/fwd_analyzer/` — Forward fixpoint iterator.
-- `src/ir/` — Instruction representation, parse, unmarshal, marshal, assertions, assembler.
+- `src/elf_loader.rs` — ELF parser using the `object` crate.
+- `src/fwd_analyzer.rs` — Forward fixpoint iterator.
+- `src/ir/` — Instruction representation, parse, unmarshal, assertions, assembler (and a test-only marshal).
 - `src/linux/` — LinuxPlatform, BPF helper prototypes, type descriptors.
 - `src/spec/` — VM ISA types, config, eBPF base types.
 - `tests/upstream/external/bpf_conformance/` — BPF conformance test data and assembler reference (used by `tests/conformance_tests.rs`).
 - `tests/upstream/ebpf-samples/` — Sample ELF objects for verification tests.
 - `tests/upstream/test-data/` and `tests/upstream/test-schema.yaml` — YAML-driven verification fixtures (shared with upstream).
-- `tests/` — Integration tests (conformance, ELF verify, YAML).
+- `tests/` — Integration tests: conformance, ELF verify, YAML, parity invariants, failure slices, CLI help, and focused regressions.
 - `xtask/` — Rust-native developer task runner (`cargo xtask --help`).
 - `docs/` — Architecture and workflow documentation.
 
 ## Build & test
 
 ```bash
-cargo build                # build library
-cargo build --release      # build CLI
-cargo test                 # run all ~1058 tests
-cargo clippy               # lint
-cargo fmt                  # format
+cargo build                # build the library and the CLI
+cargo build --release      # optimized build (used by parity and security tooling)
+cargo test                 # run every test binary
+cargo clippy --workspace --all-targets -- -D warnings   # lint, as the gates do
+cargo fmt --all            # format
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for testing infrastructure details,
 upstream parity testing, performance profiling, and upstream sync workflow.
 
 ## Coding standards
-- **Formatting:** Run `cargo fmt` before committing.
-- **Linting:** Run `cargo clippy` and address warnings.
+- **Formatting:** Run `cargo fmt --all` before committing.
+- **Linting:** Run `cargo clippy --workspace --all-targets -- -D warnings` and address warnings.
 - **Use Rust idioms:** Prefer enums over integer constants, `Result`/`Option` over sentinel values, traits over inheritance hierarchies, newtypes for domain-specific values.
 - **Review for soundness.** Before finishing a change, walk through the modified control-flow and data-flow manually to ensure no unsound analysis paths were introduced.
 

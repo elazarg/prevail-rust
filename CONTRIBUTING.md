@@ -57,7 +57,7 @@ cargo test --test conformance_tests
 `tests/upstream/ebpf-samples/`. Tests cover cilium, linux, suricata, falco, ovs, and more.
 
 ```bash
-cargo test elf_verify
+cargo test --test elf_verify_tests
 ```
 
 ### YAML tests
@@ -67,7 +67,7 @@ cargo test elf_verify
 `tests/upstream/test-schema.yaml`.
 
 ```bash
-cargo test yaml_
+cargo test --test yaml_tests
 ```
 
 ### Running subsets
@@ -119,7 +119,7 @@ Design rationale and trust model are documented in
 ### Adding tests
 
 - **YAML**: Add/update fixtures in upstream `tests/upstream/test-data/`,
-  then update the submodule pointer in this repo and add `#[test] fn yaml_foo`
+  then update the submodule pointer in this repo and add `yaml_test_suite!(yaml_foo);`
   in `tests/yaml_tests.rs`.
 - **Conformance**: Add `.data` file to
   `tests/upstream/external/bpf_conformance/tests/`, register in
@@ -139,18 +139,20 @@ Conformance and upstream parity are intentionally separate checks.
 
 ## Upstream Parity Testing
 
-Compare Rust verifier output against the upstream C++ verifier.
+Compare Rust verifier output against the upstream C++ verifier, live. Both
+binaries run on every case; nothing is cached between runs.
 
-- **`cargo xtask parity generate-baseline`** — run the C++ binary on all
-  samples and cache the output. Run once after building the C++ verifier.
-- **`cargo xtask parity compare`** — compare Rust output against the cached
-  C++ baseline. No C++ binary needed at comparison time.
-- **`cargo xtask parity compare-invariants`** — live side-by-side invariant comparison
-  (requires both Rust and C++ binaries).
+- **`cargo xtask parity compare`** — every program in the sample inventory,
+  under `-v` by default. `--filter`, `--sample`/`--seed` and `--verbosity`
+  narrow or vary the run.
+- **`cargo xtask parity one <elf> --section S --function F`** — a single program.
+- **`cargo xtask parity usage`** — the `--help` text of both binaries.
 
-Baseline cache location:
-- default: `target/xtask/upstream_parity/<upstream-hash>/`
-- override: set `PREVAIL_PARITY_BASELINE_DIR=/your/cache/root`
+Before comparing, the harness runs `cargo build --release` and builds the C++
+verifier in `tests/upstream/build` when the upstream commit has changed.
+Environment overrides: `RUST` / `CPP` (use these binaries instead),
+`AUTO_BUILD_RUST=0` / `AUTO_BUILD_CPP=0` (skip the builds), `UPSTREAM_REPO`,
+`UPSTREAM_BUILD_DIR`.
 
 ## Performance Profiling
 
@@ -205,6 +207,8 @@ Other targets and corpus directories:
 - `fuzz_end_to_end` -> `fuzz/corpus/fuzz_end_to_end`
 - `fuzz_btf_parse` -> `fuzz/corpus/fuzz_btf_parse`
 - `fuzz_unmarshal` -> `fuzz/corpus/fuzz_unmarshal` (empty by design; structured `Arbitrary` input)
+- `fuzz_program` -> `fuzz/corpus/fuzz_program` (empty by design; structured `Arbitrary` input)
+- `fuzz_elf_build` -> `fuzz/corpus/fuzz_elf_build` (empty by design; structured `Arbitrary` input)
 
 ## Upstream Sync
 

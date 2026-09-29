@@ -13,13 +13,16 @@ available [here](https://github.com/vbpf/prevail/tree/d29fd26345c3126bf166cf1c45
 prevail tests/upstream/ebpf-samples/cilium/bpf_lxc.o 2/1
 ```
 
-The output is three comma-separated values:
+The verifier prints `PASS: <section>/<function>` and exits 0, or prints
+`FAIL: <section>/<function>` followed by the first error and exits 1. When the
+file holds several programs, name one by section and function, or list them
+with `-l`.
 
-* 1 or 0, for "pass" and "fail" respectively
-* The runtime of the fixpoint algorithm (in seconds)
-* The peak memory consumption, in kb, as reflected by the resident-set size (rss)
-
-Additional flags: `--asm <file>` (disassembly), `--dot <file>` (CFG dot graph), `-v` (verbose invariants), `-f` (print first failure).
+Common flags: `-v` (invariants at every instruction; on failure, the failure
+slices), `--failure-slice` (causal trace of the first failure), `-f` (print the
+first failure), `--asm <file>` (disassembly), `--dot <file>` (CFG dot graph),
+`-q` (exit code only). `prevail --help` lists them all; the help text is
+identical to the upstream C++ verifier's.
 
 ## Goals
 

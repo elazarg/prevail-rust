@@ -72,7 +72,7 @@ A fuzzer only finds what an *oracle* can flag. We have two:
 ```bash
 # 0. Build both verifiers once (release Rust + C++ upstream).
 cargo build --release
-cargo xtask run-upstream -- --help    # triggers the C++ auto-build if needed
+cargo xtask parity usage              # builds the C++ verifier if needed
 
 # 1. Crash/robustness fuzzing — run every libfuzzer target for a budget.
 security/run_fuzz.sh 300                # 300s per target, triage to findings/

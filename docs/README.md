@@ -11,6 +11,7 @@ files instead, so updates happen in one canonical place.
 
 - [upstream-sync.md](upstream-sync.md): How to sync Rust behavior with upstream C++.
 - [DIFFERENTIAL_DEBUGGING.md](DIFFERENTIAL_DEBUGGING.md): Parity bug-hunting workflow.
+- [test-certification.md](test-certification.md): Test suites, certifications, and the pre-push gate.
 
 ## Upstream docs (canonical)
 
