@@ -37,28 +37,9 @@ fn unwrap_type(
             // Cycle detected — return current type_id
             return Ok(type_id);
         }
-        match btf_data.get_kind_index(type_id)? {
-            BtfKindIndex::Typedef => {
-                if let BtfKind::Typedef { type_id: inner, .. } = btf_data.get_kind(type_id)? {
-                    type_id = *inner;
-                }
-            }
-            BtfKindIndex::Const => {
-                if let BtfKind::Const { type_id: inner } = btf_data.get_kind(type_id)? {
-                    type_id = *inner;
-                }
-            }
-            BtfKindIndex::Volatile => {
-                if let BtfKind::Volatile { type_id: inner } = btf_data.get_kind(type_id)? {
-                    type_id = *inner;
-                }
-            }
-            BtfKindIndex::Restrict => {
-                if let BtfKind::Restrict { type_id: inner } = btf_data.get_kind(type_id)? {
-                    type_id = *inner;
-                }
-            }
-            _ => return Ok(type_id),
+        match btf_data.get_kind(type_id)?.modifier_target(false) {
+            Some(inner) => type_id = inner,
+            None => return Ok(type_id),
         }
     }
 }

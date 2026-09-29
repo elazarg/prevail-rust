@@ -106,7 +106,7 @@ pub struct EquivalenceKey {
 
 /// BTF line information for a single instruction.
 /// Mirrors C++ `btf_line_info_t`.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BtfLineInfo {
     pub file_name: String,
     pub source_line: String,
@@ -155,4 +155,6 @@ pub struct RawProgram {
     pub function_name: String,
     pub prog: Vec<EbpfInst>,
     pub info: ProgramInfo,
+    /// Number of CO-RE relocation records applied to this program.
+    pub core_relocation_count: usize,
 }

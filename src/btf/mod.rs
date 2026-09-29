@@ -246,6 +246,22 @@ pub enum BtfKindIndex {
 }
 
 impl BtfKindIndex {
+    /// Whether a type of this kind must carry a name.
+    pub fn requires_name(self) -> bool {
+        matches!(
+            self,
+            Self::Int
+                | Self::Fwd
+                | Self::Typedef
+                | Self::Function
+                | Self::Var
+                | Self::DataSection
+                | Self::Float
+                | Self::DeclTag
+                | Self::TypeTag
+        )
+    }
+
     pub fn from_raw(raw: u32) -> Option<Self> {
         match raw {
             0 => Some(Self::Void),
@@ -445,6 +461,19 @@ impl BtfKind {
             BtfKind::DeclTag { .. } => BtfKindIndex::DeclTag,
             BtfKind::TypeTag { .. } => BtfKindIndex::TypeTag,
             BtfKind::Enum64 { .. } => BtfKindIndex::Enum64,
+        }
+    }
+
+    /// The type a typedef or cv-qualifier (const, volatile, restrict) wraps,
+    /// and with `include_type_tag` also a type tag's; `None` for other kinds.
+    pub fn modifier_target(&self, include_type_tag: bool) -> Option<BtfTypeId> {
+        match self {
+            BtfKind::Typedef { type_id, .. }
+            | BtfKind::Const { type_id }
+            | BtfKind::Volatile { type_id }
+            | BtfKind::Restrict { type_id } => Some(*type_id),
+            BtfKind::TypeTag { type_id, .. } if include_type_tag => Some(*type_id),
+            _ => None,
         }
     }
 }

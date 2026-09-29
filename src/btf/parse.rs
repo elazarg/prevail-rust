@@ -115,6 +115,15 @@ fn read_struct<T: zerocopy::FromBytes + Copy>(
     Ok(val)
 }
 
+fn missing_name() -> UnmarshalError {
+    UnmarshalError("Invalid .BTF section - missing name".into())
+}
+
+/// The name of a type whose kind requires one (see [`BtfKindIndex::requires_name`]).
+fn required_name(name: &Option<String>) -> Result<String, UnmarshalError> {
+    name.clone().ok_or_else(missing_name)
+}
+
 /// Read a null-terminated string from `data` at `offset`, within `[min, max)`.
 fn read_string(
     data: &[u8],
@@ -280,15 +289,12 @@ pub fn parse_types(
 
         let name = if raw.name_off != 0 {
             Some(find_string(&string_table, raw.name_off as usize)?)
+        } else if BtfKindIndex::from_raw(btf_type_info_kind(raw.info))
+            .is_some_and(BtfKindIndex::requires_name)
+        {
+            return Err(missing_name());
         } else {
-            let kind_raw = btf_type_info_kind(raw.info);
-            // Types that require a name
-            match kind_raw {
-                1 | 7 | 8 | 12 | 14 | 15 | 16 | 17 | 18 => {
-                    return Err(UnmarshalError("Invalid .BTF section - missing name".into()));
-                }
-                _ => None,
-            }
+            None
         };
 
         let kind_raw = btf_type_info_kind(raw.info);
@@ -312,7 +318,7 @@ pub fn parse_types(
                 }
                 let encoding = btf_int_encoding(int_data);
                 BtfKind::Int {
-                    name: name.clone().unwrap(),
+                    name: required_name(&name)?,
                     size_in_bytes: raw.size_or_type,
                     offset_from_start_in_bits: btf_int_offset(int_data),
                     field_width_in_bits: btf_int_bits(int_data),
@@ -399,12 +405,12 @@ pub fn parse_types(
             }
 
             BtfKindIndex::Fwd => BtfKind::Fwd {
-                name: name.clone().unwrap(),
+                name: required_name(&name)?,
                 is_struct: btf_type_info_kind_flag(raw.info),
             },
 
             BtfKindIndex::Typedef => BtfKind::Typedef {
-                name: name.clone().unwrap(),
+                name: required_name(&name)?,
                 type_id: raw.size_or_type,
             },
 
@@ -421,7 +427,7 @@ pub fn parse_types(
             },
 
             BtfKindIndex::Function => BtfKind::Function {
-                name: name.clone().unwrap(),
+                name: required_name(&name)?,
                 type_id: raw.size_or_type,
                 linkage: BtfLinkage::from_raw(btf_type_info_vlen(raw.info)),
             },
@@ -456,7 +462,7 @@ pub fn parse_types(
                     swap_raw_var(&mut v);
                 }
                 BtfKind::Var {
-                    name: name.clone().unwrap(),
+                    name: required_name(&name)?,
                     type_id: raw.size_or_type,
                     linkage: BtfLinkage::from_raw(v.linkage),
                 }
@@ -478,14 +484,14 @@ pub fn parse_types(
                     });
                 }
                 BtfKind::DataSection {
-                    name: name.clone().unwrap(),
+                    name: required_name(&name)?,
                     members,
                     size: raw.size_or_type,
                 }
             }
 
             BtfKindIndex::Float => BtfKind::Float {
-                name: name.clone().unwrap(),
+                name: required_name(&name)?,
                 size_in_bytes: raw.size_or_type,
             },
 
@@ -495,14 +501,14 @@ pub fn parse_types(
                     swap_raw_decl_tag(&mut tag);
                 }
                 BtfKind::DeclTag {
-                    name: name.clone().unwrap(),
+                    name: required_name(&name)?,
                     type_id: raw.size_or_type,
                     component_index: tag.component_idx,
                 }
             }
 
             BtfKindIndex::TypeTag => BtfKind::TypeTag {
-                name: name.clone().unwrap(),
+                name: required_name(&name)?,
                 type_id: raw.size_or_type,
             },
 
@@ -634,7 +640,10 @@ pub fn parse_line_information(
             if swap_endian_ext {
                 swap_line_info(&mut li);
             }
-            // Skip extra bytes if record_size > sizeof(BpfLineInfo)
+            // Skip extra bytes if record_size > sizeof(BpfLineInfo). This deliberately
+            // diverges from upstream libbtf, which reads records back to back and so
+            // misparses any record larger than bpf_line_info; the two agree whenever
+            // record_size == sizeof(BpfLineInfo), which is what toolchains emit.
             let extra = record_size as usize - mem::size_of::<BpfLineInfo>();
             if extra > 0 {
                 if pos + extra > line_info_end {

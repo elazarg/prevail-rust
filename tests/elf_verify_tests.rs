@@ -54,7 +54,6 @@ fn verify_section(path: &str, section: &str, opts: &EbpfVerifierOptions) -> bool
     let ctx = DomainContext {
         program_info: &raw_prog.info,
         program: &program,
-        runtime: &opts.runtime,
         options: opts,
         platform: &platform,
     };
@@ -101,7 +100,6 @@ fn verify_program(
             let ctx = DomainContext {
                 program_info: &raw_prog.info,
                 program: &program,
-                runtime: &opts.runtime,
                 options: opts,
                 platform: &platform,
             };
@@ -149,7 +147,6 @@ fn try_verify_section(path: &str, section: &str, opts: &EbpfVerifierOptions) -> 
     let ctx = DomainContext {
         program_info: &raw_prog.info,
         program: &program,
-        runtime: &opts.runtime,
         options: opts,
         platform: &platform,
     };
@@ -202,7 +199,6 @@ fn try_verify_program(
             let ctx = DomainContext {
                 program_info: &raw_prog.info,
                 program: &program,
-                runtime: &opts.runtime,
                 options: opts,
                 platform: &platform,
             };
@@ -2797,7 +2793,6 @@ fn fail_cilium_examples_uretprobe_bpf_x86_bpfel() {
     let ctx = DomainContext {
         program_info: &raw_prog.info,
         program: &program,
-        runtime: &opts.runtime,
         options: &opts,
         platform: &platform2,
     };
@@ -5460,6 +5455,27 @@ fn multithreading_verify_two_sections() {
         thread::spawn(|| verify_section("ebpf-samples/build/stackok.o", ".text", &default_opts()));
     assert!(h1.join().unwrap(), "byteswap should pass");
     assert!(h2.join().unwrap(), "stackok should pass");
+}
+
+// ============================================================================
+// ELF loader CO-RE relocation tests
+// ============================================================================
+
+/// CO-RE relocations are parsed from the `.BTF.ext` core_relo subsection and
+/// applied to the programs whose instructions they name.
+#[test]
+fn elf_loader_applies_core_relocations() {
+    for (file, section) in [
+        ("tcprtt_bpf_bpfel.o", "fentry/tcp_close"),
+        ("tcprtt_sockops_bpf_bpfel.o", "sockops"),
+    ] {
+        let mut platform = LinuxPlatform::new();
+        let path = path_config::upstream_ebpf_sample_path(&format!("cilium-examples/{file}"));
+        let progs = elf_loader::read_elf_file(&path, section, "", &default_opts(), &mut platform)
+            .expect("ELF load should succeed");
+        assert_eq!(progs.len(), 1, "{file} {section}");
+        assert!(progs[0].core_relocation_count > 0, "{file} {section}");
+    }
 }
 
 // ============================================================================

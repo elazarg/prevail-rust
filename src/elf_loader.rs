@@ -16,15 +16,16 @@ use object::read::elf::{
 use object::{LittleEndian, Object, ObjectSection};
 
 use crate::btf::type_data::BtfTypeData;
+use crate::btf::{BTF_HEADER_MAGIC, BTF_HEADER_VERSION, BtfExtInfoSec};
 use crate::platform::EbpfPlatform;
 use crate::spec::config::EbpfVerifierOptions;
 use crate::spec::type_descriptors::{BtfLineInfo, EbpfMapDescriptor, ProgramInfo, RawProgram};
 use crate::spec::vm_isa::{
     EbpfInst, INST_ALU_OP_MOV, INST_CALL_BTF_HELPER, INST_CALL_LOCAL, INST_CALL_STATIC_HELPER,
     INST_CLS_ALU, INST_CLS_ALU64, INST_CLS_LD, INST_CLS_LDX, INST_CLS_MASK, INST_LD_MODE_MAP_FD,
-    INST_LD_MODE_MAP_VALUE, INST_MODE_MEM, INST_MODE_MEMSX, INST_OP_CALL, INST_OP_LDDW_IMM,
-    INST_SIZE_B, INST_SIZE_DW, INST_SIZE_H, INST_SIZE_MASK, INST_SIZE_W, INST_SRC_IMM,
-    INST_SRC_REG,
+    INST_LD_MODE_MAP_VALUE, INST_MODE_MASK, INST_MODE_MEM, INST_MODE_MEMSX, INST_OP_CALL,
+    INST_OP_LDDW_IMM, INST_SIZE_B, INST_SIZE_DW, INST_SIZE_H, INST_SIZE_MASK, INST_SIZE_W,
+    INST_SRC_IMM, INST_SRC_REG,
 };
 
 // ── Convenience aliases ─────────────────────────────────────────────
@@ -87,33 +88,17 @@ fn bytes_to_instructions(data: &[u8]) -> Result<Vec<EbpfInst>, UnmarshalError> {
     Ok(instructions)
 }
 
-// ── Map resolution strategy ─────────────────────────────────────────
-
+/// Map or global-variable section name to its index in `map_descriptors`.
 type MapOffsets = BTreeMap<String, usize>;
-
-enum MapResolution {
-    /// Name-based lookup from map/section name to descriptor index.
-    Named(MapOffsets),
-}
 
 // ── Global data extracted from ELF ──────────────────────────────────
 
+#[derive(Default)]
 struct ElfGlobalData {
     map_section_indices: BTreeSet<usize>,
     map_descriptors: Vec<EbpfMapDescriptor>,
-    map_resolution: MapResolution,
+    map_offsets: MapOffsets,
     variable_section_indices: BTreeSet<usize>,
-}
-
-impl Default for ElfGlobalData {
-    fn default() -> Self {
-        Self {
-            map_section_indices: BTreeSet::new(),
-            map_descriptors: Vec::new(),
-            map_resolution: MapResolution::Named(BTreeMap::new()),
-            variable_section_indices: BTreeSet::new(),
-        }
-    }
 }
 
 // ── Symbol details ──────────────────────────────────────────────────
@@ -201,8 +186,8 @@ struct FunctionRelocation {
 
 // ── LDDW validation ────────────────────────────────────────────────
 
-const BPF_LDDW: u8 = 0x18;
-const BPF_LDDW_HI: u8 = 0x00;
+/// Opcode of the second slot of a two-slot LDDW instruction.
+const LDDW_CONTINUATION_OPCODE: u8 = 0x00;
 
 fn validate_lddw_pair(
     instructions: &[EbpfInst],
@@ -214,14 +199,14 @@ fn validate_lddw_pair(
             "Invalid relocation: {context} reference at instruction boundary"
         )));
     }
-    if instructions[location].opcode != BPF_LDDW {
+    if instructions[location].opcode != INST_OP_LDDW_IMM {
         return Err(UnmarshalError(format!(
             "Invalid relocation: expected LDDW first slot (opcode 0x18) for {context}, \
              found opcode {:#04x}",
             instructions[location].opcode
         )));
     }
-    if instructions[location + 1].opcode != BPF_LDDW_HI {
+    if instructions[location + 1].opcode != LDDW_CONTINUATION_OPCODE {
         return Err(UnmarshalError(format!(
             "Invalid relocation: expected LDDW second slot (opcode 0x00) for {context}, \
              found opcode {:#04x}",
@@ -242,13 +227,7 @@ fn resolve_known_linux_extern_symbol(symbol_name: &str) -> Option<u64> {
         "CONFIG_HZ" => Some(250),
         "CONFIG_BPF_SYSCALL" => Some(1),
         "CONFIG_DEFAULT_HOSTNAME" => Some(b'l' as u64), // first byte of "localhost"
-        _ => {
-            if symbol_name.starts_with("__config_") {
-                Some(0)
-            } else {
-                None
-            }
-        }
+        _ => None,
     }
 }
 
@@ -282,30 +261,23 @@ fn rewrite_extern_constant_load(
     instructions: &mut [EbpfInst],
     location: usize,
     value: u64,
-) -> bool {
+) -> Result<bool, UnmarshalError> {
     if instructions.len() <= location + 2 {
-        return false;
+        return Ok(false);
     }
-
-    // Verify LDDW pair
-    if instructions[location].opcode != INST_OP_LDDW_IMM {
-        return false;
-    }
-    if instructions[location + 1].opcode != 0x00 {
-        return false;
-    }
+    validate_lddw_pair(instructions, location, "external symbol")?;
 
     let load_inst = &instructions[location + 2];
     if (load_inst.opcode & INST_CLS_MASK) != INST_CLS_LDX {
-        return false;
+        return Ok(false);
     }
-    let mode = load_inst.opcode & 0xe0; // INST_MODE_MASK
+    let mode = load_inst.opcode & INST_MODE_MASK;
     if mode != INST_MODE_MEM && mode != INST_MODE_MEMSX {
-        return false;
+        return Ok(false);
     }
     let lddw_dst = instructions[location].dst_raw();
     if load_inst.src_raw() != lddw_dst || load_inst.offset != 0 {
-        return false;
+        return Ok(false);
     }
 
     let width = opcode_to_width(load_inst.opcode);
@@ -315,7 +287,7 @@ fn rewrite_extern_constant_load(
         2 => narrowed_value &= 0xffff,
         4 => narrowed_value &= 0xffff_ffff,
         8 => {}
-        _ => return false,
+        _ => return Ok(false),
     }
     if mode == INST_MODE_MEMSX && width < 8 {
         let shift = 64 - u32::from(width) * 8;
@@ -328,7 +300,7 @@ fn rewrite_extern_constant_load(
     // LDDW+LDX instruction sequence.
     let truncated = narrowed_value as i32;
     if truncated as i64 as u64 != narrowed_value {
-        return false;
+        return Ok(false);
     }
 
     // Use mov-imm to materialize the resolved constant in the destination register of
@@ -348,24 +320,24 @@ fn rewrite_extern_constant_load(
     let hi_dst = instructions[location + 1].dst_raw();
     instructions[location] = make_mov_reg_nop(lo_dst);
     instructions[location + 1] = make_mov_reg_nop(hi_dst);
-    true
+    Ok(true)
 }
 
 /// Rewrite an unknown extern symbol's LDDW to load zero.
-fn rewrite_extern_address_load_to_zero(instructions: &mut [EbpfInst], location: usize) -> bool {
+fn rewrite_extern_address_load_to_zero(
+    instructions: &mut [EbpfInst],
+    location: usize,
+) -> Result<bool, UnmarshalError> {
     if location + 1 >= instructions.len() {
-        return false;
+        return Ok(false);
     }
     if instructions[location].opcode != INST_OP_LDDW_IMM {
-        return false;
+        return Ok(false);
     }
-    // Validate the second slot is present and is 0x00 opcode
-    if instructions[location + 1].opcode != 0x00 {
-        return false;
-    }
+    validate_lddw_pair(instructions, location, "external symbol")?;
     instructions[location].imm = 0;
     instructions[location + 1].imm = 0;
-    true
+    Ok(true)
 }
 
 /// Rewrite a CALL src=INST_CALL_LOCAL instruction to a CALL src=INST_CALL_BTF_HELPER
@@ -435,7 +407,7 @@ fn create_global_variable_maps(elf: &ElfFile<'_, Elf64>) -> ElfGlobalData {
     let mut global = ElfGlobalData::default();
     let mut offsets = MapOffsets::new();
     add_global_variable_maps(elf, &mut global, &mut offsets);
-    global.map_resolution = MapResolution::Named(offsets);
+    global.map_offsets = offsets;
     global
 }
 
@@ -584,7 +556,7 @@ fn parse_map_sections(
             .map(|s| s.size() as usize)
             .unwrap_or(0);
 
-        if record_size > 0 && (!sym_value.is_multiple_of(record_size) || sym_value >= sec_size) {
+        if !sym_value.is_multiple_of(record_size) || sym_value >= sec_size {
             return Err(UnmarshalError(format!(
                 "Legacy map symbol '{}' has invalid offset: not aligned to \
                  {record_size}-byte boundary or out of section bounds",
@@ -607,7 +579,7 @@ fn parse_map_sections(
     }
 
     add_global_variable_maps(elf, &mut global, &mut map_offsets);
-    global.map_resolution = MapResolution::Named(map_offsets);
+    global.map_offsets = map_offsets;
     Ok(global)
 }
 
@@ -694,7 +666,7 @@ fn parse_btf_section(elf: &ElfFile<'_, Elf64>) -> Result<ElfGlobalData, Unmarsha
     // Add global variable maps
     add_global_variable_maps(elf, &mut global, &mut map_offsets);
 
-    global.map_resolution = MapResolution::Named(map_offsets);
+    global.map_offsets = map_offsets;
     Ok(global)
 }
 
@@ -916,6 +888,8 @@ struct ProgramReader<'a> {
 
     raw_programs: Vec<RawProgram>,
     function_relocations: Vec<FunctionRelocation>,
+    /// `(prog_index, source_offset)` of every entry in `function_relocations`.
+    function_relocation_index: BTreeSet<(usize, usize)>,
     unresolved_symbol_errors: Vec<UnresolvedSymbolError>,
     builtin_offsets_for_current_program: BTreeSet<usize>,
     ksym_function_resolution_cache: BTreeMap<String, Option<crate::platform::KsymBtfId>>,
@@ -947,6 +921,7 @@ impl<'a> ProgramReader<'a> {
             global,
             raw_programs: Vec::new(),
             function_relocations: Vec::new(),
+            function_relocation_index: BTreeSet::new(),
             unresolved_symbol_errors: Vec::new(),
             builtin_offsets_for_current_program: BTreeSet::new(),
             ksym_function_resolution_cache: BTreeMap::new(),
@@ -1008,24 +983,16 @@ impl<'a> ProgramReader<'a> {
 
     // ── Map relocation helpers ──────────────────────────────────────
 
-    fn relocate_map(&self, name: &str, _sym_index: usize) -> Result<i32, UnmarshalError> {
-        let MapResolution::Named(offsets) = &self.global.map_resolution;
-        let val = *offsets
+    /// The fd of the map descriptor recorded under `name`: a map symbol or a
+    /// global-variable section. Covers upstream's `relocate_map` and
+    /// `relocate_global_variable`, which look names up the same way (upstream's
+    /// record-size alternative is never selected).
+    fn relocate_named_map(&self, name: &str) -> Result<i32, UnmarshalError> {
+        let val = *self
+            .global
+            .map_offsets
             .get(name)
             .ok_or_else(|| UnmarshalError(format!("Map descriptor not found: {name}")))?;
-        if val >= self.global.map_descriptors.len() {
-            return Err(UnmarshalError(format!(
-                "Bad reloc value ({val}). Make sure to compile with -O2."
-            )));
-        }
-        Ok(self.global.map_descriptors[val].original_fd)
-    }
-
-    fn relocate_global_variable(&self, section_name: &str) -> Result<i32, UnmarshalError> {
-        let MapResolution::Named(offsets) = &self.global.map_resolution;
-        let val = *offsets
-            .get(section_name)
-            .ok_or_else(|| UnmarshalError(format!("Map descriptor not found: {section_name}")))?;
         if val >= self.global.map_descriptors.len() {
             return Err(UnmarshalError(format!(
                 "Bad reloc value ({val}). Make sure to compile with -O2."
@@ -1087,11 +1054,11 @@ impl<'a> ProgramReader<'a> {
         // from LDDW+LDX to MOV-immediate.  Unknown extern addresses are zeroed.
         if symbol_section_index == elf::SHN_UNDEF as usize {
             if let Some(value) = resolve_known_linux_extern_symbol(symbol_name)
-                && rewrite_extern_constant_load(instructions, location, value)
+                && rewrite_extern_constant_load(instructions, location, value)?
             {
                 return Ok(true);
             }
-            if rewrite_extern_address_load_to_zero(instructions, location) {
+            if rewrite_extern_address_load_to_zero(instructions, location)? {
                 return Ok(true);
             }
         }
@@ -1158,7 +1125,7 @@ impl<'a> ProgramReader<'a> {
                 && !self.has_function_relocation(self.raw_programs.len(), location)
             {
                 let prog_index = self.raw_programs.len();
-                self.function_relocations.push(FunctionRelocation {
+                self.record_function_relocation(FunctionRelocation {
                     prog_index,
                     source_offset: location,
                     relocation_entry_index: sym_index,
@@ -1183,7 +1150,7 @@ impl<'a> ProgramReader<'a> {
                 instructions[location].set_src(INST_LD_MODE_MAP_VALUE);
 
                 let sec_name = self.section_name_by_index(symbol_section_index)?;
-                instructions[location].imm = self.relocate_global_variable(&sec_name)?;
+                instructions[location].imm = self.relocate_named_map(&sec_name)?;
                 return Ok(true);
             }
             return Ok(true);
@@ -1200,7 +1167,7 @@ impl<'a> ProgramReader<'a> {
             .map_section_indices
             .contains(&symbol_section_index)
         {
-            let fd = self.relocate_map(symbol_name, sym_index)?;
+            let fd = self.relocate_named_map(symbol_name)?;
             instructions[location].set_src(INST_LD_MODE_MAP_FD);
             instructions[location].imm = fd;
             return Ok(true);
@@ -1220,7 +1187,12 @@ impl<'a> ProgramReader<'a> {
             instructions[location].set_src(INST_LD_MODE_MAP_VALUE);
 
             let sec_name = self.section_name_by_index(symbol_section_index)?;
-            instructions[location].imm = self.relocate_global_variable(&sec_name)?;
+            instructions[location].imm = self.relocate_named_map(&sec_name)?;
+            return Ok(true);
+        }
+
+        if symbol_name.starts_with("__config_") {
+            instructions[location].imm = 0;
             return Ok(true);
         }
 
@@ -1339,10 +1311,15 @@ impl<'a> ProgramReader<'a> {
 
     /// Check whether a function relocation has already been recorded for a
     /// given (prog_index, source_offset) pair.
+    fn record_function_relocation(&mut self, reloc: FunctionRelocation) {
+        self.function_relocation_index
+            .insert((reloc.prog_index, reloc.source_offset));
+        self.function_relocations.push(reloc);
+    }
+
     fn has_function_relocation(&self, prog_index: usize, source_offset: usize) -> bool {
-        self.function_relocations
-            .iter()
-            .any(|r| r.prog_index == prog_index && r.source_offset == source_offset)
+        self.function_relocation_index
+            .contains(&(prog_index, source_offset))
     }
 
     /// Scan a program for CALL instructions with local source that were not
@@ -1391,7 +1368,7 @@ impl<'a> ProgramReader<'a> {
                         ))
                     })?;
 
-            self.function_relocations.push(FunctionRelocation {
+            self.record_function_relocation(FunctionRelocation {
                 prog_index,
                 source_offset: loc,
                 relocation_entry_index: 0,
@@ -1443,51 +1420,55 @@ impl<'a> ProgramReader<'a> {
         let ext = btf_ext_sec
             .data()
             .map_err(|e| UnmarshalError(format!("Cannot read .BTF.ext section: {e}")))?;
-        if ext.len() < 8 {
-            return Ok(());
-        }
 
-        // BTF.ext header: magic(2), version(1), flags(1), hdr_len(4),
-        //   func_info_off(4), func_info_len(4), line_info_off(4), line_info_len(4),
-        //   core_relo_off(4), core_relo_len(4)
-        let magic = u16::from_le_bytes([ext[0], ext[1]]);
-        let version = ext[2];
-        if magic != 0xEB9F || version != 1 {
+        let header: BtfExtPreamble = read_btf_ext_at(ext, 0, "BTF.ext header")?;
+        if header.magic != BTF_HEADER_MAGIC || header.version != BTF_HEADER_VERSION {
             return Err(UnmarshalError("Invalid .BTF.ext header".into()));
         }
-        let hdr_len = u32::from_le_bytes([ext[4], ext[5], ext[6], ext[7]]) as usize;
-        if hdr_len < 32 || hdr_len > ext.len() {
-            return Ok(()); // Header too short for core_relo fields — no CO-RE data.
+        let hdr_len = header.hdr_len as usize;
+        if hdr_len < size_of::<BtfExtPreamble>() || hdr_len > ext.len() {
+            return Err(UnmarshalError("Invalid .BTF.ext header length".into()));
         }
+        // Older BTF.ext headers might not include core_relo fields.
+        if hdr_len < BTF_EXT_CORE_RELO_LEN_OFFSET + size_of::<u32>() {
+            return Ok(());
+        }
+        let core_relo_off: u32 =
+            read_btf_ext_at(ext, BTF_EXT_CORE_RELO_OFF_OFFSET, "BTF.ext core_relo_off")?;
+        let core_relo_len: u32 =
+            read_btf_ext_at(ext, BTF_EXT_CORE_RELO_LEN_OFFSET, "BTF.ext core_relo_len")?;
 
-        let core_relo_off = u32::from_le_bytes([ext[24], ext[25], ext[26], ext[27]]) as usize;
-        let core_relo_len = u32::from_le_bytes([ext[28], ext[29], ext[30], ext[31]]) as usize;
-
-        let core_start = hdr_len + core_relo_off;
-        let core_end = core_start + core_relo_len;
-        if core_start >= core_end || core_end > ext.len() {
+        let core_relo_start = bounded_end(
+            hdr_len,
+            core_relo_off as usize,
+            ext.len(),
+            "BTF.ext core_relo subsection",
+        )?;
+        let core_relo_end = bounded_end(
+            core_relo_start,
+            core_relo_len as usize,
+            ext.len(),
+            "BTF.ext core_relo subsection",
+        )?;
+        if core_relo_start == core_relo_end {
             return Ok(());
         }
 
-        // First u32 is the record size.
-        if core_end - core_start < 4 {
+        let mut offset = core_relo_start;
+        if core_relo_end - offset < size_of::<u32>() {
             return Err(UnmarshalError(
                 "BTF.ext core_relo subsection truncated".into(),
             ));
         }
-        let rec_size = u32::from_le_bytes([
-            ext[core_start],
-            ext[core_start + 1],
-            ext[core_start + 2],
-            ext[core_start + 3],
-        ]) as usize;
-        if rec_size < 16 {
+        let rec_size: u32 = read_btf_ext_at(ext, offset, "BTF.ext core_relo record size")?;
+        let rec_size = rec_size as usize;
+        offset += size_of::<u32>();
+        if rec_size < size_of::<BpfCoreRelo>() {
             return Err(UnmarshalError(
                 "Invalid CO-RE relocation record size".into(),
             ));
         }
 
-        // Build section-name → programs map for matching.
         let mut progs_by_section: BTreeMap<String, Vec<usize>> = BTreeMap::new();
         for (idx, prog) in self.raw_programs.iter().enumerate() {
             progs_by_section
@@ -1496,91 +1477,47 @@ impl<'a> ProgramReader<'a> {
                 .push(idx);
         }
 
-        let inst_size = size_of::<EbpfInst>();
-        let mut offset = core_start + 4;
-        while offset < core_end {
-            // Per-section header: sec_name_off(4), num_info(4).
-            if offset + 8 > core_end {
-                break;
-            }
-            let sec_name_off = u32::from_le_bytes([
-                ext[offset],
-                ext[offset + 1],
-                ext[offset + 2],
-                ext[offset + 3],
-            ]);
-            let num_info = u32::from_le_bytes([
-                ext[offset + 4],
-                ext[offset + 5],
-                ext[offset + 6],
-                ext[offset + 7],
-            ]) as usize;
-            offset += 8;
-
-            let records_size = num_info * rec_size;
-            if offset + records_size > core_end {
+        while offset < core_relo_end {
+            let section: BtfExtInfoSec = read_btf_ext_at(ext, offset, "CO-RE section info")?;
+            offset += size_of::<BtfExtInfoSec>();
+            if offset > core_relo_end {
                 return Err(UnmarshalError("CO-RE section records out of bounds".into()));
             }
+            let num_info = section.num_info as usize;
+            if num_info != 0 && rec_size > (core_relo_end - offset) / num_info {
+                return Err(UnmarshalError("CO-RE section records out of bounds".into()));
+            }
+            let records_end = offset + num_info * rec_size;
+            let section_name =
+                crate::btf::parse::read_btf_string(btf_section_data, section.sec_name_off)?;
 
-            let section_name = crate::btf::parse::read_btf_string(btf_section_data, sec_name_off)?;
-
-            let prog_indices = match progs_by_section.get(&section_name) {
-                Some(v) => v.clone(),
-                None => {
-                    offset += records_size;
-                    continue;
-                }
+            let Some(prog_indices) = progs_by_section.get(&section_name) else {
+                offset = records_end;
+                continue;
             };
 
             for i in 0..num_info {
-                let rpos = offset + i * rec_size;
-                let insn_off =
-                    u32::from_le_bytes([ext[rpos], ext[rpos + 1], ext[rpos + 2], ext[rpos + 3]]);
-                let type_id = u32::from_le_bytes([
-                    ext[rpos + 4],
-                    ext[rpos + 5],
-                    ext[rpos + 6],
-                    ext[rpos + 7],
-                ]);
-                let access_str_off = u32::from_le_bytes([
-                    ext[rpos + 8],
-                    ext[rpos + 9],
-                    ext[rpos + 10],
-                    ext[rpos + 11],
-                ]);
-                let kind_raw = u32::from_le_bytes([
-                    ext[rpos + 12],
-                    ext[rpos + 13],
-                    ext[rpos + 14],
-                    ext[rpos + 15],
-                ]);
+                let reloc: BpfCoreRelo =
+                    read_btf_ext_at(ext, offset + i * rec_size, "CO-RE relocation")?;
+                let access_string =
+                    crate::btf::parse::read_btf_string(btf_section_data, reloc.access_str_off)?;
 
-                // Find the program that contains this instruction.
-                let mut applied = false;
-                for &pidx in &prog_indices {
-                    let prog = &self.raw_programs[pidx];
-                    let prog_start = prog.insn_off;
-                    let prog_end = prog_start + (prog.prog.len() as u32) * (inst_size as u32);
-                    if insn_off >= prog_start && insn_off < prog_end {
-                        let inst_idx = ((insn_off - prog_start) as usize) / inst_size;
-                        apply_core_relocation(
-                            &mut self.raw_programs[pidx].prog[inst_idx],
-                            btf_data,
-                            btf_section_data,
-                            type_id,
-                            access_str_off,
-                            kind_raw,
-                        )?;
-                        applied = true;
-                        break;
-                    }
-                }
-                // Silently skip relocations for programs not in our set
-                // (e.g. filtered by desired_section).
-                let _ = applied;
+                let Some(&pidx) = prog_indices
+                    .iter()
+                    .find(|&&pidx| program_covers(&self.raw_programs[pidx], reloc.insn_off))
+                else {
+                    return Err(UnmarshalError(format!(
+                        "Failed to find program for CO-RE relocation at instruction offset {} in section {section_name}",
+                        reloc.insn_off
+                    )));
+                };
+                let prog = &mut self.raw_programs[pidx];
+                let inst_idx = core_relocation_target(prog, reloc.insn_off)?;
+                apply_core_relocation(&mut prog.prog[inst_idx], btf_data, &reloc, &access_string)?;
+                prog.core_relocation_count += 1;
             }
 
-            offset += records_size;
+            offset = records_end;
         }
 
         Ok(())
@@ -1596,30 +1533,34 @@ impl<'a> ProgramReader<'a> {
         let prog_lookup = build_prog_lookup(&self.raw_programs);
 
         for prog_idx in 0..prog_count {
-            match self.resolve_subprograms_for(prog_idx, &prog_lookup, &mut resolved, &mut visiting)
+            // A missing subprogram fails the load only for a program the caller
+            // asked for; structural errors (recursion) fail it regardless.
+            if let Some(missing) =
+                self.resolve_subprograms_for(prog_idx, &prog_lookup, &mut resolved, &mut visiting)?
+                && self.raw_programs[prog_idx].section_name == self.desired_section
             {
-                Ok(()) => {}
-                Err(_)
-                    if !self.desired_section.is_empty()
-                        && self.raw_programs[prog_idx].section_name != self.desired_section =>
-                {
-                    // Silently ignore subprogram errors for non-desired sections
-                }
-                Err(e) => return Err(e),
+                return Err(UnmarshalError(missing));
             }
         }
         Ok(())
     }
 
+    /// Inline the subprograms `prog_idx` calls, after their own callees, and
+    /// point each local call at its inlined copy.
+    ///
+    /// Returns `Ok(Some(message))` when a callee cannot be found. That leaves
+    /// the program unresolved and still marked as being visited, exactly as
+    /// upstream's `append_subprograms` does when it returns its error string,
+    /// so a later call into it reports mutual recursion there as here.
     fn resolve_subprograms_for(
         &mut self,
         prog_idx: usize,
         prog_lookup: &BTreeMap<(String, String), usize>,
         resolved: &mut BTreeSet<usize>,
         visiting: &mut BTreeSet<usize>,
-    ) -> Result<(), UnmarshalError> {
+    ) -> Result<Option<String>, UnmarshalError> {
         if resolved.contains(&prog_idx) {
-            return Ok(());
+            return Ok(None);
         }
         if visiting.contains(&prog_idx) {
             return Err(UnmarshalError(
@@ -1661,7 +1602,11 @@ impl<'a> ProgramReader<'a> {
                     if sub_idx == prog_idx {
                         return Err(UnmarshalError("Recursive subprogram call".into()));
                     }
-                    self.resolve_subprograms_for(sub_idx, prog_lookup, resolved, visiting)?;
+                    if let Some(missing) =
+                        self.resolve_subprograms_for(sub_idx, prog_lookup, resolved, visiting)?
+                    {
+                        return Ok(Some(missing));
+                    }
 
                     let sub_instructions = self.raw_programs[sub_idx].prog.clone();
                     let base = *subprogram_offsets.get(target_name).unwrap();
@@ -1689,22 +1634,21 @@ impl<'a> ProgramReader<'a> {
                         .prog
                         .extend_from_slice(&sub_instructions);
                 } else {
-                    let err_msg = format!("Subprogram not found: {target_name}");
-                    if self.raw_programs[prog_idx].section_name == self.desired_section {
-                        return Err(UnmarshalError(err_msg));
-                    }
+                    return Ok(Some(format!("Subprogram not found: {target_name}")));
                 }
             }
 
             let target_offset = *subprogram_offsets.get(target_name).unwrap() as i64;
             let src_offset = *source_offset as i64;
             self.raw_programs[prog_idx].prog[*source_offset].imm =
-                (target_offset - src_offset - 1) as i32;
+                i32::try_from(target_offset - src_offset - 1).map_err(|_| {
+                    UnmarshalError("Local call offset does not fit in 32 bits".into())
+                })?;
         }
 
         visiting.remove(&prog_idx);
         resolved.insert(prog_idx);
-        Ok(())
+        Ok(None)
     }
 
     // ── Main read loop ──────────────────────────────────────────────
@@ -1785,6 +1729,7 @@ impl<'a> ProgramReader<'a> {
                         ),
                         ..Default::default()
                     },
+                    core_relocation_count: 0,
                 });
 
                 // Advance by the symbol-derived size, not the reachable span.
@@ -1883,35 +1828,10 @@ fn parse_core_access_string(s: &str) -> Result<Vec<u32>, UnmarshalError> {
 
 /// Unwrap typedef/const/volatile/restrict/type_tag to reach the underlying type.
 fn unwrap_btf_type(btf_data: &BtfTypeData, mut type_id: u32) -> Result<u32, UnmarshalError> {
-    use crate::btf::{BtfKind, BtfKindIndex};
     for _ in 0..256 {
-        match btf_data.get_kind_index(type_id)? {
-            BtfKindIndex::Typedef => {
-                if let BtfKind::Typedef { type_id: inner, .. } = btf_data.get_kind(type_id)? {
-                    type_id = *inner;
-                }
-            }
-            BtfKindIndex::Const => {
-                if let BtfKind::Const { type_id: inner } = btf_data.get_kind(type_id)? {
-                    type_id = *inner;
-                }
-            }
-            BtfKindIndex::Volatile => {
-                if let BtfKind::Volatile { type_id: inner } = btf_data.get_kind(type_id)? {
-                    type_id = *inner;
-                }
-            }
-            BtfKindIndex::Restrict => {
-                if let BtfKind::Restrict { type_id: inner } = btf_data.get_kind(type_id)? {
-                    type_id = *inner;
-                }
-            }
-            BtfKindIndex::TypeTag => {
-                if let BtfKind::TypeTag { type_id: inner, .. } = btf_data.get_kind(type_id)? {
-                    type_id = *inner;
-                }
-            }
-            _ => return Ok(type_id),
+        match btf_data.get_kind(type_id)?.modifier_target(true) {
+            Some(inner) => type_id = inner,
+            None => return Ok(type_id),
         }
     }
     Err(UnmarshalError(
@@ -2049,26 +1969,107 @@ fn core_field_offset_uses_offset_field(inst: &EbpfInst) -> bool {
     if cls != INST_CLS_LDX && cls != INST_CLS_ST && cls != INST_CLS_STX {
         return false;
     }
-    let mode = inst.opcode & 0xe0; // INST_MODE_MASK
+    let mode = inst.opcode & INST_MODE_MASK;
     mode == INST_MODE_MEM || mode == INST_MODE_MEMSX || mode == INST_MODE_ATOMIC
+}
+
+/// Byte offset of `core_relo_off` in the full `.BTF.ext` header.
+const BTF_EXT_CORE_RELO_OFF_OFFSET: usize = 24;
+/// Byte offset of `core_relo_len` in the full `.BTF.ext` header.
+const BTF_EXT_CORE_RELO_LEN_OFFSET: usize = 28;
+
+/// The fields every `.BTF.ext` header starts with, whatever its `hdr_len`.
+#[repr(C)]
+#[derive(Clone, Copy, zerocopy::FromBytes)]
+struct BtfExtPreamble {
+    magic: u16,
+    version: u8,
+    flags: u8,
+    hdr_len: u32,
+}
+
+/// One record of the `.BTF.ext` core_relo subsection (`struct bpf_core_relo`).
+#[repr(C)]
+#[derive(Clone, Copy, zerocopy::FromBytes)]
+struct BpfCoreRelo {
+    insn_off: u32,
+    type_id: u32,
+    access_str_off: u32,
+    kind: u32,
+}
+
+/// Read a `T` at byte `offset` of the `.BTF.ext` section.
+fn read_btf_ext_at<T: zerocopy::FromBytes>(
+    ext: &[u8],
+    offset: usize,
+    what: &str,
+) -> Result<T, UnmarshalError> {
+    ext.get(offset..)
+        .and_then(|rest| T::read_from_prefix(rest).ok())
+        .map(|(value, _)| value)
+        .ok_or_else(|| UnmarshalError(format!("{what} out of bounds")))
+}
+
+/// `base + len`, provided it neither overflows nor passes `limit`.
+fn bounded_end(base: usize, len: usize, limit: usize, what: &str) -> Result<usize, UnmarshalError> {
+    base.checked_add(len)
+        .filter(|&end| end <= limit)
+        .ok_or_else(|| UnmarshalError(format!("{what} out of bounds")))
+}
+
+/// Whether the instruction at section byte offset `insn_off` lies in `prog`.
+fn program_covers(prog: &RawProgram, insn_off: u32) -> bool {
+    let start = u64::from(prog.insn_off);
+    let end = start + (prog.prog.len() * size_of::<EbpfInst>()) as u64;
+    (start..end).contains(&u64::from(insn_off))
+}
+
+/// Index of the instruction a CO-RE relocation at section byte offset
+/// `insn_off` patches, rejecting offsets that do not name a whole instruction.
+fn core_relocation_target(prog: &RawProgram, insn_off: u32) -> Result<usize, UnmarshalError> {
+    let Some(byte_offset) = insn_off.checked_sub(prog.insn_off) else {
+        return Err(UnmarshalError(
+            "CO-RE relocation offset before program start".into(),
+        ));
+    };
+    let byte_offset = byte_offset as usize;
+    if !byte_offset.is_multiple_of(size_of::<EbpfInst>()) {
+        return Err(UnmarshalError(
+            "CO-RE relocation offset is not instruction-aligned".into(),
+        ));
+    }
+    let inst_idx = byte_offset / size_of::<EbpfInst>();
+    if inst_idx >= prog.prog.len() {
+        return Err(UnmarshalError(
+            "CO-RE relocation offset out of bounds".into(),
+        ));
+    }
+    // LDDW is a two-slot instruction; patching its continuation slot would
+    // corrupt the high 32 immediate bits instead of the intended field.
+    if prog.prog[inst_idx].opcode == LDDW_CONTINUATION_OPCODE
+        && inst_idx > 0
+        && prog.prog[inst_idx - 1].opcode == INST_OP_LDDW_IMM
+    {
+        return Err(UnmarshalError(format!(
+            "CO-RE relocation at offset {insn_off} targets LDDW continuation slot"
+        )));
+    }
+    Ok(inst_idx)
 }
 
 /// Apply a single CO-RE relocation to an instruction.
 fn apply_core_relocation(
     inst: &mut EbpfInst,
     btf_data: &BtfTypeData,
-    btf_section_data: &[u8],
-    type_id: u32,
-    access_str_off: u32,
-    kind_raw: u32,
+    reloc: &BpfCoreRelo,
+    access_string: &str,
 ) -> Result<(), UnmarshalError> {
     use crate::btf::{BtfKind, BtfKindIndex};
 
+    let type_id = reloc.type_id;
+    let kind_raw = reloc.kind;
     // Resolve field lazily — only computed for FIELD_* kinds.
-    let resolve_field = || -> Result<CoreFieldResolution, UnmarshalError> {
-        let access_string = crate::btf::parse::read_btf_string(btf_section_data, access_str_off)?;
-        resolve_core_field(btf_data, type_id, &access_string)
-    };
+    let resolve_field = || resolve_core_field(btf_data, type_id, access_string);
 
     match kind_raw {
         core_relo_kind::FIELD_BYTE_OFFSET => {
@@ -2151,8 +2152,7 @@ fn apply_core_relocation(
             inst.imm = btf_data.get_size(unwrap_btf_type(btf_data, type_id)?)? as i32;
         }
         core_relo_kind::ENUMVAL_EXISTS | core_relo_kind::ENUMVAL_VALUE => {
-            let as_str = crate::btf::parse::read_btf_string(btf_section_data, access_str_off)?;
-            let indices = parse_core_access_string(&as_str)?;
+            let indices = parse_core_access_string(access_string)?;
             if indices.is_empty() {
                 return Err(UnmarshalError(
                     "CO-RE enum relocation missing enum value index".into(),
@@ -2645,15 +2645,15 @@ mod tests {
     #[test]
     fn validate_lddw_pair_ok() {
         let insts = vec![
-            EbpfInst::new(BPF_LDDW, 0, 0, 0, 42),
-            EbpfInst::new(BPF_LDDW_HI, 0, 0, 0, 0),
+            EbpfInst::new(INST_OP_LDDW_IMM, 0, 0, 0, 42),
+            EbpfInst::new(LDDW_CONTINUATION_OPCODE, 0, 0, 0, 0),
         ];
         assert!(validate_lddw_pair(&insts, 0, "test").is_ok());
     }
 
     #[test]
     fn validate_lddw_pair_boundary() {
-        let insts = vec![EbpfInst::new(BPF_LDDW, 0, 0, 0, 42)];
+        let insts = vec![EbpfInst::new(INST_OP_LDDW_IMM, 0, 0, 0, 42)];
         assert!(validate_lddw_pair(&insts, 0, "test").is_err());
     }
 
@@ -2661,7 +2661,7 @@ mod tests {
     fn validate_lddw_pair_wrong_opcode() {
         let insts = vec![
             EbpfInst::new(0x04, 0, 0, 0, 42),
-            EbpfInst::new(BPF_LDDW_HI, 0, 0, 0, 0),
+            EbpfInst::new(LDDW_CONTINUATION_OPCODE, 0, 0, 0, 0),
         ];
         assert!(validate_lddw_pair(&insts, 0, "test").is_err());
     }
@@ -3028,6 +3028,7 @@ mod tests {
             function_name: function_name.to_string(),
             prog: Vec::new(),
             info: ProgramInfo::default(),
+            core_relocation_count: 0,
         }
     }
 
