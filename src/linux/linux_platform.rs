@@ -682,8 +682,8 @@ fn parse_map_def_record(record: &[u8], record_size: usize) -> BpfLoadMapDef {
     padded[..copy_len].copy_from_slice(&record[..copy_len]);
 
     let mut fields = [0u32; 7];
-    for (idx, chunk) in padded.chunks_exact(4).take(7).enumerate() {
-        fields[idx] = u32::from_ne_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+    for (field, chunk) in fields.iter_mut().zip(padded.as_chunks::<4>().0) {
+        *field = u32::from_ne_bytes(*chunk);
     }
     BpfLoadMapDef {
         map_type: fields[0],
