@@ -30,10 +30,6 @@ default-run = "prevail"
 [lib]
 path = "src/lib.rs"
 
-[features]
-default = []
-map-trace = ["serde", "serde_json"]
-
 [lints]
 workspace = true
 
@@ -42,8 +38,6 @@ object = { version = "0.36", default-features = false, features = ["read", "elf"
 regex = "1"
 clap = { version = "4", features = ["derive"] }
 zerocopy = { version = "0.8.39", features = ["derive"] }
-serde = { version = "1", features = ["derive"], optional = true }
-serde_json = { version = "1", optional = true }
 fixedbitset = "0.5.7"
 
 [[bin]]
@@ -52,21 +46,9 @@ path = "src/main.rs"
 
 [dev-dependencies]
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
 serde_yaml = "0.9"
-criterion = { version = "0.5", features = ["html_reports"] }
 # Synthetic ELF construction for hardening tests (e.g. malformed FUNC symbols).
 object = { version = "0.36", features = ["write_std"] }
-# Benchmark candidates for OffsetMap
-patricia_tree = "0.10"
-interavl = "0.5"
-rust-lapper = "1"
-rustc-hash = "2"
-
-[[bench]]
-name = "offset_map_bench"
-harness = false
-required-features = ["map-trace"]
 
 [profile.release]
 panic = "abort"

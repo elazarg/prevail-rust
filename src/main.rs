@@ -14,38 +14,13 @@ use prevail::crab::ebpf_domain::DomainContext;
 use prevail::crab::var_registry::VariableRegistry;
 use prevail::elf_loader;
 use prevail::fwd_analyzer;
-use prevail::ir::program::{Program, collect_stats};
+use prevail::ir::program::Program;
 use prevail::ir::unmarshal;
 use prevail::linux::linux_platform::LinuxPlatform;
-use prevail::linux_verifier;
-use prevail::memsize;
 use prevail::spec::config::{EbpfRuntimeConfig, EbpfVerifierOptions, VerbosityOptions};
 use prevail::spec::type_descriptors::RawProgram;
-use prevail::spec::vm_isa::EbpfInst;
 
 use prevail::linux::linux_platform::conformance_groups as conformance;
-
-// ── FNV-1a hash ─────────────────────────────────────────────────────────────
-
-fn fnv1a64(bytes: &[u8]) -> u64 {
-    let mut h: u64 = 1469598103934665603;
-    for &b in bytes {
-        h ^= b as u64;
-        h = h.wrapping_mul(1099511628211);
-    }
-    h
-}
-
-fn serialize_inst_bytes(insts: &[EbpfInst]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(size_of_val(insts));
-    for inst in insts {
-        out.push(inst.opcode);
-        out.push(inst.dst_src);
-        out.extend_from_slice(&inst.offset.to_ne_bytes());
-        out.extend_from_slice(&inst.imm.to_ne_bytes());
-    }
-    out
-}
 
 /// Format the program label as "section/function" or just "section" if they match.
 fn program_label(raw_prog: &RawProgram) -> String {
@@ -105,11 +80,6 @@ struct Cli {
     /// Print control-flow graph and exit
     #[arg(long = "cfg")]
     print_cfg: bool,
-
-    /// Abstract domain (hidden, kept for xtask backward compatibility)
-    #[arg(long, default_value = "zoneCrab", hide = true,
-          value_parser = ["stats", "linux", "zoneCrab", "cfg"])]
-    domain: String,
 
     /// Verify termination
     #[arg(long = "termination", overrides_with = "no_verify_termination")]
@@ -319,7 +289,7 @@ fn main() -> ExitCode {
         simplify = false;
     }
 
-    let mut opts = EbpfVerifierOptions {
+    let opts = EbpfVerifierOptions {
         must_have_exit: true,
         mock_map_fds: true,
         runtime: EbpfRuntimeConfig {
@@ -344,33 +314,6 @@ fn main() -> ExitCode {
             compact_slice: false,
         },
     };
-
-    // Handle @headers special filename.
-    if path == "@headers" {
-        if cli.domain == "stats" {
-            print!("hash,instructions");
-            let headers = prevail::ir::program::stats_headers();
-            for h in headers {
-                print!(",{h}");
-            }
-        } else {
-            print!("{}?,", cli.domain);
-            print!("{}_sec,", cli.domain);
-            print!("{}_kb", cli.domain);
-        }
-        println!();
-        return ExitCode::SUCCESS;
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    if cli.domain == "linux" {
-        eprintln!("error: linux domain is unsupported on this machine");
-        return ExitCode::from(64);
-    }
-
-    if cli.domain == "linux" {
-        opts.mock_map_fds = false;
-    }
 
     // ── Load ELF using Rust ELF loader ──────────────────────────────────
 
@@ -453,27 +396,6 @@ fn main() -> ExitCode {
     rust_platform.map_descriptors = raw_prog.info.map_descriptors.clone();
     rust_platform.set_program_type(&raw_prog.info.program_type);
 
-    // ── Linux domain: run kernel verifier ────────────────────────────────
-
-    if cli.domain == "linux" {
-        let raw_bytes = serialize_inst_bytes(&raw_prog.prog);
-        let prog_type = raw_prog.info.program_type.platform_specific_data as u32;
-        let (res, seconds) = linux_verifier::bpf_verify_program(
-            prog_type,
-            &raw_bytes,
-            opts.verbosity_opts.print_failures,
-        );
-        let mem_kb = memsize::resident_set_size_kb();
-        println!("{},{seconds},{mem_kb}", if res { 1 } else { 0 });
-        return if res {
-            ExitCode::SUCCESS
-        } else {
-            ExitCode::from(1)
-        };
-    }
-
-    // ── Non-linux domains ────────────────────────────────────────────────
-
     // Unmarshal instructions using the Rust unmarshaller.
     let mut notes = Vec::new();
     let inst_seq = match unmarshal::unmarshal(
@@ -525,7 +447,6 @@ fn main() -> ExitCode {
         }
     };
     let info = &raw_prog.info;
-    let insts = &raw_prog.prog;
 
     // Optional DOT output (before --cfg early exit, matching C++ order).
     if let Some(ref dot_file) = cli.dot_file
@@ -535,7 +456,7 @@ fn main() -> ExitCode {
         return ExitCode::from(1);
     }
 
-    if cli.print_cfg || cli.domain == "cfg" {
+    if cli.print_cfg {
         let _ = prevail::printing::print_program(
             &program,
             info,
@@ -544,25 +465,6 @@ fn main() -> ExitCode {
         );
         return ExitCode::SUCCESS;
     }
-
-    if cli.domain == "stats" {
-        // Hash the raw bytes of the program.
-        let raw_bytes = serialize_inst_bytes(insts);
-        let hash = fnv1a64(&raw_bytes);
-        let inst_count = inst_seq.len();
-        print!("{hash:x},{inst_count}");
-
-        let stats = collect_stats(&program);
-        let headers = prevail::ir::program::stats_headers();
-        for h in headers {
-            let val = stats.get(h).unwrap_or(&0);
-            print!(",{val}");
-        }
-        println!();
-        return ExitCode::SUCCESS;
-    }
-
-    // ── zoneCrab domain: run the Rust forward analyzer ──────────────────
 
     let ctx = DomainContext {
         program_info: info,

@@ -177,10 +177,6 @@ cargo xtask profile
 perf report -i target/xtask/tmp/profile/perf.data --stdio --no-children --percent-limit=0.5
 ```
 
-### Benchmark CSV format
-
-Run `cargo xtask runperf --help` for usage and output format details.
-
 ## Fuzzing Workflow
 
 Install cargo-fuzz once:

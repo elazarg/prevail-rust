@@ -276,44 +276,6 @@ impl ArrayMap {
 }
 
 // ============================================================================
-// Trace recording (map-trace feature)
-// ============================================================================
-
-/// A single OffsetMap operation, recorded for trace-driven benchmarks.
-#[derive(Clone, Debug)]
-#[cfg_attr(feature = "map-trace", derive(serde::Serialize, serde::Deserialize))]
-pub enum OffsetMapOp {
-    MkCell { offset: u64, size: u32 },
-    GetCell { offset: u64, size: u32 },
-    GetOverlap { offset: u64, size: u32 },
-    GetOverlapSymbolic { lb: i64, ub: i64 },
-    RemoveCells { cells: Vec<(u64, u32)> },
-}
-
-/// A sequence of OffsetMap operations for one OffsetMap instance.
-#[derive(Clone, Debug)]
-#[cfg_attr(feature = "map-trace", derive(serde::Serialize, serde::Deserialize))]
-pub struct OffsetMapTrace {
-    pub ops: Vec<OffsetMapOp>,
-}
-
-/// Take all collected traces (map-trace feature).
-///
-/// Recording is not yet wired into the bucket-array OffsetMap (it would
-/// require RefCell or similar interior mutability). This stub exists so
-/// that `collect_traces` compiles; it always returns an empty vec.
-#[cfg(feature = "map-trace")]
-pub fn take_all_traces() -> Vec<OffsetMapTrace> {
-    Vec::new()
-}
-
-/// Flush traces from all OffsetMaps in an ArrayMap into the global sink.
-///
-/// No-op stub — see `take_all_traces` note.
-#[cfg(feature = "map-trace")]
-pub fn flush_array_map_traces(_array_map: &ArrayMap) {}
-
-// ============================================================================
 // Helper functions
 // ============================================================================
 

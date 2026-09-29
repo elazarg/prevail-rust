@@ -11,8 +11,6 @@ pub mod elf_loader;
 pub mod fwd_analyzer;
 pub mod ir;
 pub mod linux;
-pub mod linux_verifier;
-pub mod memsize;
 pub mod platform;
 pub mod printing;
 pub mod result;

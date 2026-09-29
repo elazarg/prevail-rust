@@ -14,7 +14,7 @@ use crate::cfg::label::Label;
 use crate::cfg::wto::{CycleOrLabel, Wto};
 use crate::ir::assertions::get_assertions;
 use crate::ir::syntax::{
-    ArgSingleKind, Assertion, Assume, Bin, BinOp, Call, CallKind, Condition, ConditionOp, Imm,
+    Assertion, Assume, Bin, BinOp, Call, CallKind, Condition, ConditionOp, Imm,
     IncrementLoopCounter, Instruction, InstructionSeq, LoadMapAddress, LoadMapFd, LoadPseudo, Mem,
     PseudoAddressKind, Un, UnOp, Undefined, Value,
 };
@@ -1294,118 +1294,6 @@ fn add_cfg_nodes(
     }
 
     Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// Statistics
-// ---------------------------------------------------------------------------
-
-/// Get the type string of an instruction. Most of these type names are also
-/// statistics header labels.
-pub fn instype(ins: &Instruction) -> &'static str {
-    match ins {
-        Instruction::Call(call) => {
-            if call.contract.is_map_lookup {
-                "call_1"
-            } else if call.contract.pairs.is_empty() {
-                if call
-                    .contract
-                    .singles
-                    .iter()
-                    .all(|kr| kr.kind == ArgSingleKind::Anything)
-                {
-                    "call_nomem"
-                } else {
-                    "call_mem"
-                }
-            } else {
-                "call_mem"
-            }
-        }
-        Instruction::Callx(_) => "callx",
-        Instruction::CallBtf(_) => "call_btf",
-        Instruction::Mem(mem) => {
-            if mem.is_load {
-                "load"
-            } else {
-                "store"
-            }
-        }
-        Instruction::Atomic(_) => "load_store",
-        Instruction::Packet(_) => "packet_access",
-        Instruction::Bin(bin) => match bin.op {
-            BinOp::MOV | BinOp::MOVSX8 | BinOp::MOVSX16 | BinOp::MOVSX32 => "assign",
-            _ => "arith",
-        },
-        Instruction::Un(_) => "arith",
-        Instruction::LoadMapFd(_) => "assign",
-        Instruction::LoadMapAddress(_) => "assign",
-        Instruction::LoadPseudo(_) => "assign",
-        Instruction::Assume(_) => "assume",
-        _ => "other",
-    }
-}
-
-/// Returns the list of statistics header keys.
-pub fn stats_headers() -> Vec<&'static str> {
-    vec![
-        "instructions",
-        "joins",
-        "other",
-        "jumps",
-        "assign",
-        "arith",
-        "load",
-        "store",
-        "load_store",
-        "packet_access",
-        "call_1",
-        "call_mem",
-        "call_btf",
-        "call_nomem",
-        "reallocate",
-        "map_in_map",
-        "arith64",
-        "arith32",
-    ]
-}
-
-/// Collect statistics about the instructions in a program.
-pub fn collect_stats(prog: &Program) -> BTreeMap<String, i32> {
-    let mut res = BTreeMap::new();
-    for h in stats_headers() {
-        res.insert(h.to_string(), 0);
-    }
-    for label in prog.labels() {
-        *res.get_mut("instructions").unwrap() += 1;
-        let cmd = prog.instruction_at(label);
-
-        if let Instruction::LoadMapFd(lmf) = cmd
-            && lmf.mapfd == -1
-        {
-            res.insert("map_in_map".to_string(), 1);
-        }
-        if let Instruction::Call(call) = cmd
-            && call.contract.reallocate_packet
-        {
-            res.insert("reallocate".to_string(), 1);
-        }
-        if let Instruction::Bin(bin) = cmd {
-            let key = if bin.is64 { "arith64" } else { "arith32" };
-            *res.get_mut(key).unwrap() += 1;
-        }
-
-        let typ = instype(cmd);
-        *res.get_mut(typ).unwrap() += 1;
-
-        if prog.cfg().in_degree(label) > 1 {
-            *res.get_mut("joins").unwrap() += 1;
-        }
-        if prog.cfg().out_degree(label) > 1 {
-            *res.get_mut("jumps").unwrap() += 1;
-        }
-    }
-    res
 }
 
 #[cfg(test)]

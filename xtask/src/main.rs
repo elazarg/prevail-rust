@@ -41,13 +41,6 @@ enum Command {
         #[command(subcommand)]
         action: BenchAction,
     },
-    /// Run performance measurements on ELF samples (CSV output).
-    Runperf {
-        /// Directory containing .o files.
-        dir: PathBuf,
-        /// Abstract domains to test.
-        domains: Vec<String>,
-    },
     /// Hotspot profiling with perf.
     Profile {
         /// Workload arguments (default: heavy cilium).
@@ -260,10 +253,6 @@ fn run(cli: Cli) -> Result<()> {
             }
             BenchAction::Report => cmd::bench_report::run(),
         },
-        Command::Runperf { dir, domains } => {
-            let domain_refs: Vec<&str> = domains.iter().map(String::as_str).collect();
-            cmd::runperf::run(&root, &dir, &domain_refs)
-        }
         Command::Profile { workload } => cmd::profile::run(&root, &workload),
         Command::Parity { action } => match action {
             ParityAction::Compare {
