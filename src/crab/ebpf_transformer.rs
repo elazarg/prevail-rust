@@ -432,7 +432,7 @@ fn assign_valid_ptr(
             .add_constraint(&lt(0i64.into(), r.uvalue.into()), registry);
     }
     dom.state.values.add_constraint(
-        &leq(r.uvalue.into(), ctx.runtime.ptr_max().into()),
+        &leq(r.uvalue.into(), ctx.runtime().ptr_max().into()),
         registry,
     );
 }
@@ -643,7 +643,7 @@ fn do_load_ctx(
             state.values.add_constraint(
                 &lt(
                     target.packet_offset.into(),
-                    (ctx.runtime.max_packet_size as i64).into(),
+                    (ctx.runtime().max_packet_size as i64).into(),
                 ),
                 registry,
             );
@@ -671,7 +671,7 @@ fn do_load_ctx(
             .values
             .add_constraint(&leq(4098i64.into(), target.uvalue.into()), registry);
         state.values.add_constraint(
-            &leq(target.uvalue.into(), ctx.runtime.ptr_max().into()),
+            &leq(target.uvalue.into(), ctx.runtime().ptr_max().into()),
             registry,
         );
     }
@@ -725,7 +725,7 @@ fn do_load(
             &addr,
             width,
             &b.access.basereg,
-            &mut StackAccess::new(registry, ctx.runtime.big_endian),
+            &mut StackAccess::new(registry, ctx.runtime().big_endian),
         );
         return;
     }
@@ -760,7 +760,7 @@ fn do_load(
                         &addr,
                         width,
                         &basereg,
-                        &mut StackAccess::new(registry, ctx.runtime.big_endian),
+                        &mut StackAccess::new(registry, ctx.runtime().big_endian),
                     );
                 }
                 TypeEncoding::TPacket => {
@@ -987,13 +987,13 @@ fn do_mem_store(
                 val_svalue,
                 val_uvalue,
                 opt_val_reg,
-                &mut StackAccess::new(registry, ctx.runtime.big_endian),
+                &mut StackAccess::new(registry, ctx.runtime().big_endian),
             );
             return;
         }
     }
     let basereg = b.access.basereg;
-    let big_endian = ctx.runtime.big_endian;
+    let big_endian = ctx.runtime().big_endian;
     let stack = &mut dom.stack;
     dom.state = dom
         .state
@@ -1249,7 +1249,7 @@ fn transform_un(
         return;
     }
     let dst = reg_pack(&stmt.dst, registry);
-    let big_endian = ctx.runtime.big_endian;
+    let big_endian = ctx.runtime().big_endian;
 
     // Closure-like helper for swap_endianness.
     // We inline it since closures can't easily capture `dom` mutably and also read from it.
@@ -1378,8 +1378,8 @@ fn transform_exit(
         dom,
         prefix,
         registry,
-        ctx.runtime.big_endian,
-        ctx.runtime.subprogram_stack_size,
+        ctx.runtime().big_endian,
+        ctx.runtime().subprogram_stack_size,
     );
     restore_callee_saved_registers(dom, prefix, registry);
 
@@ -1387,7 +1387,7 @@ fn transform_exit(
     add_to_reg(
         dom,
         &R10_STACK_POINTER,
-        i64::from(ctx.runtime.subprogram_stack_size),
+        i64::from(ctx.runtime().subprogram_stack_size),
         64,
         registry,
     );
@@ -1593,7 +1593,7 @@ fn transform_call(
                     Interval::from_i64(4)
                 };
                 let reg = param.reg;
-                let big_endian = ctx.runtime.big_endian;
+                let big_endian = ctx.runtime().big_endian;
                 let stack = &mut dom.stack;
                 dom.state = dom
                     .state
@@ -1643,7 +1643,7 @@ fn transform_call(
                     .eval_interval_var(size_pack.svalue, registry);
 
                 let mem_reg = param.mem;
-                let big_endian = ctx.runtime.big_endian;
+                let big_endian = ctx.runtime().big_endian;
                 let stack = &mut dom.stack;
                 let mut only_stack = true;
                 let mut stack_addr: Option<Interval> = None;
@@ -1796,7 +1796,7 @@ fn transform_call_local(
     add_to_reg(
         dom,
         &R10_STACK_POINTER,
-        -i64::from(ctx.runtime.subprogram_stack_size),
+        -i64::from(ctx.runtime().subprogram_stack_size),
         64,
         registry,
     );

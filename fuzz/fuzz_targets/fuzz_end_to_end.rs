@@ -54,7 +54,6 @@ fuzz_target!(|data: &[u8]| {
         let ctx = DomainContext {
             program_info: info,
             program: &program,
-            runtime: &opts.runtime,
             options: &opts,
             platform: &platform,
         };

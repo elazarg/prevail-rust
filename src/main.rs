@@ -6,8 +6,9 @@
 
 use std::process::ExitCode;
 
-use clap::Parser;
 use clap::builder::PossibleValuesParser;
+use clap::parser::ValueSource;
+use clap::{CommandFactory, FromArgMatches, Parser};
 
 use prevail::crab::ebpf_domain::DomainContext;
 use prevail::crab::var_registry::VariableRegistry;
@@ -57,21 +58,10 @@ fn program_label(raw_prog: &RawProgram) -> String {
 
 // ── CLI definition ──────────────────────────────────────────────────────────
 
-// Valid conformance group names for CLI validation.
-const GROUP_NAMES: [&str; 8] = {
-    // Build a fixed array from the shared GROUPS table.
-    let groups = conformance::GROUPS;
-    [
-        groups[0].0,
-        groups[1].0,
-        groups[2].0,
-        groups[3].0,
-        groups[4].0,
-        groups[5].0,
-        groups[6].0,
-        groups[7].0,
-    ]
-};
+/// Valid conformance group names for CLI validation.
+fn group_names() -> impl Iterator<Item = &'static str> {
+    conformance::GROUPS.iter().map(|&(name, _)| name)
+}
 
 #[derive(Parser)]
 #[command(
@@ -164,12 +154,12 @@ struct Cli {
 
     /// Include conformance groups
     #[arg(long = "include_groups", value_delimiter = ',',
-          value_parser = PossibleValuesParser::new(GROUP_NAMES))]
+          value_parser = PossibleValuesParser::new(group_names()))]
     include_groups: Vec<String>,
 
     /// Exclude conformance groups
     #[arg(long = "exclude_groups", value_delimiter = ',',
-          value_parser = PossibleValuesParser::new(GROUP_NAMES))]
+          value_parser = PossibleValuesParser::new(group_names()))]
     exclude_groups: Vec<String>,
 
     /// Simplify the display of the CFG (default: enabled)
@@ -298,7 +288,8 @@ fn print_help() {
 // ── Main ────────────────────────────────────────────────────────────────────
 
 fn main() -> ExitCode {
-    let cli = Cli::parse();
+    let matches = Cli::command().get_matches();
+    let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|e| e.exit());
 
     if cli.help {
         print_help();
@@ -318,7 +309,9 @@ fn main() -> ExitCode {
     // Build options struct (matches C++ defaults from config.hpp).
     let check_for_termination = cli.termination && !cli.no_verify_termination;
     let allow_division_by_zero = !cli.no_division_by_zero;
-    let simplify_explicit = std::env::args().any(|a| a == "--simplify" || a == "--no-simplify");
+    let simplify_explicit = ["simplify", "no_simplify"]
+        .into_iter()
+        .any(|id| matches.value_source(id) == Some(ValueSource::CommandLine));
     let mut simplify = cli.simplify && !cli.no_simplify;
     // When --failure-slice is set and user didn't explicitly pass --simplify,
     // disable simplification so each instruction is shown individually.
@@ -348,6 +341,7 @@ fn main() -> ExitCode {
             // Enable dependency collection whenever a failure-slice-style rendering may run,
             // either explicitly (--failure-slice) or implicitly (-v on a failing program).
             collect_instruction_deps: cli.failure_slice || cli.print_invariants,
+            compact_slice: false,
         },
     };
 
@@ -387,8 +381,7 @@ fn main() -> ExitCode {
     // enabled below (the documented intent: no callx or packet). Pre-seeding with
     // every group name would OR all groups back in, overriding DEFAULT_GROUPS.
     let mut groups = conformance::DEFAULT_GROUPS;
-    let include_set: Vec<&str> = cli.include_groups.iter().map(|s| s.as_str()).collect();
-    for name in &include_set {
+    for name in &cli.include_groups {
         if let Some(g) = conformance::group_by_name(name) {
             groups |= g;
         }
@@ -424,16 +417,6 @@ fn main() -> ExitCode {
     } else {
         vec![]
     };
-
-    // Handle "unsupported function:" errors with C++ parity format.
-    if let Some(ref err) = load_error
-        && let Some(idx) = err.find("unsupported function: ")
-    {
-        let what = &err[idx..];
-        eprintln!("terminate called after throwing an instance of 'std::runtime_error'");
-        eprintln!("  what():  {what}");
-        return ExitCode::from(1);
-    }
 
     if cli.list || load_error.is_some() || raw_progs.len() != 1 {
         if let Some(ref err) = load_error {
@@ -502,19 +485,13 @@ fn main() -> ExitCode {
     ) {
         Ok(seq) => seq,
         Err(e) => {
-            let msg = e.to_string();
-            if let Some(idx) = msg.find("unsupported function: ") {
-                let what = &msg[idx..];
-                eprintln!("terminate called after throwing an instance of 'std::runtime_error'");
-                eprintln!("  what():  {what}");
-            } else {
-                println!("unmarshaling error at {e}\n");
-            }
+            println!("unmarshaling error at {e}\n");
             return ExitCode::from(1);
         }
     };
 
-    // Optional disassembly output.
+    // Optional disassembly output, followed by the map descriptors. `-` writes to
+    // stdout, which upstream (whose ofstream would create a file named "-") lacks.
     if let Some(ref asm_file) = cli.asm_file {
         let mut out: Box<dyn std::io::Write> = if asm_file == "-" {
             Box::new(std::io::stdout())
@@ -527,8 +504,10 @@ fn main() -> ExitCode {
                 }
             }
         };
-        if let Err(e) =
-            prevail::printing::print_instruction_seq(&inst_seq, &mut *out, None, cli.line_info)
+        if let Err(e) = prevail::printing::print_instruction_seq(&inst_seq, &mut *out, None, false)
+            .and_then(|()| {
+                prevail::printing::print_map_descriptors(&raw_prog.info.map_descriptors, &mut *out)
+            })
         {
             eprintln!("error writing asm: {e}");
             return ExitCode::from(1);
@@ -557,7 +536,12 @@ fn main() -> ExitCode {
     }
 
     if cli.print_cfg || cli.domain == "cfg" {
-        let _ = prevail::printing::print_program(&program, info, &mut std::io::stdout(), simplify);
+        let _ = prevail::printing::print_program(
+            &program,
+            info,
+            &mut std::io::stdout(),
+            &opts.verbosity_opts,
+        );
         return ExitCode::SUCCESS;
     }
 
@@ -583,7 +567,6 @@ fn main() -> ExitCode {
     let ctx = DomainContext {
         program_info: info,
         program: &program,
-        runtime: &opts.runtime,
         options: &opts,
         platform: &rust_platform,
     };
@@ -604,18 +587,17 @@ fn main() -> ExitCode {
                     &mut std::io::stdout(),
                     &program,
                     info,
-                    simplify,
+                    &opts.verbosity_opts,
                     &result,
                     &registry,
                     &slices,
-                    false,
                 );
             } else {
                 let _ = prevail::printing::print_invariants(
                     &mut std::io::stdout(),
                     &program,
                     info,
-                    simplify,
+                    &opts.verbosity_opts,
                     &result,
                     &registry,
                 );
@@ -624,7 +606,12 @@ fn main() -> ExitCode {
         if opts.verbosity_opts.print_failures
             && let Some(ref error) = result.find_first_error()
         {
-            let _ = prevail::printing::print_error(&mut std::io::stdout(), error);
+            let _ = prevail::printing::print_error(
+                &mut std::io::stdout(),
+                error,
+                info,
+                &opts.verbosity_opts,
+            );
         }
         if cli.failure_slice && result.failed {
             let slice_params = prevail::result::SliceParams {
@@ -636,11 +623,10 @@ fn main() -> ExitCode {
                 &mut std::io::stdout(),
                 &program,
                 info,
-                simplify,
+                &opts.verbosity_opts,
                 &result,
                 &registry,
                 &slices,
-                false,
             );
         } else if cli.failure_slice && !result.failed {
             println!("Program passed verification; no failure slices to display.");
@@ -668,7 +654,12 @@ fn main() -> ExitCode {
                 && !cli.failure_slice
             {
                 if let Some(ref error) = result.find_first_error() {
-                    let _ = prevail::printing::print_error(&mut std::io::stdout(), error);
+                    let _ = prevail::printing::print_error(
+                        &mut std::io::stdout(),
+                        error,
+                        info,
+                        &opts.verbosity_opts,
+                    );
                 }
                 println!(
                     "Hint: run with --failure-slice for a causal trace, or -v for full invariants."

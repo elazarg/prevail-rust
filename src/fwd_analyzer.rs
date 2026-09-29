@@ -113,9 +113,9 @@ impl<'a, P: Program> FwdFixpointIterator<'a, P> {
             result.invariants.insert(
                 label.clone(),
                 InvariantMapPair {
-                    pre: EbpfDomain::bottom(ctx.runtime),
+                    pre: EbpfDomain::bottom(ctx.runtime()),
                     error: None,
-                    post: EbpfDomain::bottom(ctx.runtime),
+                    post: EbpfDomain::bottom(ctx.runtime()),
                     deps: None,
                 },
             );
@@ -161,7 +161,7 @@ impl<'a, P: Program> FwdFixpointIterator<'a, P> {
             .invariants
             .get(node)
             .map(|pair| pair.pre.clone())
-            .unwrap_or_else(|| EbpfDomain::bottom(self.ctx.runtime))
+            .unwrap_or_else(|| EbpfDomain::bottom(self.ctx.runtime()))
     }
 
     // ========================================================================
@@ -175,7 +175,7 @@ impl<'a, P: Program> FwdFixpointIterator<'a, P> {
         // Dependency extraction runs on the pre-state *before* assertions or
         // transformation, so that even failing instructions get deps recorded.
         if self.ctx.options.verbosity_opts.collect_instruction_deps {
-            let deps = extract_instruction_deps(ins, &pre, self.ctx.runtime, self.registry);
+            let deps = extract_instruction_deps(ins, &pre, self.ctx.runtime(), self.registry);
             if let Some(pair) = self.result.invariants.get_mut(label) {
                 pair.deps = Some(deps);
             }
@@ -212,7 +212,7 @@ impl<'a, P: Program> FwdFixpointIterator<'a, P> {
         if *node == self.cfg.entry_label() {
             return self.get_pre(node);
         }
-        let mut res = EbpfDomain::bottom(self.ctx.runtime);
+        let mut res = EbpfDomain::bottom(self.ctx.runtime());
         let parents: Vec<Label> = self.cfg.parents_of(node).iter().cloned().collect();
         for prev in &parents {
             // Access post directly from the map to avoid cloning.
@@ -363,7 +363,7 @@ impl<'a, P: Program> FwdFixpointIterator<'a, P> {
             }
         }
 
-        let mut invariant = EbpfDomain::bottom(self.ctx.runtime);
+        let mut invariant = EbpfDomain::bottom(self.ctx.runtime());
         if entry_in_this_cycle {
             invariant = self.get_pre(&self.cfg.entry_label());
         } else {
@@ -436,7 +436,7 @@ impl<'a, P: Program> FwdFixpointIterator<'a, P> {
         let mut analyzer = FwdFixpointIterator::new(prog, ctx, registry);
         analyzer.result.max_call_depth = analyzer.max_call_depth();
 
-        if ctx.options.runtime.check_for_termination {
+        if ctx.runtime().check_for_termination {
             // Initialize loop counters for potential loop headers.
             // This enables enforcement of upper bounds on loop iterations
             // during program verification.
@@ -462,7 +462,7 @@ impl<'a, P: Program> FwdFixpointIterator<'a, P> {
             analyzer.visit_component(component);
         }
 
-        if !analyzer.result.failed && ctx.options.runtime.check_for_termination {
+        if !analyzer.result.failed && ctx.runtime().check_for_termination {
             analyzer.find_termination_errors();
             if !analyzer.result.failed {
                 analyzer.result.max_loop_count = analyzer.max_loop_count();
@@ -513,7 +513,11 @@ pub fn analyze_with_entry<P: Program>(
     ctx: &DomainContext,
     registry: &mut VariableRegistry,
 ) -> AnalysisResult {
-    let entry_inv =
-        EbpfDomain::from_constraints(entry.value(), ctx.runtime.setup_constraints, ctx, registry);
+    let entry_inv = EbpfDomain::from_constraints(
+        entry.value(),
+        ctx.runtime().setup_constraints,
+        ctx,
+        registry,
+    );
     FwdFixpointIterator::run(prog, entry_inv, ctx, registry)
 }

@@ -1076,9 +1076,12 @@ impl<'a> Unmarshaller<'a> {
                 self.note("fallthrough in last instruction".to_string());
             }
 
-            // TODO: BTF line info
-
-            prog.push((Label::new(pc as i32), new_ins, None));
+            let line_info = if options.verbosity_opts.print_line_info {
+                self.info.line_info.get(&pc).cloned()
+            } else {
+                None
+            };
+            prog.push((Label::new(pc as i32), new_ins, line_info));
 
             pc += 1;
             self.note_next_pc();

@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "suite": "all",
-  "basis_hash": "80d07bf00ec15f51",
+  "basis_hash": "68d04b9b46d17ba5",
   "depends_mode": "all_tracked_at_head_except_default_and_certignore_exclusions",
   "command": [
     "cargo",
@@ -13,11 +13,13 @@
     [
       "cargo",
       "fmt",
+      "--all",
       "--check"
     ],
     [
       "cargo",
       "clippy",
+      "--workspace",
       "--all-targets",
       "--",
       "-D",
@@ -41,7 +43,7 @@
     "tests_upstream_clean_except_tests_certs"
   ],
   "result": "pass",
-  "timestamp_unix_utc": 1790691841,
-  "toolchain": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+  "timestamp_unix_utc": 1790706683,
+  "toolchain": "rustc 1.98.1 (48a229cea 2026-09-01)",
   "runner_version": "0.1.0"
 }

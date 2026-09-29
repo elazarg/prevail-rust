@@ -96,7 +96,6 @@ fuzz_target!(|input: FuzzInput| {
     let ctx = DomainContext {
         program_info: &info,
         program: &program,
-        runtime: &opts.runtime,
         options: &opts,
         platform: &platform,
     };

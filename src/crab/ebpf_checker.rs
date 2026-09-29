@@ -204,7 +204,7 @@ impl<'a> EbpfChecker<'a> {
         let r10 = reg_pack(&R10_STACK_POINTER, self.registry);
         // r10.stack_offset - subprogram_stack_size <= lb
         let lhs = LinearExpression::from(r10.stack_offset)
-            - LinearExpression::from(self.ctx.runtime.subprogram_stack_size as i64);
+            - LinearExpression::from(self.ctx.runtime().subprogram_stack_size as i64);
 
         self.require_value(
             leq(lhs, lb),
@@ -213,7 +213,7 @@ impl<'a> EbpfChecker<'a> {
         self.require_value(
             leq(
                 ub,
-                LinearExpression::from(self.ctx.runtime.total_stack_size() as i64),
+                LinearExpression::from(self.ctx.runtime().total_stack_size() as i64),
             ),
             "Upper bound must be at most total_stack_size",
         )
@@ -332,7 +332,7 @@ impl<'a> EbpfChecker<'a> {
                 "Upper bound must be at most packet_size",
             )
         } else {
-            let max_packet = self.ctx.runtime.max_packet_size;
+            let max_packet = self.ctx.runtime().max_packet_size;
             self.require_value(
                 leq(ub, LinearExpression::from(max_packet as i64)),
                 &format!("Upper bound must be at most {max_packet}"),
@@ -406,7 +406,7 @@ impl<'a> EbpfChecker<'a> {
             }
             // And, to avoid wraparound errors, they must be within bounds.
             let va1 = ValidAccess {
-                call_stack_depth: self.ctx.runtime.max_call_stack_frames,
+                call_stack_depth: self.ctx.runtime().max_call_stack_frames,
                 reg: s.r1,
                 offset: 0,
                 width: Value::Imm(Imm { v: 0 }),
@@ -415,7 +415,7 @@ impl<'a> EbpfChecker<'a> {
             };
             self.check_valid_access(&va1)?;
             let va2 = ValidAccess {
-                call_stack_depth: self.ctx.runtime.max_call_stack_frames,
+                call_stack_depth: self.ctx.runtime().max_call_stack_frames,
                 reg: s.r2,
                 offset: 0,
                 width: Value::Imm(Imm { v: 0 }),
@@ -456,7 +456,7 @@ impl<'a> EbpfChecker<'a> {
             let sub_assertions = get_assertions(
                 &Instruction::Call(call),
                 self.ctx.program_info,
-                self.ctx.runtime,
+                self.ctx.runtime(),
                 &None,
             );
             for sub_assertion in &sub_assertions {
@@ -483,7 +483,7 @@ impl<'a> EbpfChecker<'a> {
         ) {
             return self.throw_fail("Only numbers can be used as divisors");
         }
-        if !self.ctx.runtime.allow_division_by_zero {
+        if !self.ctx.runtime().allow_division_by_zero {
             let r = reg_pack(&s.reg, self.registry);
             if s.is64 {
                 // Entailment, not an interval test: it first projects the same
@@ -791,7 +791,7 @@ impl<'a> EbpfChecker<'a> {
                                 "Illegal map update with a non-numerical value [{lb_s}-{ub_s})"
                             ),
                         )?;
-                    } else if self.ctx.runtime.strict
+                    } else if self.ctx.runtime().strict
                         && let Some(fd) = fd_type
                     {
                         let map_type = self.ctx.platform.get_map_type(fd);

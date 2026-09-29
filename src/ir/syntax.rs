@@ -398,14 +398,7 @@ pub type LabeledInstruction = (Label, Instruction, Option<BtfLineInfo>);
 /// Sequence of labeled instructions.
 pub type InstructionSeq = Vec<LabeledInstruction>;
 
-/// BTF line info for debugging.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct BtfLineInfo {
-    pub file_name: String,
-    pub source_line: String,
-    pub line_number: u32,
-    pub column_number: u32,
-}
+pub use crate::spec::type_descriptors::BtfLineInfo;
 
 // ============================================================================
 // Assertion types (safety checks emitted by the verifier)

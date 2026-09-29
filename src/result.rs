@@ -45,7 +45,7 @@ pub enum ObservationCheckMode {
     /// Default: supports partial observations.
     /// Passes if the meet of observation and invariant is non-bottom.
     Consistent,
-    /// Stricter: ok iff observation entails invariant (C <= A);
+    /// Stricter: ok iff observation entails invariant (C ⊑ A);
     /// useful only when the observation is near-complete.
     Entailed,
 }
@@ -91,8 +91,8 @@ pub struct InstructionDeps {
 /// needs (today: `total_stack_size`, used to translate R10-relative offsets
 /// into the absolute `s[...]` names that appear in invariant strings).
 /// Constructed via `RelevantState::new(runtime)`; no `Default` impl, so map
-/// entries and merges can't silently zero-fill the field. Mirrors the
-/// upstream design from PR #1094.
+/// entries and merges can't silently zero-fill the field, as upstream's
+/// `RelevantState` does.
 #[derive(Clone, Debug)]
 pub struct RelevantState {
     pub total_stack_size: i32,
@@ -373,11 +373,11 @@ impl AnalysisResult {
         };
 
         let observed_state = if observation.is_bottom() {
-            EbpfDomain::bottom(ctx.runtime)
+            EbpfDomain::bottom(ctx.runtime())
         } else {
             EbpfDomain::from_constraints(
                 observation.value(),
-                ctx.runtime.setup_constraints,
+                ctx.runtime().setup_constraints,
                 ctx,
                 registry,
             )
@@ -407,7 +407,7 @@ impl AnalysisResult {
                 } else {
                     ObservationCheckResult {
                         ok: false,
-                        message: "Invariant does not entail the observation (C <= A is false)"
+                        message: "Invariant does not entail the observation (C ⊑ A is false)"
                             .to_string(),
                     }
                 }
@@ -714,7 +714,7 @@ impl AnalysisResult {
             // Forward analysis stops at the first failing assertion, which may
             // not be assertions[0]. Replay the checks against the pre-state to
             // identify the failing assertion and seed relevance from it.
-            let mut initial_relevance = RelevantState::new(ctx.runtime);
+            let mut initial_relevance = RelevantState::new(ctx.runtime());
             let assertions = prog.assertions_at(label);
             let mut found_failing = false;
             for assertion in assertions {

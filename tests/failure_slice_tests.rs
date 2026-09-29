@@ -16,7 +16,7 @@ use prevail::ir::syntax::{Instruction, Reg};
 use prevail::ir::unmarshal;
 use prevail::linux::linux_platform::LinuxPlatform;
 use prevail::result::{AnalysisResult, FailureSlice, SliceParams};
-use prevail::spec::config::EbpfVerifierOptions;
+use prevail::spec::config::{EbpfVerifierOptions, VerbosityOptions};
 use prevail::spec::type_descriptors::ProgramInfo;
 
 /// Full analysis state for further inspection.
@@ -35,7 +35,6 @@ impl AnalysisState {
         let ctx = DomainContext {
             program_info: &self.info,
             program: &self.program,
-            runtime: &self.opts.runtime,
             options: &self.opts,
             platform: &self.platform,
         };
@@ -53,7 +52,7 @@ fn analyze_with_deps(filename: &str, section: &str) -> AnalysisState {
     let resolved = path_config::upstream_ebpf_sample_path(filename);
     let opts = EbpfVerifierOptions {
         mock_map_fds: true,
-        verbosity_opts: prevail::spec::config::VerbosityOptions {
+        verbosity_opts: VerbosityOptions {
             collect_instruction_deps: true,
             ..Default::default()
         },
@@ -86,7 +85,6 @@ fn analyze_with_deps(filename: &str, section: &str) -> AnalysisState {
     let ctx = DomainContext {
         program_info: &info,
         program: &program,
-        runtime: &opts.runtime,
         options: &opts,
         platform: &platform,
     };
@@ -102,6 +100,17 @@ fn analyze_with_deps(filename: &str, section: &str) -> AnalysisState {
         opts,
     }
 }
+
+/// Print each instruction on its own, as `--failure-slice` does by default.
+const UNSIMPLIFIED: VerbosityOptions = VerbosityOptions {
+    simplify: false,
+    print_invariants: false,
+    print_failures: false,
+    print_line_info: false,
+    dump_btf_types_json: false,
+    collect_instruction_deps: false,
+    compact_slice: false,
+};
 
 fn sample_exists(relative: &str) -> bool {
     let path = path_config::upstream_ebpf_sample_path(relative);
@@ -188,11 +197,10 @@ fn print_failure_slices_structured_output() {
         &mut output,
         &state.program,
         &state.info,
-        false,
+        &UNSIMPLIFIED,
         &state.result,
         &state.registry,
         &slices,
-        false,
     )
     .unwrap();
 
@@ -295,11 +303,10 @@ fn print_failure_slices_renders_section_per_failure() {
         &mut output,
         &state.program,
         &state.info,
-        false,
+        &UNSIMPLIFIED,
         &state.result,
         &state.registry,
         &slices,
-        false,
     )
     .unwrap();
     let output_str = String::from_utf8(output).unwrap();

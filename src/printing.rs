@@ -825,6 +825,7 @@ use crate::cfg::graph::{Cfg, collect_basic_blocks};
 use crate::crab::ebpf_domain::{EbpfDomain, VerificationError};
 use crate::ir::program::Program;
 use crate::result::AnalysisResult;
+use crate::spec::config::VerbosityOptions;
 use crate::spec::type_descriptors::ProgramInfo;
 
 /// Print a set of labels joined by commas, preceded by a direction tag.
@@ -854,28 +855,39 @@ fn print_jump(out: &mut dyn Write, cfg: &Cfg, direction: &str, label: &Label) ->
 }
 
 /// Print line info for a label, deduplicating consecutive identical source lines.
-fn print_line_info_for_label(
-    out: &mut dyn Write,
-    info: &ProgramInfo,
-    label: &Label,
-    previous_source: &mut String,
-) -> io::Result<()> {
-    if label.from < 0 {
-        return Ok(());
+/// Prints the source line of each label, when enabled, once per run of
+/// labels that share it. Mirrors upstream's `LineInfoPrinter`.
+struct LineInfoPrinter<'a> {
+    info: &'a ProgramInfo,
+    enabled: bool,
+    previous_source: String,
+}
+
+impl<'a> LineInfoPrinter<'a> {
+    fn new(info: &'a ProgramInfo, verbosity: &VerbosityOptions) -> Self {
+        LineInfoPrinter {
+            info,
+            enabled: verbosity.print_line_info,
+            previous_source: String::new(),
+        }
     }
-    if let Some(li) = info.line_info.get(&(label.from as usize))
-        && li.source_line != *previous_source
-    {
-        writeln!(out)?;
-        writeln!(out, "; {}:{}", li.file_name, li.line_number)?;
-        writeln!(out, "; {}", li.source_line)?;
-        previous_source.clone_from(&li.source_line);
+
+    fn print(&mut self, out: &mut dyn Write, label: &Label) -> io::Result<()> {
+        if !self.enabled || label.from < 0 {
+            return Ok(());
+        }
+        if let Some(li) = self.info.line_info.get(&(label.from as usize))
+            && li.source_line != self.previous_source
+        {
+            write!(out, "\n{li}\n")?;
+            self.previous_source.clone_from(&li.source_line);
+        }
+        Ok(())
     }
-    Ok(())
 }
 
 /// Print instructions and assertions for a label using the rich Call form
-/// (helper name + arg list). Used by the asm dump and invariants printer
+/// (helper name + arg list). Used by the CFG dump and invariants printer
 /// where the program's `ProgramInfo` is available; failure slices use
 /// `Display` directly to fall through to the cheap form.
 fn print_instruction_at_label(
@@ -896,14 +908,14 @@ pub fn print_program(
     prog: &Program,
     info: &ProgramInfo,
     out: &mut dyn Write,
-    simplify: bool,
+    verbosity: &VerbosityOptions,
 ) -> io::Result<()> {
-    let mut previous_source = String::new();
-    for bb in &collect_basic_blocks(prog.cfg(), simplify) {
+    let mut line_info = LineInfoPrinter::new(info, verbosity);
+    for bb in &collect_basic_blocks(prog.cfg(), verbosity.simplify) {
         print_jump(out, prog.cfg(), "from", bb.first_label())?;
         writeln!(out, "{}:", bb.first_label())?;
         for label in bb {
-            print_line_info_for_label(out, info, label, &mut previous_source)?;
+            line_info.print(out, label)?;
             print_instruction_at_label(out, prog, label)?;
         }
         print_jump(out, prog.cfg(), "goto", bb.last_label())?;
@@ -918,12 +930,12 @@ pub fn print_invariants(
     out: &mut dyn Write,
     prog: &Program,
     info: &ProgramInfo,
-    simplify: bool,
+    verbosity: &VerbosityOptions,
     result: &AnalysisResult,
     registry: &VariableRegistry,
 ) -> io::Result<()> {
-    let mut previous_source = String::new();
-    for bb in &collect_basic_blocks(prog.cfg(), simplify) {
+    let mut line_info = LineInfoPrinter::new(info, verbosity);
+    for bb in &collect_basic_blocks(prog.cfg(), verbosity.simplify) {
         let Some(first_inv) = result.invariants.get(bb.first_label()) else {
             continue;
         };
@@ -938,7 +950,7 @@ pub fn print_invariants(
 
         let mut last_label = bb.first_label().clone();
         for label in bb {
-            print_line_info_for_label(out, info, label, &mut previous_source)?;
+            line_info.print(out, label)?;
             print_instruction_at_label(out, prog, label)?;
             last_label = label.clone();
         }
@@ -995,8 +1007,17 @@ pub fn print_unreachable(
     writeln!(out)
 }
 
-/// Print a verification error with optional line info.
-pub fn print_error(out: &mut dyn Write, error: &VerificationError) -> io::Result<()> {
+/// Print a verification error, preceded by its source line when line info is
+/// enabled.
+pub fn print_error(
+    out: &mut dyn Write,
+    error: &VerificationError,
+    info: &ProgramInfo,
+    verbosity: &VerbosityOptions,
+) -> io::Result<()> {
+    if let Some(label) = &error.label {
+        LineInfoPrinter::new(info, verbosity).print(out, label)?;
+    }
     writeln!(out, "{error}")?;
     writeln!(out)
 }
@@ -1010,21 +1031,22 @@ use crate::result::{FailureSlice, RelevantState, extract_assertion_registers};
 /// Print invariants filtered to only show labels in the given set.
 /// Used to print a failure slice in context.
 ///
-/// When `compact` is true, skip invariant output and only show instructions.
-/// When `relevance` is provided, only show assertions involving relevant registers.
+/// With `verbosity.compact_slice`, skip invariant output and only show
+/// instructions. When `relevance` is provided, only show assertions involving
+/// relevant registers.
 #[expect(clippy::too_many_arguments)]
 pub fn print_invariants_filtered(
     out: &mut dyn Write,
     prog: &Program,
     info: &ProgramInfo,
-    simplify: bool,
+    verbosity: &VerbosityOptions,
     result: &AnalysisResult,
     registry: &VariableRegistry,
     filter: &BTreeSet<Label>,
-    compact: bool,
     relevance: Option<&BTreeMap<Label, RelevantState>>,
 ) -> io::Result<()> {
-    let basic_blocks = collect_basic_blocks(prog.cfg(), simplify);
+    let compact = verbosity.compact_slice;
+    let basic_blocks = collect_basic_blocks(prog.cfg(), verbosity.simplify);
 
     // Build a mapping from each label in a basic block to the block's first label.
     let mut label_to_block_leader: BTreeMap<Label, Label> = BTreeMap::new();
@@ -1044,7 +1066,7 @@ pub fn print_invariants_filtered(
             .map(|inv| &inv.post)
     };
 
-    let mut previous_source = String::new();
+    let mut line_info = LineInfoPrinter::new(info, verbosity);
 
     for bb in &basic_blocks {
         // Check if any label in this basic block is in the filter
@@ -1172,7 +1194,7 @@ pub fn print_invariants_filtered(
                 }
             }
 
-            print_line_info_for_label(out, info, label, &mut previous_source)?;
+            line_info.print(out, label)?;
 
             // Print assertions, filtered by relevance
             let label_relevance = relevance.and_then(|r| r.get(label));
@@ -1197,7 +1219,7 @@ pub fn print_invariants_filtered(
                 && let Some(ref error) = current.error
             {
                 writeln!(out, "\nVerification error:")?;
-                print_error(out, error)?;
+                print_error(out, error, info, verbosity)?;
                 writeln!(out)?;
             }
         }
@@ -1221,16 +1243,14 @@ pub fn print_invariants_filtered(
 }
 
 /// Print all failure slices in a structured diagnostic format.
-#[expect(clippy::too_many_arguments)]
 pub fn print_failure_slices(
     out: &mut dyn Write,
     prog: &Program,
     info: &ProgramInfo,
-    simplify: bool,
+    verbosity: &VerbosityOptions,
     result: &AnalysisResult,
     registry: &VariableRegistry,
     slices: &[FailureSlice],
-    compact: bool,
 ) -> io::Result<()> {
     if slices.is_empty() {
         writeln!(out, "No verification failures found.")?;
@@ -1356,11 +1376,10 @@ pub fn print_failure_slices(
             out,
             prog,
             info,
-            simplify,
+            verbosity,
             result,
             registry,
             &slice.impacted_labels(),
-            compact,
             Some(&slice.relevance),
         )?;
 

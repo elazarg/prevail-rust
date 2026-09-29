@@ -19,7 +19,7 @@ use prevail::ir::program::Program;
 use prevail::ir::unmarshal;
 use prevail::linux::linux_platform::LinuxPlatform;
 use prevail::printing;
-use prevail::spec::config::EbpfVerifierOptions;
+use prevail::spec::config::{EbpfVerifierOptions, VerbosityOptions};
 
 // ============================================================================
 // Test infrastructure
@@ -54,7 +54,6 @@ fn verbose_output(elf_relative: &str, section: &str) -> String {
     let ctx = DomainContext {
         program_info: &raw_prog.info,
         program: &program,
-        runtime: &opts.runtime,
         options: &opts,
         platform: &platform,
     };
@@ -62,8 +61,16 @@ fn verbose_output(elf_relative: &str, section: &str) -> String {
     let result = fwd_analyzer::analyze(&program, &ctx, &mut registry);
 
     let mut buf = Vec::new();
-    printing::print_invariants(&mut buf, &program, &raw_prog.info, true, &result, &registry)
-        .expect("print_invariants failed");
+    let verbosity = VerbosityOptions::default();
+    printing::print_invariants(
+        &mut buf,
+        &program,
+        &raw_prog.info,
+        &verbosity,
+        &result,
+        &registry,
+    )
+    .expect("print_invariants failed");
     String::from_utf8(buf).expect("non-UTF-8 invariant output")
 }
 

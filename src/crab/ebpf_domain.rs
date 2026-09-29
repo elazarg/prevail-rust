@@ -66,33 +66,21 @@ impl std::fmt::Display for VerificationError {
 /// Replaces the C++ `thread_local_program_info`, `thread_local_options`,
 /// and `thread_local_program_info->platform` globals.
 ///
-/// `runtime` is the verifier-semantic subset used by the abstract
-/// domain; `options` is kept for orchestration layers (fwd_analyzer)
-/// that legitimately need CFG-build or verbosity flags. Domain code
-/// should prefer `runtime`.
+/// Domain code reads the verifier-semantic settings through `runtime()`;
+/// `options` also carries the CFG-build and verbosity flags that orchestration
+/// layers (fwd_analyzer) need.
 pub struct DomainContext<'a> {
     pub program_info: &'a ProgramInfo,
     pub program: &'a Program,
-    pub runtime: &'a EbpfRuntimeConfig,
     pub options: &'a EbpfVerifierOptions,
     pub platform: &'a dyn EbpfPlatform,
 }
 
-impl<'a> DomainContext<'a> {
-    /// Construct a `DomainContext` from the full options struct.
-    pub fn new(
-        program_info: &'a ProgramInfo,
-        program: &'a Program,
-        options: &'a EbpfVerifierOptions,
-        platform: &'a dyn EbpfPlatform,
-    ) -> Self {
-        DomainContext {
-            program_info,
-            program,
-            runtime: &options.runtime,
-            options,
-            platform,
-        }
+impl DomainContext<'_> {
+    /// The verifier-semantic subset of the options, as upstream's
+    /// `AnalysisContext::runtime()`.
+    pub fn runtime(&self) -> &EbpfRuntimeConfig {
+        &self.options.runtime
     }
 }
 
@@ -478,7 +466,7 @@ impl EbpfDomain {
         ctx: &DomainContext,
         registry: &mut VariableRegistry,
     ) -> EbpfDomain {
-        let mut inv = EbpfDomain::new(ctx.runtime);
+        let mut inv = EbpfDomain::new(ctx.runtime());
         for i in 0u8..=9 {
             let r = reg_pack(&Reg { v: i }, registry);
             inv.add_value_constraint(&leq(r.svalue.into(), (i32::MAX as i64).into()), registry);
@@ -488,7 +476,7 @@ impl EbpfDomain {
             inv.add_value_constraint(
                 &leq(
                     r.stack_offset.into(),
-                    (ctx.runtime.total_stack_size() as i64).into(),
+                    (ctx.runtime().total_stack_size() as i64).into(),
                 ),
                 registry,
             );
@@ -504,7 +492,7 @@ impl EbpfDomain {
             );
             inv.add_value_constraint(&geq(r.packet_offset.into(), 0i64.into()), registry);
 
-            if ctx.options.runtime.check_for_termination {
+            if ctx.runtime().check_for_termination {
                 for counter in registry.get_loop_counters() {
                     inv.add_value_constraint(
                         &leq(counter.into(), (i32::MAX as i64).into()),
@@ -527,7 +515,7 @@ impl EbpfDomain {
         self.add_value_constraint(
             &lt(
                 registry.packet_size().into(),
-                (ctx.runtime.max_packet_size as i64).into(),
+                (ctx.runtime().max_packet_size as i64).into(),
             ),
             registry,
         );
@@ -556,8 +544,8 @@ impl EbpfDomain {
         ctx: &DomainContext,
         registry: &mut VariableRegistry,
     ) -> EbpfDomain {
-        let total_stack = ctx.runtime.total_stack_size();
-        let mut inv = EbpfDomain::new(ctx.runtime);
+        let total_stack = ctx.runtime().total_stack_size();
+        let mut inv = EbpfDomain::new(ctx.runtime());
 
         let r10 = reg_pack(&R10_STACK_POINTER, registry);
         inv.add_value_constraint(
@@ -565,7 +553,7 @@ impl EbpfDomain {
             registry,
         );
         inv.add_value_constraint(
-            &leq(r10.uvalue.into(), ctx.runtime.ptr_max().into()),
+            &leq(r10.uvalue.into(), ctx.runtime().ptr_max().into()),
             registry,
         );
         inv.state
@@ -578,7 +566,7 @@ impl EbpfDomain {
             let r1 = reg_pack(&R1_ARG, registry);
             inv.add_value_constraint(&leq(1i64.into(), r1.uvalue.into()), registry);
             inv.add_value_constraint(
-                &leq(r1.uvalue.into(), ctx.runtime.ptr_max().into()),
+                &leq(r1.uvalue.into(), ctx.runtime().ptr_max().into()),
                 registry,
             );
             inv.state.values.assign_i64(r1.ctx_offset, 0, registry);
@@ -602,7 +590,7 @@ impl EbpfDomain {
         let mut inv = if setup_constraints {
             EbpfDomain::setup_entry(false, ctx, registry)
         } else {
-            EbpfDomain::new(ctx.runtime)
+            EbpfDomain::new(ctx.runtime())
         };
         let mut numeric_ranges = Vec::new();
         let parsed =

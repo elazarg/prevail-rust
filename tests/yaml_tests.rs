@@ -518,7 +518,6 @@ fn run_test_case(test_case: &TestCase, platform: &TestPlatform) -> Option<Failur
     let ctx = DomainContext {
         program_info: &info,
         program: &prog,
-        runtime: &options.runtime,
         options: &options,
         platform,
     };

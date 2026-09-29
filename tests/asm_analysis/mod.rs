@@ -17,7 +17,7 @@ use prevail::ir::unmarshal;
 use prevail::linux::linux_platform::LinuxPlatform;
 use prevail::printing;
 use prevail::result::AnalysisResult;
-use prevail::spec::config::EbpfVerifierOptions;
+use prevail::spec::config::{EbpfVerifierOptions, VerbosityOptions};
 use prevail::spec::ebpf_base::EbpfCtxDescriptor;
 use prevail::spec::type_descriptors::{EbpfProgramType, ProgramInfo};
 
@@ -38,7 +38,11 @@ pub fn analyze_asm(asm_text: &str) -> AnalysisResult {
 pub fn analyze_asm_invariants(asm_text: &str) -> String {
     with_analysis(asm_text, |result, program, info, registry| {
         let mut out = Vec::new();
-        printing::print_invariants(&mut out, program, info, false, &result, registry)
+        let verbosity = VerbosityOptions {
+            simplify: false,
+            ..VerbosityOptions::default()
+        };
+        printing::print_invariants(&mut out, program, info, &verbosity, &result, registry)
             .expect("print_invariants failed");
         String::from_utf8(out).expect("non-UTF-8 invariant output")
     })
@@ -76,7 +80,6 @@ fn with_analysis<R>(
     let ctx = DomainContext {
         program_info: &info,
         program: &program,
-        runtime: &options.runtime,
         options: &options,
         platform: &platform,
     };

@@ -4,14 +4,34 @@
 //! Verifier configuration types, mirroring `src/config.hpp`.
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug)]
 pub struct VerbosityOptions {
+    /// Print the CFG with chains merged into basic blocks.
     pub simplify: bool,
     pub print_invariants: bool,
     pub print_failures: bool,
+    /// Print the source line of each instruction, where the ELF carries it.
     pub print_line_info: bool,
     pub dump_btf_types_json: bool,
     pub collect_instruction_deps: bool,
+    /// When printing failure slices, omit per-label invariants and join-point
+    /// detail, leaving the control-flow summary and the instruction trace.
+    pub compact_slice: bool,
+}
+
+impl Default for VerbosityOptions {
+    /// Upstream's defaults: everything off except `simplify`.
+    fn default() -> Self {
+        VerbosityOptions {
+            simplify: true,
+            print_invariants: false,
+            print_failures: false,
+            print_line_info: false,
+            dump_btf_types_json: false,
+            collect_instruction_deps: false,
+            compact_slice: false,
+        }
+    }
 }
 
 /// Runtime/semantic configuration: knobs read by the analyzer, checker,
