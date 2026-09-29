@@ -263,3 +263,47 @@ fn empty_seed_includes_failing_label() {
         assert!(labels.contains(&slice.failing_label));
     }
 }
+
+/// loop.o contains two unrelated out-of-bounds stack accesses, one per loop.
+#[test]
+fn loop_reports_all_independent_failures() {
+    let sample = "build/loop.o";
+    if !sample_exists(sample) {
+        eprintln!("SKIP: sample file not found: {sample}");
+        return;
+    }
+    let slices = analyze_with_deps(sample, "test_md").compute_slices();
+
+    assert_eq!(slices.len(), 2);
+    assert_ne!(slices[0].failing_label, slices[1].failing_label);
+}
+
+/// print_failure_slices renders a distinct section per slice, not just the first.
+#[test]
+fn print_failure_slices_renders_section_per_failure() {
+    let sample = "build/loop.o";
+    if !sample_exists(sample) {
+        eprintln!("SKIP: sample file not found: {sample}");
+        return;
+    }
+    let mut state = analyze_with_deps(sample, "test_md");
+    let slices = state.compute_slices();
+    assert_eq!(slices.len(), 2);
+
+    let mut output = Vec::new();
+    prevail::printing::print_failure_slices(
+        &mut output,
+        &state.program,
+        &state.info,
+        false,
+        &state.result,
+        &state.registry,
+        &slices,
+        false,
+    )
+    .unwrap();
+    let output_str = String::from_utf8(output).unwrap();
+
+    assert!(output_str.contains("Failure Slice 1 of 2"));
+    assert!(output_str.contains("Failure Slice 2 of 2"));
+}

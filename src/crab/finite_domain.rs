@@ -419,7 +419,13 @@ impl FiniteDomain {
         reg: &VariableRegistry,
     ) -> Vec<LinearConstraint> {
         if let Some(rn) = right_interval.singleton() {
-            let left_svalue_interval = self.eval_interval(left_svalue, reg);
+            // The zone domain stores bounds as unbounded numbers, and its closure can derive a
+            // bound for an svalue from a difference constraint plus the other operand's bound.
+            // That sum is a sound but unrepresentable bound: it can land outside [i64::MIN,
+            // i64::MAX] even though the register itself always holds a 64-bit signed value.
+            // Read the 64-bit view, exactly as get_signed_intervals() hands one to every other
+            // assume helper, so the endpoints below can be taken as i64.
+            let left_svalue_interval = self.eval_interval(left_svalue, reg).truncate_to_signed(64);
             if left_svalue_interval.finite_size().is_some() {
                 let lb = left_svalue_interval.lb().number().unwrap().narrow_to_i64();
                 let rn_i64 = rn.cast_to_signed_width(64).narrow_to_i64();
@@ -2176,7 +2182,11 @@ impl FiniteDomain {
             self.shl_overflow_num(svalue, uvalue, &Number::from(imm as i64), reg);
             return;
         }
-        let (lb_num, ub_num) = uinterval.pair_number();
+        // Zone weights are unbounded numbers, so closing a difference constraint against the
+        // other operand's bound can give uvalue a finite bound outside [0, u64::MAX], or a
+        // negative one that has not yet been re-established as non-negative. Both are sound
+        // but not representable, so read the 64-bit unsigned view of the endpoints.
+        let (lb_num, ub_num) = uinterval.truncate_to_unsigned(64).pair_number();
         let mut lb_n = lb_num.narrow_to_u64();
         let mut ub_n = ub_num.narrow_to_u64();
         let uint_max: u64 = if finite_width == 64 {
@@ -2220,7 +2230,8 @@ impl FiniteDomain {
     ) {
         let uinterval = self.eval_interval(uvalue, reg);
         if uinterval.finite_size().is_some() {
-            let (lb_num, ub_num) = uinterval.pair_number();
+            // See shl(): a finite stored bound need not be representable as a u64.
+            let (lb_num, ub_num) = uinterval.truncate_to_unsigned(64).pair_number();
             let (lb_n, ub_n);
             if finite_width == 64 {
                 lb_n =

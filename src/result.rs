@@ -307,6 +307,8 @@ pub struct AnalysisResult {
     pub failed: bool,
     /// Maximum loop iteration count encountered during analysis.
     pub max_loop_count: i32,
+    /// Deepest nesting of BPF-to-BPF calls reachable from the entry (the entry frame is 0).
+    pub max_call_depth: i32,
     /// Range of possible exit values (r0 at exit).
     pub exit_value: Interval,
 }
@@ -318,6 +320,7 @@ impl AnalysisResult {
             invariants: BTreeMap::new(),
             failed: false,
             max_loop_count: 0,
+            max_call_depth: 0,
             exit_value: Interval::top(),
         }
     }

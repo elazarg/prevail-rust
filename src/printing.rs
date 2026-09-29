@@ -941,21 +941,8 @@ pub fn print_invariants(
             print_line_info_for_label(out, info, label, &mut previous_source)?;
             print_instruction_at_label(out, prog, label)?;
             last_label = label.clone();
-
-            if let Some(current) = result.invariants.get(&last_label)
-                && let Some(ref error) = current.error
-            {
-                writeln!(out, "\nVerification error:")?;
-                if *label != *bb.last_label() {
-                    let mut buf = String::new();
-                    current.pre.write_to(&mut buf, registry).unwrap();
-                    writeln!(out, "After {buf}")?;
-                }
-                print_error(out, error)?;
-                writeln!(out)?;
-                return Ok(());
-            }
         }
+
         if let Some(current) = result.invariants.get(&last_label)
             && !current.post.is_bottom()
         {

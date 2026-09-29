@@ -301,14 +301,14 @@ parity_test!(
     parity_linux_xdp_redirect_cpu_kern_proto,
     "linux/xdp_redirect_cpu_kern.o",
     "xdp_cpu_map3_proto_separate",
-    "s[4092...4095].uvalue-r8.packet_offset<=2"
+    "s[4092...4095].svalue-r8.packet_offset<=2"
 );
 
 parity_test!(
     parity_linux_xdp_redirect_cpu_kern_ddos,
     "linux/xdp_redirect_cpu_kern.o",
     "xdp_cpu_map4_ddos_filter_pktgen",
-    "packet_size-s[4092...4095].uvalue<=65534"
+    "packet_size-s[4092...4095].svalue<=65534"
 );
 
 parity_test!(
@@ -329,7 +329,7 @@ parity_test!(
     parity_prototype_xdp_redirect_cpu_kern_ddos,
     "prototype-kernel/xdp_redirect_cpu_kern.o",
     "xdp_cpu_map4_ddos_filter_pktgen",
-    "packet_size-s[4092...4095].uvalue<=65534"
+    "packet_size-s[4092...4095].svalue<=65534"
 );
 
 // ============================================================================

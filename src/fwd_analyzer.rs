@@ -7,6 +7,7 @@
 //! Uses an interleaved forward fixpoint iteration strategy with widening
 //! and narrowing, driven by the Weak Topological Ordering (WTO) of the CFG.
 
+use std::collections::BTreeSet;
 use std::rc::Rc;
 
 use crate::arith::extended_number::ExtendedNumber;
@@ -288,6 +289,23 @@ impl<'a, P: Program> FwdFixpointIterator<'a, P> {
         i32::MAX
     }
 
+    /// Compute the deepest nesting of BPF-to-BPF calls reachable from the CFG entry.
+    fn max_call_depth(&self) -> i32 {
+        let mut max_call_depth = 0;
+        let mut visited = BTreeSet::new();
+        let mut worklist = vec![self.cfg.entry_label()];
+        while let Some(label) = worklist.pop() {
+            if !visited.insert(label.clone()) {
+                continue;
+            }
+
+            // Label depth includes the entry frame; callers need only BPF-to-BPF calls.
+            max_call_depth = max_call_depth.max(label.call_stack_depth() - 1);
+            worklist.extend(self.cfg.children_of(&label).iter().cloned());
+        }
+        max_call_depth
+    }
+
     // ========================================================================
     // WTO visitor dispatch
     // ========================================================================
@@ -416,6 +434,7 @@ impl<'a, P: Program> FwdFixpointIterator<'a, P> {
         registry: &'a mut VariableRegistry,
     ) -> AnalysisResult {
         let mut analyzer = FwdFixpointIterator::new(prog, ctx, registry);
+        analyzer.result.max_call_depth = analyzer.max_call_depth();
 
         if ctx.options.runtime.check_for_termination {
             // Initialize loop counters for potential loop headers.

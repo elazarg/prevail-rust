@@ -844,10 +844,14 @@ fn do_store_stack(
     let store_type_var = stack.store_type(&mut state.types, &addr, &width, must_be_num, access);
     state.assign_type_var_expr(store_type_var, &val_type, access.registry);
 
+    // Forget both numeric views before either strong update below. Killing a cell of one
+    // numeric kind also forgets that cell's other numeric kind, so a strong update over a
+    // still-present cell of the other kind would erase the value just assigned to the first.
+    // This must follow store_type, which marks the written bytes numeric so that the
+    // numeric cells partially overlapping them can be split.
+    stack.havoc(&mut state.values, DataKind::Svalues, &addr, &width, access);
+    stack.havoc(&mut state.values, DataKind::Uvalues, &addr, &width, access);
     if exact_width == 8 {
-        stack.havoc(&mut state.values, DataKind::Svalues, &addr, &width, access);
-        stack.havoc(&mut state.values, DataKind::Uvalues, &addr, &width, access);
-
         if let Some(sv) = stack.store(&mut state.values, DataKind::Svalues, &addr, &width, access) {
             state.values.assign_expr(sv, val_svalue, access.registry);
         }
@@ -882,8 +886,6 @@ fn do_store_stack(
                 true,
                 access.registry,
             );
-        } else {
-            stack.havoc(&mut state.values, DataKind::Svalues, &addr, &width, access);
         }
         if let Some(stack_uvalue) =
             stack.store(&mut state.values, DataKind::Uvalues, &addr, &width, access)
@@ -897,12 +899,7 @@ fn do_store_stack(
                 false,
                 access.registry,
             );
-        } else {
-            stack.havoc(&mut state.values, DataKind::Uvalues, &addr, &width, access);
         }
-    } else {
-        stack.havoc(&mut state.values, DataKind::Svalues, &addr, &width, access);
-        stack.havoc(&mut state.values, DataKind::Uvalues, &addr, &width, access);
     }
 
     update_stack_numeric_size_after_store(
@@ -1029,12 +1026,12 @@ fn do_mem_store(
 fn add_to_reg(
     dom: &mut EbpfDomain,
     dst_reg: &Reg,
-    imm: i32,
+    imm: i64,
     finite_width: i32,
     registry: &mut VariableRegistry,
 ) {
     let dst = reg_pack(dst_reg, registry);
-    let n = Number::from(imm as i64);
+    let n = Number::from(imm);
     if dom.state.types.may_have_type_reg(dst_reg, T_NUM, registry) {
         // T_NUM: the standard coupled signed/unsigned overflow on both halves.
         dom.state.values.inner_mut().add_overflow_num(
@@ -1054,14 +1051,13 @@ fn add_to_reg(
         // Pointer-only: advance the pointer's offset (e.g. packet_offset) and
         // drive svalue from uvalue+imm. svalue must not be touched as a signed
         // value here — it carries no meaning for non-T_NUM registers.
-        if let Some(offset) = dom.state.get_type_offset_variable(dst_reg, registry) {
-            dom.state.values.inner_mut().add_num(offset, &n, registry);
-        } else {
-            // The register's typeset is non-singleton, so we cannot pick a single offset
-            // variable to update. Conservatively invalidate all offset variables rather than
-            // leaving them stale, which would make subsequent bounds checks use a pre-add
-            // offset and accept out-of-bounds accesses. Mirrors shl()/lshr()/ashr().
-            dom.state.havoc_offsets(dst_reg, registry);
+        // Advance the primary kind variable of every type the register may have. Each such
+        // variable is meaningful only while the register has its type, so advancing all of them
+        // is exact for every alternative and relates no variable to another type's.
+        for te in dom.state.types.iterate_types(dst_reg, registry) {
+            if let Some(offset) = get_type_offset_variable(dst_reg, te, registry) {
+                dom.state.values.inner_mut().add_num(offset, &n, registry);
+            }
         }
         dom.state.values.inner_mut().apply_unsigned_var_num(
             FiniteBinOp::Arith(ArithBinOp::ADD),
@@ -1393,7 +1389,7 @@ fn transform_exit(
     add_to_reg(
         dom,
         &R10_STACK_POINTER,
-        ctx.runtime.subprogram_stack_size,
+        i64::from(ctx.runtime.subprogram_stack_size),
         64,
         registry,
     );
@@ -1802,7 +1798,7 @@ fn transform_call_local(
     add_to_reg(
         dom,
         &R10_STACK_POINTER,
-        -ctx.runtime.subprogram_stack_size,
+        -i64::from(ctx.runtime.subprogram_stack_size),
         64,
         registry,
     );
@@ -1951,21 +1947,15 @@ fn transform_bin(
                     if imm == 0 {
                         return Ok(());
                     }
-                    add_to_reg(dom, &bin.dst, imm as i32, finite_width, registry);
+                    add_to_reg(dom, &bin.dst, imm, finite_width, registry);
                 }
                 BinOp::SUB => {
                     if imm == 0 {
                         return Ok(());
                     }
-                    // imm is always in i32 range (sign-extended from the instruction's
-                    // 32-bit immediate field), but negating i32::MIN overflows i32;
-                    // narrow the i64 negation instead of negating the truncated i32.
-                    let neg_imm = i32::try_from(-imm).map_err(|_| {
-                        VerificationError::new(format!(
-                            "Immediate value {imm} cannot be negated for SUB"
-                        ))
-                    })?;
-                    add_to_reg(dom, &bin.dst, neg_imm, finite_width, registry);
+                    // Negate in 64 bits: imm is a sign-extended 32-bit value, so -i32::MIN
+                    // is representable here even though it does not fit in an i32.
+                    add_to_reg(dom, &bin.dst, -imm, finite_width, registry);
                 }
                 BinOp::MUL => {
                     dom.state.values.inner_mut().mul_num(

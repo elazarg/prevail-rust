@@ -345,7 +345,9 @@ fn main() -> ExitCode {
             print_failures: cli.print_failures,
             print_line_info: cli.line_info,
             dump_btf_types_json: cli.print_btf_types,
-            collect_instruction_deps: cli.failure_slice,
+            // Enable dependency collection whenever a failure-slice-style rendering may run,
+            // either explicitly (--failure-slice) or implicitly (-v on a failing program).
+            collect_instruction_deps: cli.failure_slice || cli.print_invariants,
         },
     };
 
@@ -591,14 +593,33 @@ fn main() -> ExitCode {
 
     if !cli.quiet {
         if opts.verbosity_opts.print_invariants {
-            let _ = prevail::printing::print_invariants(
-                &mut std::io::stdout(),
-                &program,
-                info,
-                simplify,
-                &result,
-                &registry,
-            );
+            if result.failed && !cli.failure_slice {
+                let slices = result.compute_failure_slices(
+                    &program,
+                    &ctx,
+                    &mut registry,
+                    prevail::result::SliceParams::default(),
+                );
+                let _ = prevail::printing::print_failure_slices(
+                    &mut std::io::stdout(),
+                    &program,
+                    info,
+                    simplify,
+                    &result,
+                    &registry,
+                    &slices,
+                    false,
+                );
+            } else {
+                let _ = prevail::printing::print_invariants(
+                    &mut std::io::stdout(),
+                    &program,
+                    info,
+                    simplify,
+                    &result,
+                    &registry,
+                );
+            }
         }
         if opts.verbosity_opts.print_failures
             && let Some(ref error) = result.find_first_error()
