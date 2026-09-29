@@ -20,9 +20,9 @@ pub fn run(root: &Path, args: &[String], bin: Option<&PathBuf>) -> Result<()> {
         .stderr(Stdio::inherit());
     let status = cmd
         .status()
-        .with_context(|| format!("failed to run upstream check at {:?}", cmd))?;
+        .with_context(|| format!("failed to run upstream check at {cmd:?}"))?;
     if !status.success() {
-        bail!("Upstream check failed with {}", status);
+        bail!("Upstream check failed with {status}");
     }
     Ok(())
 }

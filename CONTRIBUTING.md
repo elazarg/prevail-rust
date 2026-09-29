@@ -24,8 +24,8 @@ rustup check
 If a new stable version is available, bump `rust-toolchain.toml` first:
 
 1. Update the `channel` field (e.g. `"1.93"` → `"1.94"`)
-2. `cargo fmt` — new formatting rules may apply
-3. `cargo clippy -- -D warnings` — new lints may fire
+2. `cargo fmt --all` — new formatting rules may apply
+3. `cargo clippy --workspace --all-targets -- -D warnings` — new lints may fire
 4. `cargo test` — verify nothing regressed
 5. Commit: `Bump Rust toolchain to 1.XX`
 
@@ -87,8 +87,8 @@ cargo xtask test
 ```
 
 By default (no suite argument), this runs the non-parity suite:
-- `cargo fmt --check`
-- `cargo clippy --all-targets -- -D warnings`
+- `cargo fmt --all --check`
+- `cargo clippy --workspace --all-targets -- -D warnings`
 - `cargo test --lib`
 - `cargo test --test conformance_tests`
 - `cargo test --test elf_verify_tests`

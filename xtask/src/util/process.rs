@@ -10,7 +10,7 @@ use anyhow::{Context, Result};
 /// Run a command, returning its exit status.
 pub fn run_status(cmd: &mut Command) -> Result<ExitStatus> {
     cmd.status()
-        .with_context(|| format!("failed to run {:?}", cmd))
+        .with_context(|| format!("failed to run {cmd:?}"))
 }
 
 /// Run a command and print elapsed time. Returns success status.

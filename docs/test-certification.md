@@ -78,7 +78,7 @@ clean source state.
 
 `cargo xtask hook pre-push`:
 
-1. Runs clippy (`--all-targets -D warnings`).
+1. Runs clippy (`--workspace --all-targets -D warnings`).
 2. Verifies required suite certifications at `HEAD`.
 
 Default required suites: `all`.

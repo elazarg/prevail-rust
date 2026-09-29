@@ -156,8 +156,16 @@ fn suite_spec(name: &str) -> Result<SuiteSpec> {
     let all_non_parity = SuiteSpec {
         name: "all-no-parity",
         pre_commands: vec![
-            vec!["cargo", "fmt", "--check"],
-            vec!["cargo", "clippy", "--all-targets", "--", "-D", "warnings"],
+            vec!["cargo", "fmt", "--all", "--check"],
+            vec![
+                "cargo",
+                "clippy",
+                "--workspace",
+                "--all-targets",
+                "--",
+                "-D",
+                "warnings",
+            ],
             vec!["cargo", "test", "--lib"],
             vec!["cargo", "test", "--test", "conformance_tests"],
             vec![
@@ -184,8 +192,16 @@ fn suite_spec(name: &str) -> Result<SuiteSpec> {
         "all" => Ok(SuiteSpec {
             name: "all",
             pre_commands: vec![
-                vec!["cargo", "fmt", "--check"],
-                vec!["cargo", "clippy", "--all-targets", "--", "-D", "warnings"],
+                vec!["cargo", "fmt", "--all", "--check"],
+                vec![
+                    "cargo",
+                    "clippy",
+                    "--workspace",
+                    "--all-targets",
+                    "--",
+                    "-D",
+                    "warnings",
+                ],
                 vec!["cargo", "test", "--", "--test-threads=1"],
             ],
             command: vec!["cargo", "xtask", "parity", "compare"],
@@ -370,15 +386,12 @@ pub fn verify_required_suites(root: &Path, suites: &[String]) -> Result<Vec<Veri
             }
         };
 
-        let cert = match read_cert_from_head(root, spec.name)? {
-            Some(cert) => cert,
-            None => {
-                failures.push(VerifyError::new(
-                    spec.name,
-                    format!("missing certification at HEAD: {}", cert_rel(spec.name)),
-                ));
-                continue;
-            }
+        let Some(cert) = read_cert_from_head(root, spec.name)? else {
+            failures.push(VerifyError::new(
+                spec.name,
+                format!("missing certification at HEAD: {}", cert_rel(spec.name)),
+            ));
+            continue;
         };
 
         if cert.schema_version != CERT_SCHEMA_VERSION {

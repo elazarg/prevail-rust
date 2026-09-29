@@ -8,11 +8,18 @@ use anyhow::{Result, bail};
 use crate::{cmd::test_cert, util::process};
 
 pub fn run(root: &Path) -> Result<()> {
-    eprintln!("[pre-push] Running clippy on all targets with -D warnings.");
+    eprintln!("[pre-push] Running clippy on all workspace targets with -D warnings.");
     eprintln!("[pre-push] This can take a while on cold caches.");
 
     let mut cmd = process::cargo(root);
-    cmd.args(["clippy", "--all-targets", "--", "-D", "warnings"]);
+    cmd.args([
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings",
+    ]);
 
     if !process::run_timed(&mut cmd, "pre-push")? {
         bail!("[pre-push] Clippy failed. Fix warnings/errors before pushing.");

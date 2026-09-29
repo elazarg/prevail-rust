@@ -48,7 +48,7 @@ pub fn run(root: &Path) -> Result<()> {
     if has_rust {
         let check = std::process::Command::new("cargo")
             .current_dir(root)
-            .args(["fmt", "--check"])
+            .args(["fmt", "--all", "--check"])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status()?;
@@ -56,7 +56,7 @@ pub fn run(root: &Path) -> Result<()> {
             let status = process::run_status(
                 std::process::Command::new("cargo")
                     .current_dir(root)
-                    .arg("fmt"),
+                    .args(["fmt", "--all"]),
             )?;
             if !status.success() {
                 bail!("cargo fmt failed");
