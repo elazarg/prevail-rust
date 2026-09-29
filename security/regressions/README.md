@@ -15,11 +15,17 @@ security/regressions/check.sh        # asserts none of them crash
 | `fuzz_program/F003_local_call_continuation` | F-003 | abort at `cfg/graph.rs` `get_child` (local call without single continuation) | `out_degree` guard in `add_cfg_nodes` |
 | `fuzz_end_to_end/CFG01_instruction_at_missing_label` | C-001 | abort at `program.rs` `instruction_at` (local call into the middle of a wide `lddw`) | ValidateControlFlowTargets pass |
 | `fuzz_end_to_end/CFG02_get_node_mut_missing_label` | C-002 | abort at `cfg/graph.rs` `get_node_mut` (jump to a non-instruction offset) | ValidateControlFlowTargets pass |
-| `sdiv_negative_divisor_panic.yaml` | S-001 | abort at `zone_domain.rs` `assert!(!intv.is_bottom())` (`sdiv` by a negative constant collapsed to bottom) | swap endpoints in `Interval::sdiv` |
+| `fuzz_assembler/ASM01_negative_offset_negate_overflow` | — | abort in `decode_offset` negating an out-of-range negative hex offset | range-check the magnitude before negating |
 
 The ELF reproducers double as a parity check: `check.sh` only asserts no crash,
 but `D001` should now produce exit 1 (reject), matching C++. `check.sh` replays
 the `fuzz_end_to_end/` ELFs through the `fuzz_end_to_end` libfuzzer harness.
+
+S-001 (an abort at `zone_domain.rs` `assert!(!intv.is_bottom())`, where `sdiv` by
+a negative constant collapsed to bottom) is covered by the unit tests
+`sdiv_by_negative_constant_swaps_endpoints_not_bottom` and
+`sdiv_by_negative_constant_flips_infinite_bound_sign`, and by upstream
+`sdivmod.yaml`, which runs the same `r1 s/= -1`.
 
 F-001 and F-002 also have fast Rust unit-test regressions
 (`all_num_width_inverted_range_does_not_panic`,

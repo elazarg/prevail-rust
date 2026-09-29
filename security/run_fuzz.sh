@@ -35,23 +35,35 @@ echo "targets: ${TARGETS[*]}"
 echo
 
 crashes=0
+errors=0
+marker="$(mktemp)"
+trap 'rm -f "$marker"' EXIT
 for t in "${TARGETS[@]}"; do
   echo "--- $t ---"
+  touch "$marker"
   # Seed corpus from previous runs is reused automatically (corpus/<t>/).
   cargo +nightly fuzz run "$t" -- -max_total_time="$SECS" -print_final_stats=1 2>&1 \
-    | grep -E "panicked|Done [0-9]|stat::average_exec|stat::number_of_exec|SUMMARY|ERROR:" \
+    | grep -E "panicked|Done [0-9]|stat::average_exec|stat::number_of_exec|SUMMARY|ERROR:|^error" \
     | sed 's/^/  /'
+  status=${PIPESTATUS[0]}
 
   # cargo-fuzz writes reproducers to fuzz/artifacts/<t>/ (crash-*, oom-*, timeout-*).
+  # Collect only the ones this run wrote; earlier runs' artifacts stay put.
+  new_artifacts=0
   art_dir="$ROOT/fuzz/artifacts/$t"
   if [ -d "$art_dir" ]; then
-    for art in "$art_dir"/crash-* "$art_dir"/oom-* "$art_dir"/timeout-*; do
-      [ -e "$art" ] || continue
+    while IFS= read -r art; do
       dest="$FINDINGS/fuzz_${t}_$(basename "$art")"
       cp "$art" "$dest"
       echo "  CRASH -> $dest"
-      crashes=$((crashes + 1))
-    done
+      new_artifacts=$((new_artifacts + 1))
+    done < <(find "$art_dir" -maxdepth 1 -type f -newer "$marker" \
+               \( -name 'crash-*' -o -name 'oom-*' -o -name 'timeout-*' \))
+  fi
+  crashes=$((crashes + new_artifacts))
+  if [ "$status" -ne 0 ] && [ "$new_artifacts" -eq 0 ]; then
+    echo "  ERROR: cargo fuzz exited $status without writing a reproducer (build failure?)"
+    errors=$((errors + 1))
   fi
   echo
 done
@@ -59,4 +71,5 @@ done
 echo "== done: $crashes crash artifact(s) collected under $FINDINGS =="
 echo "Reproduce a crash with:"
 echo "  cd fuzz && cargo +nightly fuzz run <target> <artifact-file>"
-[ "$crashes" -eq 0 ]
+[ "$errors" -gt 0 ] && echo "== $errors target(s) failed to run =="
+[ "$crashes" -eq 0 ] && [ "$errors" -eq 0 ]

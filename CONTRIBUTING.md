@@ -89,10 +89,7 @@ cargo xtask test
 By default (no suite argument), this runs the non-parity suite:
 - `cargo fmt --all --check`
 - `cargo clippy --workspace --all-targets -- -D warnings`
-- `cargo test --lib`
-- `cargo test --test conformance_tests`
-- `cargo test --test elf_verify_tests`
-- `cargo test --test yaml_tests`
+- `cargo test -- --test-threads=1` (every test binary)
 
 The command reuses a local certification when valid, otherwise runs the suite
 and updates `tests/certs/<suite>.json` on success.

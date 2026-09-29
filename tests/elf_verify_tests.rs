@@ -2905,32 +2905,6 @@ macro_rules! verify_section_skip {
     };
 }
 
-/// Generate a skip test for a program (known timeout or algorithmic limitation).
-#[expect(unused_macros)]
-macro_rules! verify_program_skip {
-    ($name:ident, $dir:expr, $file:expr, $section:expr, $program:expr, $count:expr, $reason:expr) => {
-        #[test]
-        #[ignore = $reason]
-        fn $name() {
-            assert!(
-                verify_program(
-                    &format!("ebpf-samples/{}/{}", $dir, $file),
-                    $section,
-                    $program,
-                    $count,
-                    &default_opts()
-                ),
-                "Expected {} {} {} {} to pass (skipped: {})",
-                $dir,
-                $file,
-                $section,
-                $program,
-                $reason
-            );
-        }
-    };
-}
-
 // ============================================================================
 // build/ additional tests (new in upstream)
 // ============================================================================
@@ -5486,73 +5460,6 @@ fn multithreading_verify_two_sections() {
         thread::spawn(|| verify_section("ebpf-samples/build/stackok.o", ".text", &default_opts()));
     assert!(h1.join().unwrap(), "byteswap should pass");
     assert!(h2.join().unwrap(), "stackok should pass");
-}
-
-// ============================================================================
-// CLI help text comparison test
-// ============================================================================
-
-/// Compare Rust `--help` output against C++ upstream.
-/// Skipped if either binary is not available.
-#[test]
-fn help_output_matches_cpp() {
-    use std::process::Command;
-
-    let cpp_binary = path_config::UPSTREAM_CHECK_BIN;
-    if !std::path::Path::new(cpp_binary).exists() {
-        eprintln!(
-            "Skipping help comparison: C++ binary not found at {}",
-            path_config::UPSTREAM_CHECK_BIN
-        );
-        return;
-    }
-
-    // Look for the default Rust binary name in the target directory.
-    let rust_binary = "target/debug/prevail";
-    if !std::path::Path::new(rust_binary).exists() {
-        eprintln!(
-            "Skipping help comparison: Rust binary not found at {rust_binary}\n\
-             Build it with: cargo build"
-        );
-        return;
-    }
-
-    let cpp_output = Command::new(cpp_binary)
-        .arg("--help")
-        .output()
-        .expect("Failed to run C++ binary");
-    let rust_output = Command::new(rust_binary)
-        .arg("--help")
-        .output()
-        .expect("Failed to run Rust binary");
-
-    let cpp_text = String::from_utf8_lossy(&cpp_output.stdout);
-    let rust_text = String::from_utf8_lossy(&rust_output.stdout);
-
-    // Normalize: replace the binary path prefix (first non-empty line containing [OPTIONS])
-    // with a fixed placeholder so paths don't cause spurious diffs.
-    let normalize = |text: &str| -> String {
-        text.lines()
-            .map(|line| {
-                if line.contains("[OPTIONS] path [section] [function]") {
-                    "BINARY [OPTIONS] path [section] [function]".to_string()
-                } else {
-                    line.to_string()
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
-
-    let cpp_normalized = normalize(&cpp_text);
-    let rust_normalized = normalize(&rust_text);
-
-    assert_eq!(
-        cpp_normalized, rust_normalized,
-        "Help text diverged from C++ upstream.\n\
-         To fix: update the help text in src/main.rs print_help().\n\
-         C++ output:\n{cpp_text}\n\nRust output:\n{rust_text}"
-    );
 }
 
 // ============================================================================

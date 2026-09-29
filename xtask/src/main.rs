@@ -58,14 +58,14 @@ enum Command {
         #[command(subcommand)]
         action: ParityAction,
     },
-    /// Show upstream commits since last sync.
+    /// Fetch upstream and show its commits since the pinned submodule commit.
     UpstreamDiff {
         /// Path to upstream repo (default: tests/upstream).
         dir: Option<PathBuf>,
     },
     /// Run the upstream C++ verifier binary.
     RunUpstream {
-        /// Custom path to the upstream binary (default: tests/upstream/bin/check).
+        /// Custom path to the upstream binary (default: tests/upstream/bin/prevail).
         #[arg(long)]
         bin: Option<PathBuf>,
         /// Arguments forwarded to upstream check.
@@ -100,11 +100,6 @@ enum Command {
         /// Extra arguments forwarded to the underlying command after `--`.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
-    },
-    /// Legacy submodule command spelling.
-    Submodule {
-        #[command(subcommand)]
-        action: SubmoduleAction,
     },
 }
 
@@ -201,12 +196,6 @@ enum DiffAction {
         /// Test case name substring.
         case: String,
     },
-}
-
-#[derive(Subcommand)]
-enum SubmoduleAction {
-    /// Deprecated: use `xtask bump`.
-    Update,
 }
 
 #[derive(Subcommand)]
@@ -346,9 +335,6 @@ fn run(cli: Cli) -> Result<()> {
             let suite = suite.unwrap_or_else(|| "all-no-parity".to_string());
             cmd::test_cert::run_suite(&root, &suite, &args, no_cache, !no_amend)
         }
-        Command::Submodule { action } => match action {
-            SubmoduleAction::Update => anyhow::bail!("did you mean \"cargo xtask bump\"?"),
-        },
     }
 }
 

@@ -86,7 +86,7 @@ pub fn run(root: &Path) -> Result<()> {
 fn clean_upstream_build_artifacts(root: &Path) -> Result<()> {
     let upstream = root.join("tests/upstream");
     let build_dir = upstream.join("build");
-    let legacy_bin_dir = upstream.join("bin");
+    let bin_dir = upstream.join("bin");
 
     if build_dir.exists() {
         fs::remove_dir_all(&build_dir)?;
@@ -95,11 +95,11 @@ fn clean_upstream_build_artifacts(root: &Path) -> Result<()> {
             build_dir.display()
         );
     }
-    if legacy_bin_dir.exists() {
-        fs::remove_dir_all(&legacy_bin_dir)?;
+    if bin_dir.exists() {
+        fs::remove_dir_all(&bin_dir)?;
         eprintln!(
-            "info: removed legacy upstream binaries at {}",
-            legacy_bin_dir.display()
+            "info: removed stale upstream binaries at {}",
+            bin_dir.display()
         );
     }
     Ok(())

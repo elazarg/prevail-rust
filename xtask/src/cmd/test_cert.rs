@@ -152,58 +152,31 @@ impl PathFilter {
     }
 }
 
-fn suite_spec(name: &str) -> Result<SuiteSpec> {
-    let all_non_parity = SuiteSpec {
-        name: "all-no-parity",
-        pre_commands: vec![
-            vec!["cargo", "fmt", "--all", "--check"],
-            vec![
-                "cargo",
-                "clippy",
-                "--workspace",
-                "--all-targets",
-                "--",
-                "-D",
-                "warnings",
-            ],
-            vec!["cargo", "test", "--lib"],
-            vec!["cargo", "test", "--test", "conformance_tests"],
-            vec![
-                "cargo",
-                "test",
-                "--test",
-                "elf_verify_tests",
-                "--",
-                "--test-threads=1",
-            ],
-        ],
-        command: vec![
+/// Format and lint checks shared by the full suites.
+fn lint_commands() -> Vec<Vec<&'static str>> {
+    vec![
+        vec!["cargo", "fmt", "--all", "--check"],
+        vec![
             "cargo",
-            "test",
-            "--test",
-            "yaml_tests",
+            "clippy",
+            "--workspace",
+            "--all-targets",
             "--",
-            "--test-threads=1",
+            "-D",
+            "warnings",
         ],
-        clean_requirements: vec!["repo_clean_except_tests_certs"],
-    };
+    ]
+}
 
+/// Every test binary of the verifier crate, single-threaded to bound the peak
+/// memory of the ELF tests.
+const ALL_TESTS: [&str; 4] = ["cargo", "test", "--", "--test-threads=1"];
+
+fn suite_spec(name: &str) -> Result<SuiteSpec> {
     match name {
         "all" => Ok(SuiteSpec {
             name: "all",
-            pre_commands: vec![
-                vec!["cargo", "fmt", "--all", "--check"],
-                vec![
-                    "cargo",
-                    "clippy",
-                    "--workspace",
-                    "--all-targets",
-                    "--",
-                    "-D",
-                    "warnings",
-                ],
-                vec!["cargo", "test", "--", "--test-threads=1"],
-            ],
+            pre_commands: [lint_commands(), vec![ALL_TESTS.to_vec()]].concat(),
             command: vec!["cargo", "xtask", "parity", "compare"],
             clean_requirements: vec![
                 "repo_clean_except_tests_certs",
@@ -212,9 +185,9 @@ fn suite_spec(name: &str) -> Result<SuiteSpec> {
         }),
         "all-no-parity" => Ok(SuiteSpec {
             name: "all-no-parity",
-            pre_commands: all_non_parity.pre_commands,
-            command: all_non_parity.command,
-            clean_requirements: all_non_parity.clean_requirements,
+            pre_commands: lint_commands(),
+            command: ALL_TESTS.to_vec(),
+            clean_requirements: vec!["repo_clean_except_tests_certs"],
         }),
         "lib" => Ok(SuiteSpec {
             name: "lib",

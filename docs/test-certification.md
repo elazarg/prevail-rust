@@ -29,7 +29,7 @@ workflows. It is not a replacement for CI test execution.
   - Reuses existing passing cert when basis matches.
   - Otherwise runs suite command and writes/updates cert on success.
   - With no suite argument, `xtask test` defaults to `all-no-parity`.
-  - `all-no-parity` runs formatting/lint plus non-parity suites (`--lib`, `conformance_tests`, `elf_verify_tests`, `yaml_tests`).
+  - `all-no-parity` runs formatting/lint plus every test binary (`cargo test -- --test-threads=1`).
   - `all` runs formatting/lint, `cargo test`, and then parity compare (`cargo xtask parity compare`).
   - By default, amends `HEAD` to attach/update the suite cert file.
     - opt out: `cargo xtask test <suite> --no-amend`

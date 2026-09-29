@@ -4,10 +4,15 @@
 use std::path::Path;
 use std::process::Command;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 
-use crate::util::paths;
+use crate::util::{git, paths, process};
 
+/// The upstream branch a bump moves the submodule toward.
+const UPSTREAM_BRANCH: &str = "origin/main";
+
+/// Show what upstream changed between the pinned submodule commit and the
+/// tip of the upstream branch, after fetching it.
 pub fn run(root: &Path, dir: Option<&Path>) -> Result<()> {
     let default_upstream = paths::upstream_dir(root);
     let upstream_dir = dir.unwrap_or(&default_upstream);
@@ -16,92 +21,57 @@ pub fn run(root: &Path, dir: Option<&Path>) -> Result<()> {
         bail!("upstream repo not found at {}", upstream_dir.display());
     }
 
-    // Determine sync anchor: submodule-pinned commit or merge-base.
-    let last = {
-        let output = Command::new("git")
-            .current_dir(root)
-            .args(["rev-parse", "--verify", "HEAD:tests/upstream"])
-            .output()
-            .context("failed to check submodule anchor")?;
-        if output.status.success() {
-            let full = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            // Get short hash.
-            let short = Command::new("git")
-                .current_dir(upstream_dir)
-                .args(["rev-parse", "--short", &full])
-                .output()?;
-            String::from_utf8_lossy(&short.stdout).trim().to_string()
-        } else {
-            eprintln!("warning: submodule anchor not found; using merge-base with HEAD");
-            let output = Command::new("git")
-                .current_dir(upstream_dir)
-                .args(["merge-base", "HEAD", "origin/HEAD"])
-                .output()?;
-            if output.status.success() {
-                let full = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                let short = Command::new("git")
-                    .current_dir(upstream_dir)
-                    .args(["rev-parse", "--short", &full])
-                    .output()?;
-                String::from_utf8_lossy(&short.stdout).trim().to_string()
-            } else {
-                let output = Command::new("git")
-                    .current_dir(upstream_dir)
-                    .args(["rev-parse", "--short", "HEAD"])
-                    .output()?;
-                String::from_utf8_lossy(&output.stdout).trim().to_string()
-            }
-        }
-    };
+    run_git(upstream_dir, &["fetch", "origin"])?;
+    let pinned = git::rev_parse_short(root, "HEAD:tests/upstream")?;
+    let tip = git::rev_parse_short(upstream_dir, UPSTREAM_BRANCH)?;
+    let range = format!("{pinned}..{tip}");
 
-    println!("=== Commits since {last} ===");
-    let _ = Command::new("git")
-        .current_dir(upstream_dir)
-        .args(["log", "--oneline", &format!("{last}..HEAD")])
-        .status();
+    println!("=== Commits in {range} ({UPSTREAM_BRANCH}) ===");
+    run_git(upstream_dir, &["log", "--oneline", &range])?;
 
     println!();
     println!("=== Test data changes ===");
-    let _ = Command::new("git")
-        .current_dir(upstream_dir)
-        .args([
+    run_git(
+        upstream_dir,
+        &[
             "log",
             "--oneline",
-            &format!("{last}..HEAD"),
+            &range,
             "--",
             "test-data/*.yaml",
             "src/test/",
-        ])
-        .status();
+        ],
+    )?;
 
     println!();
     println!("=== Source changes (excluding test/build) ===");
-    let _ = Command::new("git")
-        .current_dir(upstream_dir)
-        .args([
+    run_git(
+        upstream_dir,
+        &[
             "log",
             "--oneline",
-            &format!("{last}..HEAD"),
+            &range,
             "--",
             "src/",
             ":!src/test/",
             ":!src/main/",
-        ])
-        .status();
+        ],
+    )?;
 
     println!();
     println!("=== Files changed ===");
-    let _ = Command::new("git")
-        .current_dir(upstream_dir)
-        .args([
-            "diff",
-            "--stat",
-            &format!("{last}..HEAD"),
-            "--",
-            "src/",
-            "test-data/",
-        ])
-        .status();
+    run_git(
+        upstream_dir,
+        &["diff", "--stat", &range, "--", "src/", "test-data/"],
+    )?;
 
+    Ok(())
+}
+
+fn run_git(dir: &Path, args: &[&str]) -> Result<()> {
+    let status = process::run_status(Command::new("git").current_dir(dir).args(args))?;
+    if !status.success() {
+        bail!("git {} failed with {status}", args.join(" "));
+    }
     Ok(())
 }
