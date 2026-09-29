@@ -264,8 +264,8 @@ impl EbpfDomain {
         let map_fd_interval = self.state.values.eval_interval_var(r.map_fd, registry);
         let lb = map_fd_interval.lb().number()?;
         let ub = map_fd_interval.ub().number()?;
-        let start_fd = lb.to_i64()? as i32;
-        let end_fd = ub.to_i64()? as i32;
+        let start_fd = lb.to_i32()?;
+        let end_fd = ub.to_i32()?;
         const MAX_RANGE: i64 = 32;
         let size = map_fd_interval.finite_size()?;
         if size >= MAX_RANGE {

@@ -46,10 +46,6 @@ impl BitsetDomain {
         self.bits.len()
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.bits.is_empty()
-    }
-
     pub fn set_to_top(&mut self) {
         self.bits.insert_range(..);
     }
@@ -117,11 +113,16 @@ impl BitsetDomain {
     }
 
     /// Widen: same as join for bitset domain.
+    ///
+    /// Part of the lattice API upstream's `BitsetDomain` declares; like upstream,
+    /// `ArrayDomain::widen` joins directly, so nothing calls it.
+    #[expect(dead_code)]
     pub fn widen(&self, other: &BitsetDomain) -> BitsetDomain {
         self.join(other)
     }
 
-    /// Narrow: same as meet for bitset domain.
+    /// Narrow: same as meet for bitset domain. See [`Self::widen`].
+    #[expect(dead_code)]
     pub fn narrow(&self, other: &BitsetDomain) -> BitsetDomain {
         self.meet(other)
     }

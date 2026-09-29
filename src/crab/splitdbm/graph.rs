@@ -120,10 +120,10 @@ impl AdaptGraph {
             v
         } else {
             // self.succs.len() as VertId wraps to 0 at 65536 vertices, aliasing the
-            // reserved zero vertex; and at len() == VertId::MAX the new vertex would
-            // make verts()'s one-past-end (65536) wrap to an empty range. An eBPF
-            // program's variable count is orders of magnitude below 65535, so this is
-            // a documented invariant, not a reachable path.
+            // reserved zero vertex, and VertIter could no longer name the vertices
+            // past VertId::MAX. An eBPF program's variable count is orders of
+            // magnitude below that, so this is a documented invariant, not a
+            // reachable path.
             debug_assert!(self.succs.len() < VertId::MAX as usize);
             let v = self.succs.len() as VertId;
             self.is_free.push(false);
@@ -278,8 +278,9 @@ impl AdaptGraph {
 
     /// Iterate over live (non-free) vertex ids.
     pub fn verts(&self) -> VertIter<'_> {
-        // A vertex count of 65536 wraps to 0 through VertId (u16), yielding an empty
-        // range; far beyond any eBPF program's variable count, but guard it.
+        // Each index is narrowed to VertId (u16), so a slot past VertId::MAX would
+        // alias a lower vertex; far beyond any eBPF program's variable count, but
+        // guard it.
         debug_assert!(self.is_free.len() <= VertId::MAX as usize);
         VertIter {
             pos: 0,

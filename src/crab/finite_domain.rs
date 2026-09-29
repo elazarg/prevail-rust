@@ -91,11 +91,11 @@ fn assume_bit_cst_interval(
     src_interval: &Interval,
 ) -> Vec<LinearConstraint> {
     let dst_n = match dst_interval.singleton() {
-        Some(n) if n.to_i64().is_some() || n.to_u64().is_some() => n,
+        Some(n) if n.fits_cast_to(64) => n,
         _ => return vec![],
     };
     let src_n = match src_interval.singleton() {
-        Some(n) if n.to_i64().is_some() || n.to_u64().is_some() => n,
+        Some(n) if n.fits_cast_to(64) => n,
         _ => return vec![],
     };
     let mut src_int_value = src_n.cast_to_unsigned_width(64).narrow_to_u64();
@@ -171,10 +171,6 @@ impl FiniteDomain {
         }
     }
 
-    pub fn from_zone(dom: ZoneDomain) -> Self {
-        FiniteDomain { dom }
-    }
-
     pub fn top() -> Self {
         Self::new()
     }
@@ -189,14 +185,6 @@ impl FiniteDomain {
 
     pub fn zone(&self) -> &ZoneDomain {
         &self.dom
-    }
-
-    pub fn zone_mut(&mut self) -> &mut ZoneDomain {
-        &mut self.dom
-    }
-
-    pub fn into_zone(self) -> ZoneDomain {
-        self.dom
     }
 
     // ========================================================================
@@ -1294,18 +1282,6 @@ impl FiniteDomain {
         self.dom.assign(x, e, reg);
     }
 
-    pub fn assign_opt(
-        &mut self,
-        x: Variable,
-        e: Option<&LinearExpression>,
-        reg: &VariableRegistry,
-    ) {
-        match e {
-            Some(expr) => self.dom.assign(x, expr, reg),
-            None => self.dom.havoc(x),
-        }
-    }
-
     pub fn assign_i64(&mut self, x: Variable, e: i64, reg: &VariableRegistry) {
         self.dom.set(x, &Interval::from_i64(e), reg);
     }
@@ -1645,18 +1621,6 @@ impl FiniteDomain {
     // ========================================================================
     // Convenience arithmetic methods
     // ========================================================================
-
-    pub fn add_var(&mut self, lhs: Variable, op2: Variable, reg: &VariableRegistry) {
-        self.apply_signed_var_var(
-            FiniteBinOp::Arith(ArithBinOp::ADD),
-            lhs,
-            lhs,
-            lhs,
-            op2,
-            0,
-            reg,
-        );
-    }
 
     pub fn add_num(&mut self, lhs: Variable, op2: &Number, reg: &VariableRegistry) {
         self.apply_signed_var_num(

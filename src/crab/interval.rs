@@ -363,7 +363,7 @@ impl Interval {
             return Interval::bottom();
         }
         if let Some(n) = x.singleton()
-            && n.to_i64().is_some()
+            && n.fits_cast_to(64)
         {
             // C++ does `Number c{n->cast_to<uint64_t>()}` which reinterprets
             // negative values as unsigned (two's complement). We must do
@@ -457,11 +457,9 @@ impl Interval {
         if let Some(dividend) = self.singleton()
             && let Some(divisor) = x.singleton()
         {
-            // C++ uses fits_cast_to<uint64_t>() which accepts values fitting
-            // in either u64 or i64 (the latter reinterpreted as u64 via bit cast).
-            let dv_fits = dividend.to_u64().is_some() || dividend.to_i64().is_some();
-            let ds_fits = divisor.to_u64().is_some() || divisor.to_i64().is_some();
-            if dv_fits && ds_fits {
+            // Values fitting in either u64 or i64 (the latter reinterpreted as
+            // u64 via bit cast), as upstream's fits_cast_to<uint64_t>().
+            if dividend.fits_cast_to(64) && divisor.fits_cast_to(64) {
                 if divisor.is_zero() {
                     return Interval::from_number(*dividend);
                 }

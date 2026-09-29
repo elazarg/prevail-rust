@@ -386,9 +386,8 @@ fn find_and_remove_overlap(
     // the tracked stack, its possible byte range may still overlap a tracked
     // cell.
     if let Some(offset) = ii.singleton().and_then(|n| n.to_u64())
-        && let Some(nb) = elem_size.singleton()
+        && let Some(size) = elem_size.singleton().and_then(|n| n.to_u32())
     {
-        let size = nb.to_i64().unwrap_or(0) as u32;
         let om = array_map.entry_or_default(kind);
         cells = om.get_overlap_cells(offset, size);
         // `get_overlap_cells` deliberately excludes the exact-match cell
@@ -511,25 +510,11 @@ impl ArrayDomain {
         self.num_bytes.len() as i32
     }
 
-    pub fn from_bitset(num_bytes: BitsetDomain) -> Self {
-        let stack_size = num_bytes.len() as i32;
-        ArrayDomain {
-            num_bytes,
-            cells: ArrayMap::new(stack_size),
-        }
-    }
-
     /// Borrow the per-domain cell registry for inspection (used by the
     /// transformer / fwd-analyzer when they need to consult cell layout
     /// without going through a load/store method).
     pub fn cells(&self) -> &ArrayMap {
         &self.cells
-    }
-
-    /// Borrow the per-domain cell registry mutably (used by code paths that
-    /// need to add or query cells outside of the standard load/store flow).
-    pub fn cells_mut(&mut self) -> &mut ArrayMap {
-        &mut self.cells
     }
 
     pub fn set_to_top(&mut self) {
@@ -684,9 +669,14 @@ impl ArrayDomain {
                     access.big_endian,
                 )
             {
-                // Byte reconstruction produces an unsigned value.
-                // Don't sign-extend: C++ Number stores it as a positive BigInt.
-                return Some(LinearExpression::from(value as i64));
+                // The rebuilt bytes are an unsigned value. Only an 8-byte value can
+                // exceed i64, where the svalue is its two's-complement reading.
+                let n = if kind == DataKind::Uvalues {
+                    Number::from(value)
+                } else {
+                    Number::from(value as i64)
+                };
+                return Some(LinearExpression::from(n));
             }
 
             // Check for overlapping cells.
@@ -950,12 +940,13 @@ impl ArrayDomain {
             Some(n) => *n,
             None => return,
         };
-        let idx_i = idx_n.to_i64().unwrap_or(0);
-        let width_i = width_n.to_i64().unwrap_or(0);
-        if idx_i + width_i > self.num_bytes.len() as i64 {
+        if idx_n + width_n > Number::from(self.num_bytes.len() as u64) {
             return;
         }
-        self.num_bytes.reset(idx_i as usize, width_i as i32);
+        let (Some(idx_i), Some(width_i)) = (idx_n.to_u32(), width_n.to_i32()) else {
+            return;
+        };
+        self.num_bytes.reset(idx_i as usize, width_i);
     }
 
     // ========================================================================
@@ -1000,11 +991,9 @@ impl ArrayDomain {
         let Some(offset) = ii.singleton().and_then(|n| n.to_u64()) else {
             return;
         };
-        let n_bytes = match elem_size.singleton() {
-            Some(n) => *n,
-            None => return,
+        let Some(size) = elem_size.singleton().and_then(|n| n.to_u32()) else {
+            return;
         };
-        let size = n_bytes.to_i64().unwrap_or(0) as u32;
 
         let cells = {
             let om = self.cells.entry_or_default(kind);

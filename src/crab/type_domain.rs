@@ -609,32 +609,6 @@ impl TypeDomain {
         s.get_typeset(v).as_singleton()
     }
 
-    /// Get the singleton type from a linear expression, or T_UNINIT if unknown.
-    pub fn get_type_expr(
-        &self,
-        expr: &LinearExpression,
-        _registry: &mut VariableRegistry,
-    ) -> TypeEncoding {
-        let Some(s) = &self.state else {
-            return T_UNINIT;
-        };
-        let terms = expr.variable_terms();
-        if terms.is_empty() {
-            // Constant
-            let val = expr.constant_term().to_i64().unwrap_or(T_UNINIT as i64) as i32;
-            int_to_type_encoding(val).unwrap_or(T_UNINIT)
-        } else if terms.len() == 1 {
-            let (&var, coeff) = terms.iter().next().unwrap();
-            if coeff.to_i64() == Some(1) && expr.constant_term().is_zero() {
-                s.get_typeset(var).as_singleton().unwrap_or(T_UNINIT)
-            } else {
-                T_UNINIT
-            }
-        } else {
-            T_UNINIT
-        }
-    }
-
     /// Check: "if var1's types ⊆ `premise_set`, then var2's types ⊆ `conclusion_set`".
     pub fn implies_superset(
         &self,
@@ -705,32 +679,6 @@ impl TypeDomain {
         s.get_typeset(v).contains(te)
     }
 
-    /// Check whether a linear expression's type may include a given type.
-    pub fn may_have_type_expr(
-        &self,
-        expr: &LinearExpression,
-        te: TypeEncoding,
-        _registry: &mut VariableRegistry,
-    ) -> bool {
-        let Some(s) = &self.state else {
-            return false;
-        };
-        let terms = expr.variable_terms();
-        if terms.is_empty() {
-            let val = expr.constant_term().to_i64().unwrap_or(0) as i32;
-            int_to_type_encoding(val) == Some(te)
-        } else if terms.len() == 1 {
-            let (&var, coeff) = terms.iter().next().unwrap();
-            if coeff.to_i64() == Some(1) && expr.constant_term().is_zero() {
-                s.get_typeset(var).contains(te)
-            } else {
-                true // complex expression, conservatively true
-            }
-        } else {
-            true
-        }
-    }
-
     /// Check whether a type variable may have a given type.
     pub fn may_have_type_var(
         &self,
@@ -776,31 +724,6 @@ impl TypeDomain {
             return false;
         };
         !s.get_typeset(v).contains(T_UNINIT)
-    }
-
-    /// Check whether a type expression is initialized.
-    pub fn is_initialized_expr(
-        &self,
-        expr: &LinearExpression,
-        _registry: &mut VariableRegistry,
-    ) -> bool {
-        let Some(s) = &self.state else {
-            return false;
-        };
-        let terms = expr.variable_terms();
-        if terms.is_empty() {
-            let val = expr.constant_term().to_i64().unwrap_or(T_UNINIT as i64) as i32;
-            int_to_type_encoding(val) != Some(T_UNINIT)
-        } else if terms.len() == 1 {
-            let (&var, coeff) = terms.iter().next().unwrap();
-            if coeff.to_i64() == Some(1) && expr.constant_term().is_zero() {
-                !s.get_typeset(var).contains(T_UNINIT)
-            } else {
-                false // complex, conservatively not initialized
-            }
-        } else {
-            false
-        }
     }
 
     /// Check whether a type variable is initialized.

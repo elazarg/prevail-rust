@@ -279,10 +279,10 @@ fn havoc_subprogram_stack(
         .state
         .values
         .eval_interval_var(r10_stack_offset, registry);
-    if !intv.is_singleton() {
+    let Some(r10_offset) = intv.singleton() else {
         return;
-    }
-    let stack_start = intv.singleton().unwrap().narrow_to_i64() - subprogram_stack_size as i64;
+    };
+    let stack_start = r10_offset.narrow_to_i64() - subprogram_stack_size as i64;
     let idx = Interval::from_i64(stack_start);
     let width = Interval::from_i64(subprogram_stack_size as i64);
     dom.stack.havoc_type(
@@ -616,7 +616,7 @@ fn do_load_ctx(
         || may_read_ptr_field(&bytes, desc.meta, offset_width)
         || may_read_ptr_field(&bytes, desc.end, offset_width);
 
-    if maybe_addr.is_none() {
+    let Some(addr) = maybe_addr else {
         if may_touch_ptr {
             state.types.havoc_type_reg(target_reg, registry);
         } else {
@@ -624,9 +624,7 @@ fn do_load_ctx(
             narrow_num_by_load_width(state, &target, width, is_signed, registry);
         }
         return;
-    }
-
-    let addr = maybe_addr.unwrap();
+    };
 
     let data_num = Number::from(desc.data as i64);
     let end_num = Number::from(desc.end as i64);
@@ -977,8 +975,8 @@ fn do_mem_store(
             .state
             .values
             .eval_interval_var(r10_stack_offset, registry);
-        if r10_interval.is_singleton() {
-            let stack_offset = r10_interval.singleton().unwrap().narrow_to_i64() as i32;
+        if let Some(r10_offset) = r10_interval.singleton() {
+            let stack_offset = r10_offset.narrow_to_i64() as i32;
             let base_addr = LinearExpression::from(stack_offset as i64);
             let symb_addr = base_addr + LinearExpression::from(offset);
             do_store_stack(
@@ -1819,11 +1817,8 @@ fn transform_callx(
     let reg = reg_pack(&callx.func, registry);
     let src_interval = dom.state.values.eval_interval_var(reg.uvalue, registry);
     if let Some(sn) = src_interval.singleton()
-        && let Some(val) = sn.to_i64()
-        && val >= i32::MIN as i64
-        && val <= i32::MAX as i64
+        && let Some(imm) = sn.to_i32()
     {
-        let imm = val as i32;
         if !ctx.platform.is_helper_usable(imm) {
             return Ok(());
         }

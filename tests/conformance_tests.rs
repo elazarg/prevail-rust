@@ -553,15 +553,13 @@ conformance_pass!(lock_fetch_and32, "lock_fetch_and32.data");
 conformance_pass!(lock_fetch_or, "lock_fetch_or.data");
 conformance_pass!(lock_fetch_or32, "lock_fetch_or32.data");
 conformance_pass!(lock_fetch_xor, "lock_fetch_xor.data");
-// Domain imprecision: 32-bit atomic fetch-xor on 64-bit stack value loses precision.
-conformance_range!(lock_fetch_xor32, "lock_fetch_xor32.data");
+conformance_pass!(lock_fetch_xor32, "lock_fetch_xor32.data");
 conformance_pass!(lock_or, "lock_or.data");
 conformance_pass!(lock_or32, "lock_or32.data");
 conformance_pass!(lock_xchg, "lock_xchg.data");
 conformance_pass!(lock_xchg32, "lock_xchg32.data");
 conformance_pass!(lock_xor, "lock_xor.data");
-// Domain imprecision: 32-bit atomic xor on 64-bit stack value loses precision.
-conformance_range!(lock_xor32, "lock_xor32.data");
+conformance_pass!(lock_xor32, "lock_xor32.data");
 conformance_pass!(lsh32_imm, "lsh32-imm.data");
 conformance_pass!(lsh32_imm_high, "lsh32-imm-high.data");
 conformance_pass!(lsh32_imm_neg, "lsh32-imm-neg.data");

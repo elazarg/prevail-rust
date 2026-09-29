@@ -39,10 +39,6 @@ impl AddBottom {
         AddBottom { dom: None }
     }
 
-    pub fn from_finite(dom: FiniteDomain) -> Self {
-        AddBottom { dom: Some(dom) }
-    }
-
     pub fn set_to_top(&mut self) {
         match &mut self.dom {
             Some(d) => d.set_to_top(),
@@ -60,10 +56,6 @@ impl AddBottom {
 
     pub fn is_top(&self) -> bool {
         self.dom.as_ref().is_some_and(|d| d.is_top())
-    }
-
-    pub fn has_value(&self) -> bool {
-        self.dom.is_some()
     }
 
     /// Access the inner FiniteDomain. Panics if bottom.
@@ -193,17 +185,6 @@ impl AddBottom {
             self.dom = None;
         } else if let Some(d) = &mut self.dom {
             d.set(x, intv, reg);
-        }
-    }
-
-    pub fn assign_opt(
-        &mut self,
-        x: Option<Variable>,
-        e: &LinearExpression,
-        reg: &VariableRegistry,
-    ) {
-        if let Some(v) = x {
-            self.assign_expr(v, e, reg);
         }
     }
 

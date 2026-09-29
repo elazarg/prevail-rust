@@ -1,8 +1,12 @@
 // Copyright (c) Prevail Verifier contributors.
 // SPDX-License-Identifier: MIT
 
-//! Shared helper for integration tests that verify a small assembly program
+//! Shared helpers for integration tests that verify a small assembly program
 //! under default options.
+
+// Each test binary that includes this module uses a different subset, so what
+// is dead varies by target and `#[expect]` cannot hold for all.
+#![allow(dead_code)]
 
 use prevail::crab::ebpf_domain::DomainContext;
 use prevail::crab::var_registry::VariableRegistry;
@@ -11,6 +15,7 @@ use prevail::ir::assembler::bpf_assemble;
 use prevail::ir::program::Program;
 use prevail::ir::unmarshal;
 use prevail::linux::linux_platform::LinuxPlatform;
+use prevail::printing;
 use prevail::result::AnalysisResult;
 use prevail::spec::config::EbpfVerifierOptions;
 use prevail::spec::ebpf_base::EbpfCtxDescriptor;
@@ -26,6 +31,23 @@ static TEST_CTX: EbpfCtxDescriptor = EbpfCtxDescriptor {
 
 /// Assemble, unmarshal, and analyze `asm_text` under default verifier options.
 pub fn analyze_asm(asm_text: &str) -> AnalysisResult {
+    with_analysis(asm_text, |result, _, _, _| result)
+}
+
+/// Analyze `asm_text` and render its invariants as `-v` prints them.
+pub fn analyze_asm_invariants(asm_text: &str) -> String {
+    with_analysis(asm_text, |result, program, info, registry| {
+        let mut out = Vec::new();
+        printing::print_invariants(&mut out, program, info, false, &result, registry)
+            .expect("print_invariants failed");
+        String::from_utf8(out).expect("non-UTF-8 invariant output")
+    })
+}
+
+fn with_analysis<R>(
+    asm_text: &str,
+    inspect: impl FnOnce(AnalysisResult, &Program, &ProgramInfo, &VariableRegistry) -> R,
+) -> R {
     let insts = bpf_assemble(asm_text).expect("assembly failed");
 
     let program_type = EbpfProgramType {
@@ -59,5 +81,6 @@ pub fn analyze_asm(asm_text: &str) -> AnalysisResult {
         platform: &platform,
     };
     let mut registry = VariableRegistry::new();
-    fwd_analyzer::analyze(&program, &ctx, &mut registry)
+    let result = fwd_analyzer::analyze(&program, &ctx, &mut registry);
+    inspect(result, &program, &info, &registry)
 }

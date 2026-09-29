@@ -325,24 +325,6 @@ impl AnalysisResult {
         }
     }
 
-    /// Check whether `state` is subsumed by the post-invariant at `label`.
-    pub fn is_valid_after(
-        &self,
-        label: &Label,
-        state: &StringInvariant,
-        ctx: &crate::crab::ebpf_domain::DomainContext,
-        registry: &mut VariableRegistry,
-    ) -> bool {
-        let abstract_state = EbpfDomain::from_constraints(
-            state.value(),
-            ctx.runtime.setup_constraints,
-            ctx,
-            registry,
-        );
-        let post = &self.invariants.get(label).expect("label not found").post;
-        abstract_state.is_included_in(post, registry)
-    }
-
     /// Return the post-invariant at `label` as a human-readable string set.
     ///
     /// Panics if `label` is not in the invariant map.

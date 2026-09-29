@@ -154,6 +154,14 @@ impl Number {
         u64::try_from(self.0).expect("Number does not fit in u64")
     }
 
+    pub fn to_i32(self) -> Option<i32> {
+        i32::try_from(self.0).ok()
+    }
+
+    pub fn to_u32(self) -> Option<u32> {
+        u32::try_from(self.0).ok()
+    }
+
     pub fn to_i64(self) -> Option<i64> {
         i64::try_from(self.0).ok()
     }

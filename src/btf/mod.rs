@@ -447,22 +447,6 @@ impl BtfKind {
             BtfKind::Enum64 { .. } => BtfKindIndex::Enum64,
         }
     }
-
-    /// Return the referenced type id if this kind has one (ptr, typedef, volatile, const, restrict).
-    pub fn referenced_type_id(&self) -> Option<BtfTypeId> {
-        match self {
-            BtfKind::Ptr { type_id }
-            | BtfKind::Typedef { type_id, .. }
-            | BtfKind::Volatile { type_id }
-            | BtfKind::Const { type_id }
-            | BtfKind::Restrict { type_id }
-            | BtfKind::Function { type_id, .. }
-            | BtfKind::Var { type_id, .. }
-            | BtfKind::DeclTag { type_id, .. }
-            | BtfKind::TypeTag { type_id, .. } => Some(*type_id),
-            _ => None,
-        }
-    }
 }
 
 // ── BTF map definition ───────────────────────────────────────────────

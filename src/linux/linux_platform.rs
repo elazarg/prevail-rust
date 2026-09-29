@@ -135,10 +135,6 @@ pub mod conformance_groups {
     pub fn group_by_name(name: &str) -> Option<u32> {
         GROUPS.iter().find(|&&(n, _)| n == name).map(|&(_, v)| v)
     }
-
-    pub fn all_group_names() -> Vec<&'static str> {
-        GROUPS.iter().map(|&(n, _)| n).collect()
-    }
 }
 
 // ── BpfLoadMapDef ──────────────────────────────────────────────────

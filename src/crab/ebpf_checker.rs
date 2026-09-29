@@ -446,9 +446,8 @@ impl<'a> EbpfChecker<'a> {
             .eval_interval_var(r.uvalue, self.registry);
 
         if let Some(sn) = src_interval.singleton()
-            && let Some(imm) = sn.to_i64()
+            && let Some(imm) = sn.to_i32()
         {
-            let imm = imm as i32;
             if !self.ctx.platform.is_helper_usable(imm) {
                 return self.throw_fail(&format!("invalid helper function id {imm}"));
             }
@@ -936,16 +935,9 @@ impl<'a> EbpfChecker<'a> {
             .state
             .values
             .eval_interval_var(reg_pack(&s.reg, self.registry).uvalue, self.registry);
-        let callback_target = callback_interval.singleton().and_then(|n| n.to_i64());
-        if callback_target.is_none() {
+        let Some(callback_label) = callback_interval.singleton().and_then(|n| n.to_i32()) else {
             return self.throw_fail("callback function pointer must be a singleton code address");
-        }
-
-        let callback_value = callback_target.unwrap();
-        if callback_value < i32::MIN as i64 || callback_value > i32::MAX as i64 {
-            return self.throw_fail("callback function pointer must be a singleton code address");
-        }
-        let callback_label = callback_value as i32;
+        };
 
         if !self
             .ctx

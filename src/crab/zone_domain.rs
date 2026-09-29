@@ -142,9 +142,8 @@ impl ZoneDomain {
         self.get_ub_vert(self.get_vertid(x))
     }
 
-    fn get_interval(&self, x: Variable) -> Interval {
-        let v = self.get_vertid(x);
-        Interval::new(self.get_lb_vert(v), self.get_ub_vert(v))
+    fn get_interval(&self, x: Variable, registry: &VariableRegistry) -> Interval {
+        Interval::new(self.get_lb(x), self.get_ub(x, registry))
     }
 
     // ========================================================================
@@ -168,11 +167,16 @@ impl ZoneDomain {
         res
     }
 
-    fn compute_residual(&self, e: &LinearExpression, pivot: Variable) -> Interval {
+    fn compute_residual(
+        &self,
+        e: &LinearExpression,
+        pivot: Variable,
+        registry: &VariableRegistry,
+    ) -> Interval {
         let mut residual = Interval::from_number(-*e.constant_term());
         for (variable, coefficient) in e.variable_terms() {
             if *variable != pivot {
-                let var_interval = self.get_interval(*variable);
+                let var_interval = self.get_interval(*variable, registry);
                 residual -= &(&Interval::from_number(*coefficient) * &var_interval);
             }
         }
@@ -202,11 +206,10 @@ impl ZoneDomain {
                 } else {
                     self.get_ub(*y, registry)
                 };
-                if y_val.is_infinite() {
+                let Some(y_bound) = y_val.number() else {
                     return;
-                }
-                let ymax = Weight::from(*y_val.number().unwrap());
-                residual += ymax * coeff;
+                };
+                residual += Weight::from(*y_bound) * coeff;
             } else {
                 let y_val = if extract_upper_bounds {
                     self.get_ub(*y, registry)
@@ -253,7 +256,7 @@ impl ZoneDomain {
         csts: &mut Vec<DiffCst>,
         lbs: &mut Vec<(Variable, Weight)>,
         ubs: &mut Vec<(Variable, Weight)>,
-        _registry: &VariableRegistry,
+        registry: &VariableRegistry,
     ) {
         let mut exp_ub = -Weight::from(*exp.constant_term());
 
@@ -284,7 +287,7 @@ impl ZoneDomain {
                     pos_terms.push(((coeff, *y), ymin));
                 }
             } else {
-                let y_ub = *self.get_interval(*y).ub();
+                let y_ub = *self.get_interval(*y, registry).ub();
                 if y_ub.is_infinite() {
                     if unbounded_ubvar.is_some() {
                         return;
@@ -400,7 +403,7 @@ impl ZoneDomain {
         n: &Number,
         registry: &VariableRegistry,
     ) -> bool {
-        let i = self.get_interval(x);
+        let i = self.get_interval(x, registry);
         let new_i = trim_interval(&i, n);
         if new_i.is_bottom() {
             return false;
@@ -658,7 +661,7 @@ impl ZoneDomain {
                 let e = cst.expression();
                 for (variable, coefficient) in e.variable_terms() {
                     let i = self
-                        .compute_residual(e, *variable)
+                        .compute_residual(e, *variable, registry)
                         .div(&Interval::from_number(*coefficient));
                     if let Some(k) = i.singleton()
                         && !self.add_univar_disequation(*variable, k, registry)
@@ -671,16 +674,16 @@ impl ZoneDomain {
         true
     }
 
-    pub fn eval_interval(&self, e: &LinearExpression, _registry: &VariableRegistry) -> Interval {
+    pub fn eval_interval(&self, e: &LinearExpression, registry: &VariableRegistry) -> Interval {
         let mut r = Interval::from_number(*e.constant_term());
         for (variable, coefficient) in e.variable_terms() {
-            r += &(&Interval::from_number(*coefficient) * &self.get_interval(*variable));
+            r += &(&Interval::from_number(*coefficient) * &self.get_interval(*variable, registry));
         }
         r
     }
 
-    pub fn eval_interval_var(&self, v: Variable, _registry: &VariableRegistry) -> Interval {
-        self.get_interval(v)
+    pub fn eval_interval_var(&self, v: Variable, registry: &VariableRegistry) -> Interval {
+        self.get_interval(v, registry)
     }
 
     pub fn forget(&mut self, variables: &[Variable]) {

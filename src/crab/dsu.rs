@@ -3,7 +3,7 @@
 
 //! Generic disjoint-set (union-find) data structure.
 //!
-//! Used by `TypeEqualityDomain` to track must-equality between type variables.
+//! Used by `TypeDomain` to track must-equality between type variables.
 
 /// A disjoint-set (union-find) over integer elements `0..n`.
 ///
