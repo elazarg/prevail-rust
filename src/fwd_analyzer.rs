@@ -416,8 +416,17 @@ impl<'a, P: Program> FwdFixpointIterator<'a, P> {
                 if iteration > DESCENDING_ITERATIONS {
                     break;
                 }
-                invariant = refine(&invariant, &new_pre, iteration);
+                let refined = refine(&invariant, &new_pre, iteration);
+                // Narrowing is descending, so refined <= invariant by construction. The
+                // reverse ordering means narrowing made no semantic progress. Keep the
+                // result so any canonicalized representation or auxiliary stack-cell
+                // metadata is preserved.
+                let narrowing_fixpoint = invariant.is_included_in(&refined, self.registry);
+                invariant = refined;
                 self.set_pre(&head, invariant.clone());
+                if narrowing_fixpoint {
+                    break;
+                }
             }
         }
     }
